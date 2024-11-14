@@ -2,15 +2,15 @@ const User = require('../models/User.js');
 const jwt = require('jsonwebtoken');
 exports.register = async (req, res) => {
   try {
-    const { name, email, password } = req.body;
-    if (!name || !email || !password) {
+    const { name, email, password ,isAgree} = req.body;
+    if (!name || !email || !password || !isAgree) {
       return res.status(400).json({ message: "Please provide full name, email, and password" });
     }
     const existingUser = await User.findOne({ email });
     if (existingUser) {
       return res.status(400).json({ message: "Email is already registered" });
     }
-    const user = new User({ "full_name": name, email, password });
+    const user = new User({ "full_name": name, email, password,isAgree });
     await user.save();
 
     res.status(201).json({ message: "User registered successfully" });
