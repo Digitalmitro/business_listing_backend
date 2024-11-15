@@ -24,19 +24,8 @@ exports.createTopBannerCategory = async (req, res) => {
 exports.getAllTopBannerCategories = async (req, res) => {
   try {
     const topBannerCategories = await TopBannerCategory.find();
-    res.status(200).json({ topBannerCategories });
+    res.status(200).json({ data:topBannerCategories });
   } catch (error) {
     res.status(500).json({ message: "Error retrieving banner categories", error: error.message });
   }
 };
-
-// Get All Top Banner Categories API
-exports.getAllTopBannerCategories = async (req, res) => {
-    try {
-      const topBannerCategories = await TopBannerCategory.find();
-      res.status(200).json({ topBannerCategories });
-    } catch (error) {
-      res.status(500).json({ message: "An error occurred while retrieving top banner categories", error: error.message });
-    }
-  };
-  

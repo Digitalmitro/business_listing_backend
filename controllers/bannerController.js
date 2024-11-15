@@ -9,11 +9,11 @@ exports.createBanner = async (req, res) => {
     if (!title || !req.file) {
       return res.status(400).json({ message: "Please provide both title and banner image" });
     }
-
-    // Save banner with title and Cloudinary image URL
+    const banerUrl = `${req.protocol}://${req.get('host')}/uploads/${req.file.filename}`;
+    
     const banner = new Banner({
       title,
-      imageUrl: result.secure_url
+      imageUrl: banerUrl
     });
     await banner.save();
 
@@ -27,7 +27,7 @@ exports.createBanner = async (req, res) => {
 exports.getAllBanners = async (req, res) => {
     try {
       const banners = await Banner.find();
-      res.status(200).json({ banners });
+      res.status(200).json({ data:banners });
     } catch (error) {
       res.status(500).json({ message: "An error occurred while retrieving banners", error: error.message });
     }

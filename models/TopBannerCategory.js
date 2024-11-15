@@ -15,6 +15,10 @@ const TopBannerCategorySchema = new Schema({
     type: String,
     required: true  // URL for the banner image
   },
+  bgColor:{
+    type: String,
+    default:'#FF5733'
+  },
   createdAt: {
     type: Date,
     default: Date.now
