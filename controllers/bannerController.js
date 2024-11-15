@@ -27,7 +27,7 @@ exports.createBanner = async (req, res) => {
 exports.getAllBanners = async (req, res) => {
     try {
       const banners = await Banner.find();
-      res.status(200).json({ data:banners });
+      res.status(200).json(banners);
     } catch (error) {
       res.status(500).json({ message: "An error occurred while retrieving banners", error: error.message });
     }
