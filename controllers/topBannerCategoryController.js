@@ -23,7 +23,7 @@ exports.createTopBannerCategory = async (req, res) => {
 // Get All Top Banner Categories
 exports.getAllTopBannerCategories = async (req, res) => {
   try {
-    const topBannerCategories = await TopBannerCategory.find();
+    const topBannerCategories = await TopBannerCategory.find().select("-__v -createdAt -updatedAt");
     res.status(200).json(topBannerCategories );
   } catch (error) {
     res.status(500).json({ message: "Error retrieving banner categories", error: error.message });

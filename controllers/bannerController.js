@@ -26,7 +26,7 @@ exports.createBanner = async (req, res) => {
 // Get All Banners API
 exports.getAllBanners = async (req, res) => {
     try {
-      const banners = await Banner.find();
+      const banners = await Banner.find().select("-__v -createdAt -updatedAt");
       res.status(200).json(banners);
     } catch (error) {
       res.status(500).json({ message: "An error occurred while retrieving banners", error: error.message });

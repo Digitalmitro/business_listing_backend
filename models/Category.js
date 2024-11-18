@@ -12,6 +12,10 @@ const CategorySchema = new Schema({
     type: String,
     required: true
   },
+  bgImage: {
+    type: String, // URL for the background image
+    required: false // Optional field
+  },
   createdAt: {
     type: Date,
     default: Date.now

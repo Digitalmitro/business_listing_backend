@@ -7,6 +7,10 @@ const SubCategorySchema = new Schema({
     type: String,
     required: true
   },
+  iconUrl: {
+    type: String,
+    required: true
+  },
   category: {
     type: Schema.Types.ObjectId,
     ref: 'Category',

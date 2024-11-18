@@ -1,6 +1,9 @@
 const bcrypt = require('bcryptjs');
 const User = require('../models/User.js');
+const { OAuth2Client } = require('google-auth-library');
 const jwt = require('jsonwebtoken');
+const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
+
 exports.register = async (req, res) => {
   try {
     const { name, email, password ,isAgree} = req.body;
@@ -82,3 +85,45 @@ exports.forgotPassword = async (req, res) => {
     res.status(500).json({ message: "internal server error" });
   }
 };
+
+exports.googleLogin = async (req, res) => {
+  try {
+    const { tokenId } = req.body;
+    // Verify Google ID Token
+    const ticket = await client.verifyIdToken({
+      idToken: tokenId,
+      audience: process.env.GOOGLE_CLIENT_ID
+    });
+
+    const { email, name } = ticket.getPayload();
+
+    if (!email || !name) {
+      return res.status(400).json({ message: 'Invalid Google token' });
+    }
+
+    // Check if the user exists
+    let user = await User.findOne({ email });
+
+    if (!user) {
+      // Create new user if not exists
+      user = new User({
+        full_name: name,
+        email,
+        password: '' // No password for SSO users
+      });
+      await user.save();
+    }
+
+    // Generate JWT token
+    const payload = { id: user._id};
+    const token = jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '7d' });
+
+    res.status(200).json({
+      message: 'Login successful',
+      token
+    });
+  } catch (error) {
+    res.status(500).json({ message: 'Google login failed', error: error.message });
+  }
+};
+
