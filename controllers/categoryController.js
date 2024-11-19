@@ -2,7 +2,6 @@ const fs = require('fs');
 const path = require('path');
 const Category = require('../models/Category');
 
-
 exports.createCategory = async (req, res) => {
   try {
     const { name } = req.body;

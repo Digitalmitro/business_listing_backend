@@ -4,7 +4,7 @@ const { upload } = require('../config/multerConfig');
 
 const router = express.Router();
 
-router.post('/categories',upload.single('icon'),createCategory);
+router.post('/categories',upload.single('icon'), createCategory);
 router.get('/categories', getAllCategories);
 
 module.exports = router;
