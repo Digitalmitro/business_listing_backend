@@ -95,7 +95,7 @@ exports.googleLogin = async (req, res) => {
       audience: process.env.GOOGLE_CLIENT_ID
     });
 
-    const { email, name } = ticket.getPayload();
+    const { email, name, picture } = ticket.getPayload();
 
     if (!email || !name) {
       return res.status(400).json({ message: 'Invalid Google token' });
@@ -109,7 +109,8 @@ exports.googleLogin = async (req, res) => {
       user = new User({
         full_name: name,
         email,
-        password: '' // No password for SSO users
+        password: '', // No password for SSO users
+        userImage: picture
       });
       await user.save();
     }

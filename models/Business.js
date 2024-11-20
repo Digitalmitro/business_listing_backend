@@ -3,24 +3,33 @@ const Schema = mongoose.Schema;
 
 // Business Schema
 const BusinessSchema = new Schema({
-  name: {
-    type: String,
-    required: true
-  },
-  description: {
-    type: String
-  },
+  businessName: { type: String, required: true },
+  description: { type: String },
   address: {
-    type: String
+    blockName: { type: String },
+    streetName: { type: String },
+    area: { type: String },
+    landmark: { type: String },
+    pincode: { type: String, required: true },
+    city: { type: String, required: true },
+    state: { type: String, required: true }
   },
-  phone: {
-    type: String
+  contact: {
+    customerName: { type: String, required: true },
+    mobile: { type: String, required: true },
+    whatsapp: { type: String },
+    email: { type: String }
   },
-  whatsapp: {
-    type: String // WhatsApp contact number
-  },
-  email: {
-    type: String
+  businessTiming: {
+    weeksSet: {
+      type: [String],
+      enum: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"],
+      required: true
+    },
+    timing: {
+      start: { type: String, required: true },  // Example: "9:00 AM"
+      end: { type: String, required: true }    // Example: "6:00 PM"
+    }
   },
   category: {
     type: Schema.Types.ObjectId,
@@ -30,12 +39,9 @@ const BusinessSchema = new Schema({
   subCategory: {
     type: Schema.Types.ObjectId,
     ref: 'SubCategory',
-    required: false // Now optional
+    required: false
   },
-  image: {
-    type: String, // URL for the business image
-    required: true
-  },
+  photos: [{ type: String }], // URLs or file paths
   rating: {
     type: Number,
     default: 0 // Average rating
@@ -58,28 +64,24 @@ const BusinessSchema = new Schema({
   },
   enquiryCount: {
     type: Number,
-    default: 0 // Tracks number of enquiries
+    default: 0 // Tracks the number of enquiries
   },
   openUntil: {
     type: String // Closing time (e.g., "10:00 PM")
   },
   yearsOfEstablishment: {
-    type: Number, // Years the business has been established
-    default: 0
-  },
-  timings: {
-    type: String // Operating hours (e.g., "9:00 AM - 10:00 PM")
-  },
-  businessSummary: {
-    type: String // Summary of the business
+    type: Number,
+    default: 0 // Years the business has been established
   },
   servicesTypes: {
-    type: [String], 
-    required: false,
+    type: [String] // Array of service types
   },
   hygiene: {
     type: String,
-    default: '' 
+    default: '' // Hygiene-related information
+  },
+  businessSummary: {
+    type: String // Summary of the business
   },
   createdAt: {
     type: Date,
@@ -89,6 +91,7 @@ const BusinessSchema = new Schema({
     type: Date,
     default: Date.now
   }
-});
+}, { timestamps: true });
 
 module.exports = mongoose.model('Business', BusinessSchema);
+

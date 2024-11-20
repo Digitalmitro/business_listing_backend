@@ -1,7 +1,6 @@
 const mongoose = require('mongoose');
 const Schema = mongoose.Schema;
 
-// Category Schema
 const CategorySchema = new Schema({
   name: {
     type: String,
@@ -13,8 +12,8 @@ const CategorySchema = new Schema({
     required: true
   },
   bgImage: {
-    type: String, // URL for the background image
-    required: false // Optional field
+    type: String, 
+    required: false 
   },
   createdAt: {
     type: Date,

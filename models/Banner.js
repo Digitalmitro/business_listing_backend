@@ -9,7 +9,7 @@ const BannerSchema = new Schema({
   },
   imageUrl: {
     type: String,
-    required: true  // URL for the banner image
+    required: true // URL for the banner image
   },
   createdAt: {
     type: Date,

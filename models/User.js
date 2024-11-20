@@ -6,6 +6,7 @@ const userSchema = new mongoose.Schema({
   full_name:{type: String, required: true},
   email: { type: String, required: true, unique: true },
   password: { type: String},
+  userImage:{type:String},
   isAgree :{ type: Boolean, defult: false }
 });
 
