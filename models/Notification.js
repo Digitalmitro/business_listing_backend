@@ -6,12 +6,24 @@ const NotificationSchema = new mongoose.Schema({
     ref: 'User', 
     required: true
   },
-  message: {
-    type: String,
+  image: {
+    type: String, 
+    default: "https://via.placeholder.com/50" 
+  },
+  title: {
+    type: String, 
+    required: true
+  },
+  description: {
+    type: String, 
+    required: true
+  },
+  timeAgo: {
+    type: String, 
     required: true
   },
   read: {
-    type: Boolean,
+    type: Boolean, 
     default: false
   },
   createdAt: {

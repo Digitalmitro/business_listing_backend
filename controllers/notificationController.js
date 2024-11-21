@@ -1,32 +1,43 @@
 const Notification = require('../models/Notification');
-const User = require('../models/User'); // Assuming you have a User model to verify admin
+const User = require('../models/User'); 
 
 exports.createGlobalNotification = async (req, res) => {
   try {
-    const adminUser = await User.findById(req.userId); 
-    if (!adminUser || !adminUser.isAdmin) {
-      return res.status(403).json({ message: 'You are not authorized to create global notifications.' });
+    // const adminId = req.admin.id
+    const { title, description, timeAgo } = req.body;
+    const users = await User.find({}, "_id"); 
+    const userIds = users.map(user => user._id);
+
+    const notifications = userIds.map(userId => {
+      return {
+        updateOne: {
+          filter: { userId }, 
+          update: {
+            $setOnInsert: {
+              userId,
+              title,
+              description,
+              timeAgo,
+              read: false,
+              createdAt: new Date(),
+            }
+          },
+          upsert: true, 
+        }
+      };
+    });
+
+    if (notifications.length > 0) {
+      await Notification.bulkWrite(notifications);
+      return res.status(200).json({ message: 'Notifications sent to all users' });
     }
-    const { message } = req.body;
-    const globalNotification = new Notification({
-      message,
-      global: true,
-    });
-    await globalNotification.save();
-    const users = await User.find();
-    const notificationsForUsers = users.map(user => {
-      return new Notification({
-        userId: user._id,
-        message,
-        global: true,
-      });
-    });
-    await Notification.insertMany(notificationsForUsers);
-    res.status(201).json({ message: 'Global notification created and sent to all users.' });
+
+    return res.status(400).json({ message: 'No users found' });
+
   } catch (error) {
-    console.error('Error creating global notification:', error);
-    res.status(500).json({ message: 'Internal server error' });
-  }
+    console.error(error);
+    return res.status(500).json({ message: 'Server error' });
+  } 
 };
 
 exports.getNotifications = async (req, res) => {

@@ -23,13 +23,15 @@ const BusinessSchema = new Schema({
   businessTiming: {
     weeksSet: {
       type: [String],
-      enum: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"],
+      enum: ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"],
       required: true
     },
-    timing: {
-      start: { type: String, required: true },  // Example: "9:00 AM"
-      end: { type: String, required: true }    // Example: "6:00 PM"
-    }
+    timing: [
+      {
+        start: { type: String, required: true },
+        end: { type: String, required: true },
+      },
+    ],
   },
   category: {
     type: Schema.Types.ObjectId,
