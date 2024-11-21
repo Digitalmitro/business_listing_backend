@@ -9,6 +9,7 @@ const topBannerCategoryRoutes = require('./routes/topBannerCategoryRoutes');
 const subCategoryRoutes = require('./routes/subCategoryRoutes.js');
 const business = require('./routes/businessRoutes.js')
 const notificationRoutes = require('./routes/notificationRoutes.js');
+const adminRoutes = require('./routes/adminRoutes.js');
 
 const fs = require('fs');
 const path = require('path');
@@ -34,6 +35,9 @@ app.use('/api/top_banner', topBannerCategoryRoutes);
 app.use('/api/subCategory', subCategoryRoutes)
 app.use('/api/business',business)
 app.use('/api/notification', notificationRoutes);
+app.use('/admin', adminRoutes);
+
+
 const PORT = process.env.PORT || 5000
 app.listen(PORT, (err)=>{
     if(err) throw err;

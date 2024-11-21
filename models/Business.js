@@ -41,47 +41,47 @@ const BusinessSchema = new Schema({
     ref: 'SubCategory',
     required: false
   },
-  photos: [{ type: String }], // URLs or file paths
+  photos: [{ type: String }], 
   rating: {
     type: Number,
-    default: 0 // Average rating
+    default: 0 
   },
   totalReviews: {
     type: Number,
-    default: 0 // Total number of reviews
+    default: 0 
   },
   verified: {
     type: Boolean,
-    default: false // Indicates if the business is verified
+    default: false 
   },
   trust: {
     type: Boolean,
-    default: false // Indicates if the business is trusted
+    default: false 
   },
   claimed: {
     type: Boolean,
-    default: false // Indicates if the business is claimed
+    default: false
   },
   enquiryCount: {
     type: Number,
-    default: 0 // Tracks the number of enquiries
+    default: 0 
   },
   openUntil: {
-    type: String // Closing time (e.g., "10:00 PM")
+    type: String 
   },
   yearsOfEstablishment: {
     type: Number,
-    default: 0 // Years the business has been established
+    default: 0 
   },
   servicesTypes: {
-    type: [String] // Array of service types
+    type: [String] 
   },
   hygiene: {
     type: String,
-    default: '' // Hygiene-related information
+    default: '' 
   },
   businessSummary: {
-    type: String // Summary of the business
+    type: String 
   },
   createdAt: {
     type: Date,
