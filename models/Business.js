@@ -15,10 +15,38 @@ const BusinessSchema = new Schema({
     state: { type: String, required: true }
   },
   contact: {
-    customerName: { type: String, required: true },
-    mobile: { type: String, required: true },
-    whatsapp: { type: String },
-    email: { type: String }
+    customerName: { type: String, required: true, },
+    mobile: {
+      type: [String],
+      required: true,
+      validate: {
+        validator: async function (value) {
+          const existing = await mongoose.models.Business.findOne({ "contact.mobile": { $in: value } });
+          return !existing; // Ensure no matching mobile exists
+        },
+        message: "Mobile number(s) must be unique.",
+      },
+    },
+    whatsapp: {
+      type: [String],
+      validate: {
+        validator: async function (value) {
+          const existing = await mongoose.models.Business.findOne({ "contact.whatsapp": { $in: value } });
+          return !existing; // Ensure no matching WhatsApp exists
+        },
+        message: "WhatsApp number(s) must be unique.",
+      },
+    },
+    email: {
+      type: [String],
+      validate: {
+        validator: async function (value) {
+          const existing = await mongoose.models.Business.findOne({ "contact.email": { $in: value } });
+          return !existing; // Ensure no matching email exists
+        },
+        message: "Email(s) must be unique.",
+      },
+    },
   },
   businessTiming: {
     weeksSet: {

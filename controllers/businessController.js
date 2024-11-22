@@ -3,9 +3,10 @@ const Business = require('../models/Business')
  exports.createBusiness = async (req, res) => {
     try {
       const bdata = req.body.businessData
+    
        if(!bdata) return res.status(400).json({"message":"add all manditry fileds"});
-
-      const newBusiness = new Business(bdata);
+      //  console.log(bdata)
+       const newBusiness = new Business(bdata);
       const business = await newBusiness.save();
       res.status(201).json({ success: true, business });
     } catch (error) {
