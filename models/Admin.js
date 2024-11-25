@@ -13,6 +13,12 @@ const AdminSchema = new mongoose.Schema({
     type: String,
     required: true,
   },
+  role: {
+    type: String,
+    enum: ['admin', 'super-admin'],  
+    default: 'admin',
+    required: true
+  }
 }, { timestamps: true });
 
 AdminSchema.pre('save', async function (next) {

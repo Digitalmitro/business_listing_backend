@@ -1,18 +1,27 @@
 const Business = require('../models/Business')
+const User = require('../models/User')
+exports.createBusiness = async (req, res) => {
+  try {
+    const userId = req.user.id; 
+    const businessData = req.body.businessData;
 
- exports.createBusiness = async (req, res) => {
-    try {
-      const bdata = req.body.businessData
-    
-       if(!bdata) return res.status(400).json({"message":"add all manditry fileds"});
-      //  console.log(bdata)
-       const newBusiness = new Business(bdata);
-      const business = await newBusiness.save();
-      res.status(201).json({ success: true, business });
-    } catch (error) {
-      res.status(400).json({ success: false, message: error.message });
+    if (!businessData) {
+      return res.status(400).json({ message: 'Add all mandatory fields.' });
     }
-  };
+    const newBusiness = new Business(businessData);
+    const savedBusiness = await newBusiness.save();
+    const user = await User.findById(userId);
+    if (!user) return res.status(404).json({ message: 'User not found.' });
+
+    user.businesses.push(savedBusiness._id);
+    user.isSeller = true; 
+    await user.save();
+
+    res.status(201).json({ success: true, business: savedBusiness });
+  } catch (error) {
+    res.status(400).json({ success: false, message: error.message });
+  }
+};
 
   exports.getBusiness= async (req,res) =>{
   try {

@@ -7,7 +7,11 @@ const userSchema = new mongoose.Schema({
   email: { type: String, required: true, unique: true },
   password: { type: String},
   userImage:{type:String},
-  isAgree :{ type: Boolean, defult: false }
+  isAgree :{ type: Boolean, defult: false },
+  isSeller: { type: Boolean, default: false },
+  businesses: [
+    { type: mongoose.Schema.Types.ObjectId, ref: 'Business' }
+  ],
 });
 
 userSchema.pre('save', async function(next) {
