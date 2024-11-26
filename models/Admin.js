@@ -34,7 +34,7 @@ AdminSchema.methods.comparePassword = async function (candidatePassword) {
 };
 
 AdminSchema.methods.generateAuthToken = function () {
-  const payload = { id: this._id, email: this.email };
+  const payload = { id: this._id, role:this.role };
   return jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '1h' });
 };
 

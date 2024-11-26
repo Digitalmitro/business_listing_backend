@@ -5,6 +5,7 @@ const Schema = mongoose.Schema;
 const BusinessSchema = new Schema({
   businessName: { type: String, required: true },
   description: { type: String },
+  isBlocked: { type: Boolean, default: false },
   address: {
     blockName: { type: String },
     streetName: { type: String },

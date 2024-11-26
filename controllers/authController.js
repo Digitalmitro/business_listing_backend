@@ -142,4 +142,34 @@ exports.getUserProfile = async (req,res) =>{
   }
 }
 
+//use for admin
+exports.getAllUsers  = async( req, res) =>{
+  try {
+    const { search = '', page = 1, limit = 10 } = req.query;
+    const pageNumber = parseInt(page, 10);
+    const pageLimit = parseInt(limit, 10);
+    const skip = (pageNumber - 1) * pageLimit;
+    const searchQuery = {
+        $or: [
+            { email: { $regex: search, $options: 'i' } },
+            { phone: { $regex: search, $options: 'i' } }
+        ]
+    };
+    const users = await User.find(searchQuery)
+        .skip(skip)
+        .limit(pageLimit);
+    const totalUsers = await User.countDocuments(searchQuery);
+
+    res.json({
+        users,
+        totalUsers
+    });
+
+} catch (error) {
+  console.log(error)
+    res.status(500).json({ message: 'Server error' });
+}
+}
+
+
 
