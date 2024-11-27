@@ -49,3 +49,13 @@ exports.getSubCategories = async (req, res) => {
       res.status(500).json({ message: "Error fetching subcategories", error: error.message });
     }
 };
+//this use for admin
+exports.getAllsubcategory = async (req,res) =>{
+  try {
+    const subCategories = await SubCategory.find().populate('category')
+
+    return res.status(200).json(subCategories)
+  } catch (error) {
+    res.status(500).json({ message: "Error fetching subcategories", error: error.message });
+  }
+}

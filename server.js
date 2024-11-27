@@ -9,6 +9,7 @@ const topBannerCategoryRoutes = require('./routes/topBannerCategoryRoutes');
 const subCategoryRoutes = require('./routes/subCategoryRoutes.js');
 const business = require('./routes/businessRoutes.js')
 const notificationRoutes = require('./routes/notificationRoutes.js');
+const topCountryRoutes = require('./routes/topCountryRoutes.js');
 const adminRoutes = require('./routes/adminRoutes.js');
 const planRoutes  = require('./routes/planRoutes.js')
 
@@ -36,6 +37,7 @@ app.use('/api/top_banner', topBannerCategoryRoutes);
 app.use('/api/subCategory', subCategoryRoutes)
 app.use('/api/business',business)
 app.use('/api/notification', notificationRoutes);
+app.use('/api', topCountryRoutes);
 app.use('/admin', adminRoutes);
 app.use('/api/plan', planRoutes);
 

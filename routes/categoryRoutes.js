@@ -1,5 +1,5 @@
 const express = require('express');
-const { createCategory, getAllCategories } = require('../controllers/categoryController');
+const { createCategory, getAllCategories, getCategorywithTop, deleteCategory } = require('../controllers/categoryController');
 const { upload } = require('../config/multerConfig');
 
 const router = express.Router();
@@ -9,5 +9,8 @@ router.post('/categories', upload.fields([
     { name: 'bgImage', maxCount: 1 } ]),createCategory);
 
 router.get('/categories', getAllCategories);
+
+router.get('/category-with-top', getCategorywithTop);
+router.delete('/:id', deleteCategory)
 
 module.exports = router;

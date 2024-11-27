@@ -1,5 +1,6 @@
 const Business = require('../models/Business')
 const User = require('../models/User')
+///this api use combine for admin and users
 exports.createBusiness = async (req, res) => {
   try {
     const loggedInUserId = req.user.id;
@@ -25,7 +26,7 @@ exports.createBusiness = async (req, res) => {
     res.status(400).json({ success: false, message: error.message });
   }
 };
-
+///this api use combnie for admin and users
 exports.getBusiness = async (req, res) => {
   try {
     const { page = 1, limit = 10, search = '' } = req.query;
@@ -86,12 +87,12 @@ exports.searchServices = async (req, res) => {
 
       {
         $match: {
-          address: { $regex: location, $options: 'i' }, // Fixed address search
+          "address.area": { $regex: location, $options: 'i' }, 
           $or: [
-            { name: { $regex: query, $options: 'i' } }, // Match by business name
-            { 'categoryDetails.name': { $regex: query, $options: 'i' } }, // Match by category name
-            { 'subCategoryDetails.name': { $regex: query, $options: 'i' } }, // Match by subcategory name
-            { servicesTypes: { $elemMatch: { $regex: query, $options: 'i' } } } // Match by servicesTypes array
+            { name: { $regex: query, $options: 'i' } }, 
+            { 'categoryDetails.name': { $regex: query, $options: 'i' } }, 
+            { 'subCategoryDetails.name': { $regex: query, $options: 'i' } }, 
+            { servicesTypes: { $elemMatch: { $regex: query, $options: 'i' } } }
           ]
         }
       },
@@ -111,15 +112,29 @@ exports.searchServices = async (req, res) => {
 
       {
         $project: {
-          name: 1,
+          _id: 1, 
+          businessName: 1,
+          description: 1,
+          isBlocked: 1,
           address: 1,
-          servicesTypes: 1,
-          category: '$categoryDetails.name',
-          subCategory: '$subCategoryDetails.name',
-          image: 1,
+          contact: 1,
+          businessTiming: 1,
+          category: '$categoryDetails.name', 
+          subCategory: '$subCategoryDetails.name', 
+          photos: 1,
           rating: 1,
+          totalReviews: 1,
+          verified: 1,
+          trust: 1,
+          claimed: 1,
+          enquiryCount: 1,
+          openUntil: 1,
+          yearsOfEstablishment: 1,
+          servicesTypes: 1,
+          hygiene: 1,
+          businessSummary: 1,
           createdAt: 1,
-          updatedAt: 1
+          updatedAt: 1,
         }
       }
     ]);
@@ -130,7 +145,7 @@ exports.searchServices = async (req, res) => {
 
     return res.status(200).json({
       message: "Services found",
-      services
+      businesses:services
     });
 
   } catch (error) {
