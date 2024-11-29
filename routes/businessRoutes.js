@@ -5,7 +5,7 @@ const {authMiddleware} = require('../middlewares/authMiddleware')
 
 const router = express.Router();
 
-router.post('/businesses',authMiddleware, upload.single('image'), createBusiness)
+router.post('/businesses', upload.single('image'), createBusiness)
 router.get('/businesses', getBusiness)
 router.get('/search', searchServices)
 router.patch('/block/:businessId',blockBusiness)
