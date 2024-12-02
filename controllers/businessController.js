@@ -200,4 +200,75 @@ exports.deleteBusiness = async (req, res) => {
   }
 };
 
+exports.updateBusiness = async (req,res) =>{
+  const businessId = req.body.id;
+  const updates = req.body.updateData;
+  if (!businessId || !updates || Object.keys(updates).length === 0) {
+    return res.status(400).json({message: 'Invalid request: businessId and updates are required'});
+  }
+  try {
+    const business = await Business.findById(businessId);
+    if (!business) {
+      return res.status(404).json({ error: 'Business not found' });
+    }
+    const allowedFields = [
+      'businessName',
+      'description',
+      'isBlocked',
+      'address',
+      'contact',
+      'businessTiming',
+      'category',
+      'subCategory',
+      'photos',
+      'rating',
+      'totalReviews',
+      'verified',
+      'trust',
+      'claimed',
+      'enquiryCount',
+      'openUntil',
+      'yearsOfEstablishment',
+      'servicesTypes',
+      'hygiene',
+      'businessSummary',
+    ];
+    const sanitizedUpdates = {};
+    Object.keys(updates).forEach((key) => {
+      if (allowedFields.includes(key)) {
+        sanitizedUpdates[key] = updates[key];
+      }
+    });
+    if (sanitizedUpdates.address) {
+      const {
+        blockName = business.address.blockName,
+        streetName = business.address.streetName,
+        area = business.address.area,
+        landmark = business.address.landmark,
+        pincode = business.address.pincode,
+        city = business.address.city,
+        state = business.address.state,
+      } = sanitizedUpdates.address;
+
+      sanitizedUpdates.address = {
+        blockName,
+        streetName,
+        area,
+        landmark,
+        pincode,
+        city,
+        state,
+      };
+    }
+    sanitizedUpdates.updatedAt = new Date();
+    const updatedBusiness = await await Business.updateOne({ _id: businessId }, sanitizedUpdates);
+    res.status(200).json({
+      message: 'Business updated successfully',
+      business: updatedBusiness,
+    });
+  } catch (error) {
+    console.error('Error updating business:', error);
+    res.status(500).json({ error: 'An error occurred while updating the business' });
+  }
+}
 
