@@ -12,7 +12,7 @@ const notificationRoutes = require('./routes/notificationRoutes.js');
 const topCountryRoutes = require('./routes/topCountryRoutes.js');
 const adminRoutes = require('./routes/adminRoutes.js');
 const planRoutes  = require('./routes/planRoutes.js')
-
+const reviewRoutes = require('./routes/reviewRoutes.js')
 const fs = require('fs');
 const path = require('path');
 
@@ -34,12 +34,13 @@ app.use('/api/auth', authRoutes);
 app.use('/api/category', categoryRoutes);
 app.use('/api/banner', bannerRoutes);
 app.use('/api/top_banner', topBannerCategoryRoutes);
-app.use('/api/subCategory', subCategoryRoutes)
-app.use('/api/business',business)
+app.use('/api/subCategory', subCategoryRoutes);
+app.use('/api/business',business);
 app.use('/api/notification', notificationRoutes);
 app.use('/api', topCountryRoutes);
 app.use('/admin', adminRoutes);
 app.use('/api/plan', planRoutes);
+app.use('/api/review', reviewRoutes);
 
 
 const PORT = process.env.PORT || 5000
