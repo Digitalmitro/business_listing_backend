@@ -13,6 +13,8 @@ const topCountryRoutes = require('./routes/topCountryRoutes.js');
 const adminRoutes = require('./routes/adminRoutes.js');
 const planRoutes  = require('./routes/planRoutes.js')
 const reviewRoutes = require('./routes/reviewRoutes.js')
+const appointmentRoutes = require('./routes/appointmentRoutes.js')
+const enquiryRoutes = require('./routes/enquiryRoutes.js')
 const fs = require('fs');
 const path = require('path');
 
@@ -41,6 +43,8 @@ app.use('/api', topCountryRoutes);
 app.use('/admin', adminRoutes);
 app.use('/api/plan', planRoutes);
 app.use('/api/review', reviewRoutes);
+app.use('/api', appointmentRoutes)
+app.use('/api', enquiryRoutes)
 
 
 const PORT = process.env.PORT || 5000
