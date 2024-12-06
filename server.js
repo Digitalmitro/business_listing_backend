@@ -15,6 +15,7 @@ const planRoutes  = require('./routes/planRoutes.js')
 const reviewRoutes = require('./routes/reviewRoutes.js')
 const appointmentRoutes = require('./routes/appointmentRoutes.js')
 const enquiryRoutes = require('./routes/enquiryRoutes.js')
+const questionRoutes = require('./routes/questionRoutes.js')
 const fs = require('fs');
 const path = require('path');
 
@@ -45,6 +46,7 @@ app.use('/api/plan', planRoutes);
 app.use('/api/review', reviewRoutes);
 app.use('/api', appointmentRoutes)
 app.use('/api', enquiryRoutes)
+app.use('/api', questionRoutes)
 
 
 const PORT = process.env.PORT || 5000

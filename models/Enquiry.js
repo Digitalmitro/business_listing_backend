@@ -4,7 +4,7 @@ const EnquirySchema = new mongoose.Schema({
   businessId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: "Business",
-    required: true,
+    required: false,
   },
   categoryId: {
     type: mongoose.Schema.Types.ObjectId,

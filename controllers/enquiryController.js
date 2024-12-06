@@ -4,7 +4,7 @@ const Business = require("../models/Business");
 exports.createEnquiry = async (req, res) => {
   try {
     const { businessId, categoryId, interest, name, phone } = req.body;
-    if (!businessId || !categoryId || !interest || !name || !phone) {
+    if ( !categoryId || !interest || !name || !phone) {
       return res.status(400).json({ message: "All fields are required." });
     }
 

@@ -3,46 +3,41 @@ const User = require('../models/User');
 
 exports.createGlobalNotification = async (req, res) => {
   try {
-    // const adminId = req.admin.id
-    const { title, description, timeAgo } = req.body;
-    const users = await User.find({}, "_id"); 
-    const userIds = users.map(user => user._id);
-
-    const notifications = userIds.map(userId => {
-      return {
-        updateOne: {
-          filter: { userId }, 
-          update: {
-            $setOnInsert: {
-              userId,
-              title,
-              description,
-              timeAgo,
-              read: false,
-              createdAt: new Date(),
-            }
-          },
-          upsert: true, 
-        }
-      };
-    });
-
-    if (notifications.length > 0) {
-      await Notification.bulkWrite(notifications);
-      return res.status(200).json({ message: 'Notifications sent to all users' });
+    const { title, description } = req.body;
+    if (!title || !description) {
+      return res.status(400).json({ message: "Title and description are required" });
     }
-
-    return res.status(400).json({ message: 'No users found' });
-
+    const users = await User.find({}, "_id");
+    const userIds = users.map((user) => user._id);
+    if (userIds.length === 0) {
+      return res.status(404).json({ message: "No users found" });
+    }
+    const notifications = userIds.map((userId) => ({
+      updateOne: {
+        filter: { userId, title, description },
+        update: {
+          $setOnInsert: {
+            userId,
+            title,
+            description,
+            read: false,
+            createdAt: new Date(),
+          },
+        },
+        upsert: true,
+      },
+    }));
+    await Notification.bulkWrite(notifications);
+    res.status(200).json({ message: "Notifications sent to all users" });
   } catch (error) {
-    console.error(error);
-    return res.status(500).json({ message: 'Server error' });
-  } 
+    console.error("Error creating global notification:", error);
+    res.status(500).json({ message: "Server error" });
+  }
 };
 
 exports.getNotifications = async (req, res) => {
   try {
-    const userId = req.params.userId;
+    const userId = req.user.id;
     const notifications = await Notification.find({ userId })
       .sort({ createdAt: -1 }); 
     if (!notifications.length) {

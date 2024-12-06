@@ -15,6 +15,7 @@ const BusinessSchema = new Schema({
     city: { type: String, required: true },
     state: { type: String, required: true }
   },
+  addressString: { type: String }, 
   contact: {
     customerName: { type: String, required: true, },
     mobile: {
@@ -123,6 +124,21 @@ const BusinessSchema = new Schema({
     default: Date.now
   }
 }, { timestamps: true });
+
+BusinessSchema.pre("save", function (next) {
+  const address = this.address;
+  const parts = [
+    address.blockName,
+    address.streetName,
+    address.area,
+    address.landmark,
+    address.city,
+    address.state,
+    address.pincode,
+  ];
+  this.addressString = parts.filter(Boolean).join(", ");
+  next();
+});
 
 module.exports = mongoose.model('Business', BusinessSchema);
 

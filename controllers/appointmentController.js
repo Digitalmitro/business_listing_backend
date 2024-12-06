@@ -1,6 +1,5 @@
+const moment = require('moment'); 
 const Appointment = require('../models/Appointment');
-
- const moment = require('moment'); 
 
 exports.CreateAppointment = async (req, res) => {
   try {
@@ -38,10 +37,11 @@ exports.CreateAppointment = async (req, res) => {
 
 exports.GetAppointment = async (req,res) =>{
     try {
-        const { userId } = req.params;
-        const appointments = await Appointment.find({ userId })
-          .populate("businessId")
-          .sort({ appointmentDate: -1 });
+        const userId  = req.user.id;
+        if(!userId) return res.status(400).json({message:'missing userid'})
+          const appointments = await Appointment.find({ userId })
+        .populate("businessId", "businessName address")
+        .sort({ appointmentDate: -1 });
         return res.status(200).json(appointments);
       } catch (error) {
         res.status(500).json({ error: error.message });
@@ -72,9 +72,7 @@ exports.RescheduleAppointment = async (req,res) =>{
     try {
         const { appointmentId } = req.params;
         const { newDate, newTimeSlot } = req.body;
-    
         const oldAppointment = await Appointment.findById(appointmentId);
-    
         if (!oldAppointment) {
           return res.status(404).json({ message: "Appointment not found" });
         }
@@ -84,11 +82,9 @@ exports.RescheduleAppointment = async (req,res) =>{
           timeSlot: newTimeSlot,
           status: { $ne: "Canceled" }
         });
-    
         if (existingAppointment) {
           return res.status(400).json({ message: "Time slot already booked." });
         }
-
         const newAppointment = new Appointment({
           ...oldAppointment._doc,
           appointmentDate: newDate,
