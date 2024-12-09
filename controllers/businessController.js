@@ -87,7 +87,7 @@ exports.searchServices = async (req, res) => {
 
       {
         $match: {
-          "address.area": { $regex: location, $options: 'i' }, 
+          "addressString": { $regex: location, $options: 'i' }, 
           $or: [
             { name: { $regex: query, $options: 'i' } }, 
             { 'categoryDetails.name': { $regex: query, $options: 'i' } }, 
@@ -272,3 +272,22 @@ exports.updateBusiness = async (req,res) =>{
   }
 }
 
+exports.getuserBusiness = async (req,res) =>{
+  try {
+    const userId = req.user.id;
+    const user = await User.findById(userId).populate('businesses').exec();
+
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+    return res.status(200).json({
+      full_name: user.full_name,
+      email: user.email,
+      userImage: user.userImage,
+      isSeller: user.isSeller,
+      businesses: user.businesses
+    });
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
+  }
+}

@@ -49,15 +49,6 @@ exports.login = async (req, res) => {
   }
 };
 
-exports.getProfile = async (req, res) => {
-  try {
-
-
-  } catch (error) {
-    res.status(400).json({ error: error.message });
-  }
-}
-
 exports.forgotPassword = async (req, res) => {
   try {
     const { email, password } = req.body;
@@ -132,7 +123,7 @@ exports.getUserProfile = async (req,res) =>{
   try {
     const userId = req.user.id;
     if(!userId) return res.status(401).json({"message": "provide corrct token"})
-    const user = await User.findById(userId).select('full_name userImage');
+    const user = await User.findById(userId).select('full_name userImage  isSeller');
     if (!user) {
       return res.status(404).json({ message: "User not found" });
     }

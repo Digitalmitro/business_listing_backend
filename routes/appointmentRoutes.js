@@ -6,6 +6,6 @@ const {CreateAppointment, GetAppointment, CancelAppointment, RescheduleAppointme
 router.post('/appointment', authMiddleware, CreateAppointment)
 router.get('/appointment', authMiddleware, GetAppointment)
 router.put('/appointment/:appointmentId', RescheduleAppointment)
-router.put('/appointment/:appointmentId',CancelAppointment)
+router.patch('/appointment/:appointmentId',CancelAppointment)
 
 module.exports = router;
