@@ -36,3 +36,12 @@ exports.createEnquiry = async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 };
+
+exports.getAllEnquiry = async(req,res) =>{
+  try {
+    const enquiry = await Enquiry.find({}).populate('businessId categoryId','businessName name');
+    return res.status(200).json(enquiry)
+  } catch (error) {
+    return res.status(500).json({ message: "Server error", details: error.message })
+  }
+}

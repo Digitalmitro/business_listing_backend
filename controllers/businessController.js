@@ -291,3 +291,35 @@ exports.getuserBusiness = async (req,res) =>{
     return res.status(500).json({ error: error.message });
   }
 }
+
+exports.getAllBusiness = async (req, res) => {
+  try {
+    const { page = 1, limit = 10, filters = "{}" } = req.query;
+    const skip = (Number(page) - 1) * Number(limit);
+    const parsedFilters = JSON.parse(filters);
+    const query = {
+      $and: [
+        { isBlocked: false }, 
+        parsedFilters 
+      ]
+    };
+    const businesses = await Business.find(query)
+      .skip(skip)
+      .limit(Number(limit));  
+    const total = await Business.countDocuments(query);
+    res.status(200).json({
+      success: true,
+      page: Number(page),
+      limit: Number(limit),
+      total,
+      businesses
+    });
+  } catch (error) {
+   
+    res.status(500).json({
+      success: false,
+      message: "An error occurred while fetching businesses.",
+      error: error.message
+    });
+  }
+};

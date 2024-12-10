@@ -22,8 +22,17 @@ exports.CreateQuestion = async (req, res) => {
       return res.status(201).json({ message: "Question created successfully", question: newQuestion });
   
     } catch (error) {
-     
         return res.status(500).json({ message: "Server error", details: error.message })
     }
   };
+
+exports.getAllQuestion = async (req,res) =>{
+try {
+  const question = await Question.find({}).populate('askedBy','full_name email');
+  return res.status(200).json(question)
+} catch (error) {
+  return res.status(500).json({ message: "Server error", details: error.message })
+}
+}
+
 
