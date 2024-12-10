@@ -123,7 +123,7 @@ exports.getUserProfile = async (req,res) =>{
   try {
     const userId = req.user.id;
     if(!userId) return res.status(401).json({"message": "provide corrct token"})
-    const user = await User.findById(userId).select('full_name userImage  isSeller');
+    const user = await User.findById(userId).select('-password');
     if (!user) {
       return res.status(404).json({ message: "User not found" });
     }
@@ -133,6 +133,35 @@ exports.getUserProfile = async (req,res) =>{
   }
 }
 
+exports.updateUserProfile = async (req,res) =>{
+  const userId = req.user.id; 
+  const updates = req.body;
+  let iconUrl;
+  try {
+      if (req.file) {
+          iconUrl = `${req.protocol}://${req.get('host')}/uploads/${req.file.filename}`;
+          updates.userImage = iconUrl; 
+      }
+      const updatedUser = await User.findByIdAndUpdate(userId, updates, {
+          new: true, 
+          runValidators: true, 
+      })
+
+      if (!updatedUser) {
+          return res.status(404).json({ message: 'User not found' });
+      }
+
+      res.status(200).json({
+          message: 'Profile updated successfully',
+          user: updatedUser,
+      });
+  } catch (error) {
+      res.status(500).json({
+          message: 'An error occurred while updating the profile',
+          error: error.message,
+      });
+  }
+}
 //use for admin
 exports.getAllUsers  = async( req, res) =>{
   try {

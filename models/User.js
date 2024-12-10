@@ -12,6 +12,13 @@ const userSchema = new mongoose.Schema({
   businesses: [
     { type: mongoose.Schema.Types.ObjectId, ref: 'Business' }
   ],
+  phone: { type: String, required: false },
+  dob: { type: Date, required: false },
+  maritalStatus: { type: String, enum: ['Single', 'Married'], required: false },
+  city: { type: String, required: false },
+  area: { type: String, required: false },
+  pincode: { type: String, required: false },
+  occupation: { type: String, required: false }
 });
 
 userSchema.pre('save', async function(next) {
