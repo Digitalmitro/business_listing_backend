@@ -294,13 +294,15 @@ exports.getuserBusiness = async (req,res) =>{
 
 exports.getAllBusiness = async (req, res) => {
   try {
-    const { page = 1, limit = 10, filters = "{}" } = req.query;
+    const { page = 1, limit = 10,  } = req.query;
+    const {selectFilter}=req.body
     const skip = (Number(page) - 1) * Number(limit);
-    const parsedFilters = JSON.parse(filters);
+   
+    console.log(selectFilter)
     const query = {
       $and: [
         { isBlocked: false }, 
-        parsedFilters 
+       
       ]
     };
     const businesses = await Business.find(query)

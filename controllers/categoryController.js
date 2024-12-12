@@ -23,7 +23,7 @@ exports.createCategory = async (req, res) => {
 // Get all categories
 exports.getAllCategories = async (req, res) => {
   try {
-    const categories = await Category.find().sort({ createdAt: -1 }).select("_id name  iconUrl createdAt");
+    const categories = await Category.find().sort({ createdAt: 1 }).select("_id name  iconUrl createdAt");
     res.status(200).json(categories);
   } catch (error) {
     res.status(500).json({ message: "An error occurred while fetching categories" });
