@@ -4,7 +4,7 @@ const Business = require('../models/Business');
 exports.createReview = async (req, res) => {
     const { businessId, rating, comment } = req.body;
     const userId = req.user.id;
-    if (!businessId || !rating || !comment || !userId) {
+    if (!businessId || !rating || !userId) {
         return res.status(400).json({
             success: false,
             message: "Missing required fields"
