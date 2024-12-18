@@ -48,7 +48,6 @@ app.use('/api', appointmentRoutes)
 app.use('/api', enquiryRoutes)
 app.use('/api', questionRoutes)
 
-
 const PORT = process.env.PORT || 5000
 app.listen(PORT, (err)=>{
     if(err) throw err;

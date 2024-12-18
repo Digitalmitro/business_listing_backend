@@ -59,10 +59,7 @@ exports.getAlluserAndseller = async (req,res) =>{
    if (!adminId) {
     return res.status(400).json({ success: false, message: "Admin ID is required." });
   }
-  // const admin = await Admin.findById(adminId);
-  // if (!admin || admin.role !== 'admin') {
-  //   return res.status(403).json({ success: false, message: "You are not authorized to perform this action." });
-  // }
+
   const totalUsers = await User.countDocuments();
   const totalSellers = await User.countDocuments({ isSeller: true });
   res.status(200).json({

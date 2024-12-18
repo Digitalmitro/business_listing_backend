@@ -7,7 +7,7 @@ const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 exports.register = async (req, res) => {
   try {
     const { name, email, password ,isAgree} = req.body;
-    if (!name || !email || !password || !isAgree) {
+    if (!name || !email || !password ) {
       return res.status(400).json({ message: "Please provide full name, email, and password" });
     }
     const existingUser = await User.findOne({ email });
