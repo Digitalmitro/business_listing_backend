@@ -2,7 +2,8 @@
 const express = require('express');
 const router = express.Router();
 const {authMiddleware} = require('../middlewares/authMiddleware.js')
-const { upload } = require('../config/multerConfig');
+// const { upload } = require('../config/multerConfig');
+const upload = require('../middlewares/uploadMiddleware')
 const { register, login, forgotPassword, googleLogin, getUserProfile, getAllUsers, updateUserProfile } = require('../controllers/authController.js');
 
 router.post('/register', register);

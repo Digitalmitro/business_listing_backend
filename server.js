@@ -32,7 +32,9 @@ app.use(express.json());
 app.use(cors())
 // Serve static files from the 'public' directory
 app.use('/uploads', express.static('public/uploads'));
-
+app.get('/',(req,res)=>{
+  res.status(200).json({"message":'Wellcome Business lising Server!'})
+})
 app.use('/api/auth', authRoutes);
 app.use('/api/category', categoryRoutes);
 app.use('/api/banner', bannerRoutes);
