@@ -18,7 +18,9 @@ const userSchema = new mongoose.Schema({
   city: { type: String, required: false },
   area: { type: String, required: false },
   pincode: { type: String, required: false },
-  occupation: { type: String, required: false }
+  occupation: { type: String, required: false },
+  otp: { type: String },
+  otpExpiration: { type: Date }
 });
 
 userSchema.pre('save', async function(next) {
