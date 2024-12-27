@@ -1,5 +1,7 @@
 const moment = require('moment');
 const Appointment = require('../models/Appointment');
+const Business = require('../models/Business');
+const sendMail = require('../services/sendMail');
 
 exports.CreateAppointment = async (req, res) => {
   try {
@@ -25,6 +27,69 @@ exports.CreateAppointment = async (req, res) => {
 
     await appointment.save();
 
+    const business = await Business.findById(businessId);
+    if (!business) {
+      return res.status(404).json({ message: "Business not found." });
+    }
+   
+   const appointmentDetails = `
+    Appointment Details:
+    - Business: ${business.businessName}
+    - Business ID: ${businessId}
+    - Date: ${moment(normalizedDate).format("YYYY-MM-DD")}
+    - Time: ${timeSlot}
+    - User ID: ${userId}
+  `;
+  
+  if (business.subscriptionActive) {
+    // Seller has a subscription - Send booking details to both seller and admin
+    await sendMail(business?.contact?.email[0], "New Appointment Booked", `
+      Dear ${business?.contact?.customerName},
+      
+      A new appointment has been booked for your business:
+      
+      ${appointmentDetails}
+  
+      Regards,
+      Your Team
+    `);
+  
+    await sendMail('soumen.digitalmitro@gmail.com', "New Appointment Booked", `
+      Admin Notification:
+      
+      A new appointment has been booked for the following business:
+      
+      ${appointmentDetails}
+  
+      Regards,
+      Your Team
+    `);
+  } else {
+    // Seller does not have a subscription - Notify seller without appointment details
+    await sendMail(business?.contact?.email[0], "Action Required: Subscription Inactive", `
+      Dear ${business?.contact?.customerName},
+      
+      A customer has tried to book an appointment, but your subscription is inactive. Please subscribe to receive future bookings.
+  
+      Regards,
+      Your Team
+    `);
+  
+    // Notify admin with appointment details and subscription status
+    await sendMail('soumen.digitalmitro@gmail.com', "Appointment Created Without Active Subscription", `
+      Admin Notification:
+      
+      An appointment was created for the following business with an inactive subscription:
+      
+      ${appointmentDetails}
+  
+      Subscription Status: Inactive
+  
+      Regards,
+      Your Team
+    `);
+  }
+  
     res.status(201).json({
       message: "Appointment booked successfully.",
       appointment,

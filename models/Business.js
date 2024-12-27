@@ -122,7 +122,11 @@ const BusinessSchema = new Schema({
   updatedAt: {
     type: Date,
     default: Date.now
-  }
+  },
+  subscriptionActive:{
+    type: Boolean,
+    default: false
+  },
 }, { timestamps: true });
 
 BusinessSchema.pre("save", function (next) {
