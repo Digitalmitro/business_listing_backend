@@ -39,6 +39,7 @@ const AppointmentSchema = new mongoose.Schema({
   updatedAt: { 
     type: Date, 
     default: Date.now 
-  }
+  },
+ 
 });
 module.exports = mongoose.model("Appointment", AppointmentSchema);
