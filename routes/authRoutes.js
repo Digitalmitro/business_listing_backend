@@ -12,7 +12,7 @@ router.post('/google-login', googleLogin);
 router.post('/forgot-password', forgotPassword);
 router.post('/sendOtp', sendOTP)
 router.get('/user-profile',authMiddleware, getUserProfile  )
-router.put('/update-profile', authMiddleware,upload.single('image'),updateUserProfile )
+router.put('/update-profile', authMiddleware, upload.fields([{ name: 'image', maxCount: 1 }]), updateUserProfile )
 //use for admin
 router.get('/get-all-user',getAllUsers )
 

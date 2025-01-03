@@ -89,7 +89,7 @@ exports.searchServices = async (req, res) => {
         $match: {
           "addressString": { $regex: location, $options: 'i' },
           $or: [
-            { name: { $regex: query, $options: 'i' } },
+            { businessName: { $regex: query, $options: 'i' } },
             { 'categoryDetails.name': { $regex: query, $options: 'i' } },
             { 'subCategoryDetails.name': { $regex: query, $options: 'i' } },
             { servicesTypes: { $elemMatch: { $regex: query, $options: 'i' } } }
