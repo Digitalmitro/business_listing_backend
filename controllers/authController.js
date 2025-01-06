@@ -176,9 +176,12 @@ exports.getUserProfile = async (req,res) =>{
 
 exports.updateUserProfile = async (req,res) =>{
   const userId = req.user.id; 
+  // let iconUrl;
   try {
     const updates = req.body;
+
       if (req.files.image) {
+          // iconUrl = `${req.protocol}://${req.get('host')}/uploads/${req.file.filename}`;
           const iconUpload = req.files.image[0];
           updates.userImage =iconUpload.location;
       }
