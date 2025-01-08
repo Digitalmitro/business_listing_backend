@@ -2,7 +2,7 @@ name: Deploy to EC2
 
 on:
   push:
-    branches: [soumen]  # Change to your desired branch
+    branches: [soumen]  # Change to your branch
 
 jobs:
   deploy:
@@ -15,18 +15,16 @@ jobs:
       - name: Set up SSH
         run: |
           mkdir -p ~/.ssh
-          echo "${{ secrets.EC2_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+          echo "${{ secrets.EC2_PRIVATE_KEY }}" | tr -d '\r' > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -H 13.61.104.140 >> ~/.ssh/known_hosts
 
       - name: Deploy to EC2
         run: |
           ssh -i ~/.ssh/deploy_key ubuntu@13.61.104.140 << 'EOF'
-          cd /path/to/your/project
+          cd /home/ubuntu/my-app  # Update to your actual project path
           git pull origin soumen  # Ensure this matches your branch
           npm install
-          pm2 restart all
-          sudo systemctl restart nginx
+          pm2 restart all || pm2 start npm -- start
+          sudo systemctl restart nginx || echo "NGINX not installed or configured"
           EOF
-        env:
-          PRIVATE_KEY: ${{ secrets.EC2_PRIVATE_KEY }}
