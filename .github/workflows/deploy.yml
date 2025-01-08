@@ -19,9 +19,18 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -H 13.61.104.140 >> ~/.ssh/known_hosts
 
+      - name: Start ssh-agent and add deploy key
+        run: |
+          eval $(ssh-agent -s)
+          ssh-add ~/.ssh/deploy_key
+
       - name: Test SSH Connection
         run: ssh -T -i ~/.ssh/deploy_key ubuntu@13.61.104.140 "echo SSH connection successful"
 
+      - name: Clone repository from GitHub
+        run: |
+          git clone git@github.com:<owner>/<repo>.git /home/ubuntu/business_listing_backend
+      
       - name: Deploy to EC2
         run: |
           ssh -T -i ~/.ssh/deploy_key ubuntu@13.61.104.140 << 'EOF'
