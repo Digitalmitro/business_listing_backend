@@ -5,7 +5,7 @@ const { upload } = require('../config/multerConfig');
 const router = express.Router();
 
 // Route to create a new banner
-router.post('/banners', upload.single('image'), createBanner);
+router.post('/banners', upload.fields([{ name: 'image', maxCount: 1 }]), createBanner);
 
 // Route to get all banners
 router.get('/banners', getAllBanners);

@@ -5,7 +5,7 @@ const {authMiddleware} = require('../middlewares/authMiddleware')
 
 const router = express.Router();
 
-router.post('/businesses', upload.single('image'),authMiddleware, createBusiness)
+router.post('/businesses',authMiddleware, upload.fields([{ name: 'image', maxCount: 1 }]), createBusiness)
 router.get('/all-business', getAllBusiness)
 router.put('/update-business', updateBusiness)
 router.get('/businesses', getBusiness)
