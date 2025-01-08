@@ -15,14 +15,14 @@ jobs:
       - name: Build docker image
         run: docker build -t soumendigitalmitro/business_list:tagname .
       - name: Publish image to docker hub
-        run: docker push soumendigitalmitro/business_list
+        run: docker push soumendigitalmitro/business_list:latest
         
   deploy:
     needs: build
     runs-on: [aws-ec2]
     steps:
       - name: Pull image from docker hub
-        run: docker pull soumendigitalmitro/business_list:tagname
+        run: docker pull soumendigitalmitro/business_list:latest
       - name: Delete old container
         run: docker rm -f nodejs-app-container
       - name: Run docker container
