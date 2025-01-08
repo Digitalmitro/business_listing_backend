@@ -2,7 +2,7 @@ name: Deploy to EC2
 
 on:
   push:
-    branches: [soumen]  # Change to your branch
+    branches: [soumen]  # Change to your desired branch
 
 jobs:
   deploy:
@@ -19,11 +19,14 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -H 13.61.104.140 >> ~/.ssh/known_hosts
 
+      - name: Test SSH Connection
+        run: ssh -T -i ~/.ssh/deploy_key ubuntu@13.61.104.140 "echo SSH connection successful"
+
       - name: Deploy to EC2
         run: |
           ssh -T -i ~/.ssh/deploy_key ubuntu@13.61.104.140 << 'EOF'
-          cd /home/ubuntu/business_listing_backend  # Update to your actual project path
-          git pull origin soumen  # Ensure this matches your branch
+          cd /home/ubuntu/business_listing_backend
+          git pull origin soumen
           npm install
           pm2 restart all || pm2 start npm -- start
           sudo systemctl restart nginx || echo "NGINX not installed or configured"
