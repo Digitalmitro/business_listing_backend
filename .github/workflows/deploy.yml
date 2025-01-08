@@ -15,7 +15,7 @@ jobs:
       - name: Build docker image
         run: docker build -t soumendigitalmitro/business_list:latest .
       - name: Publish image to docker hub
-        run: docker push soumendigitalmitro/business_list:latest
+        run: docker push soumendigitalmitro/business_list:latest .
         
   deploy:
     needs: build
