@@ -13,9 +13,9 @@ jobs:
       - name: Login to docker hub
         run: docker login -u ${{ secrets.DOCKER_USERNAME }} -p ${{ secrets.DOCKER_PASSWORD }} 
       - name: Build docker image
-        run: docker build -t soumendigitalmitro/business_list:tagname .
+        run: docker build -t soumendigitalmitro/business_list:latest .
       - name: Publish image to docker hub
-        run: docker push soumendigitalmitro/business_list:tagname .
+        run: docker push soumendigitalmitro/business_list:latest
         
   deploy:
     needs: build
