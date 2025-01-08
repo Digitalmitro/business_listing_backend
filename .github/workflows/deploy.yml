@@ -1,46 +1,29 @@
-name: Deploy to EC2
+name: CICD
 
 on:
   push:
-    branches: [soumen]  # Change to your desired branch
+    branches: [cicd-docker-ec2]
 
 jobs:
-  deploy:
-    runs-on: ubuntu-latest
-
+  build:
+    runs-on: [ubuntu-latest]
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v2
-
-      - name: Set up SSH
-        run: |
-          mkdir -p ~/.ssh
-          echo "${{ secrets.EC2_PRIVATE_KEY }}" | tr -d '\r' > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -H 13.61.104.140 >> ~/.ssh/known_hosts
-
-      - name: Test SSH Connection
-        run: ssh -i ~/.ssh/deploy_key ubuntu@13.61.104.140 "echo SSH connection successful"
-
-      - name: Deploy to EC2
-        run: |
-          ssh -i ~/.ssh/deploy_key ubuntu@13.61.104.140 << 'EOF'
-          # Ensure the target directory exists
-          mkdir -p /home/ubuntu/business_listing_backend
-          cd /home/ubuntu/business_listing_backend
-          
-          # Clone repository if not already present
-          if [ ! -d ".git" ]; then
-            git clone git@github.com:Digitalmitro/business_listing_backend.git .
-          fi
-          
-          # Pull latest changes and install dependencies
-          git pull origin soumen
-          npm install
-          
-          # Restart application using pm2
-          pm2 restart all || pm2 start npm -- start
-          
-          # Restart NGINX if installed
-          sudo systemctl restart nginx || echo "NGINX not installed or configured"
-          EOF
+      - name: Checkout source
+        uses: actions/checkout@v3
+      - name: Login to docker hub
+        run: docker login -u ${{ secrets.DOCKER_USERNAME }} -p ${{ secrets.DOCKER_PASSWORD }} 
+      - name: Build docker image
+        run: docker build -t soumendigitalmitro/business_list
+      - name: Publish image to docker hub
+        run: docker push soumendigitalmitro/business_list:tagname
+        
+  deploy:
+    needs: build
+    runs-on: [aws-ec2]
+    steps:
+      - name: Pull image from docker hub
+        run: docker pull soumendigitalmitro/business_list:tagname
+      - name: Delete old container
+        run: docker rm -f nodejs-app-container
+      - name: Run docker container
+        run: docker run -d -p 5000:5000 --name nodejs-app-container integrationninjas/nodejs-app
