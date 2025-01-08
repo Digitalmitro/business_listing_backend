@@ -29,7 +29,7 @@ jobs:
 
       - name: Clone repository from GitHub
         run: |
-          git clone git@github.com:<owner>/<repo>.git /home/ubuntu/business_listing_backend
+          git clone git@github.com:Digitalmitro/business_listing_backend.git /home/ubuntu/business_listing_backend
       
       - name: Deploy to EC2
         run: |
