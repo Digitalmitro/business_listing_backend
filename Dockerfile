@@ -11,6 +11,9 @@ RUN npm install
 # Copy the rest of your application code
 COPY . .
 
+# Optional: Override any default ENTRYPOINT from base image
+ENTRYPOINT []
+
 # Expose the port your app runs on
 EXPOSE 5001
 
