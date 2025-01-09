@@ -33,7 +33,7 @@ app.use(cors())
 // Serve static files from the 'public' directory
 app.use('/uploads', express.static('public/uploads'));
 app.get('/',(req,res)=>{
-  res.status(200).json({"message":'Wellcome Business lising Server!'})
+  res.status(200).json({"message":'Wellcome Urbancitations Server! ✨'})
 })
 app.use('/api/auth', authRoutes);
 app.use('/api/category', categoryRoutes);
