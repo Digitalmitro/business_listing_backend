@@ -29,10 +29,11 @@ jobs:
     - name: Delete old container
       run: docker rm -f nodejs-app-container || true
 
-    - name: Run Docker container with .env file
+    - name: Run Docker container with .env file and restart policy
       run: |
         docker run -d \
           --env-file=/home/ubuntu/.env \
           -p 5000:5000 \
           --name nodejs-app-container \
+          --restart unless-stopped \
           soumendigitalmitro/business_list:latest
