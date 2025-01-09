@@ -6,24 +6,39 @@ on:
 
 jobs:
   build:
-    runs-on: [ubuntu-latest]
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout source
         uses: actions/checkout@v3
-      - name: Login to docker hub
-        run: docker login -u ${{ secrets.DOCKER_USERNAME }} -p ${{ secrets.DOCKER_PASSWORD }} 
-      - name: Build docker image
+
+      - name: Login to Docker Hub
+        run: echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
+
+      - name: Build Docker image
         run: docker build -t soumendigitalmitro/business_list:latest .
-      - name: Publish image to docker hub
+
+      - name: Publish image to Docker Hub
         run: docker push soumendigitalmitro/business_list:latest
-        
+
   deploy:
     needs: build
-    runs-on: [aws-ec2]
+    runs-on: ubuntu-latest  # Change this to ubuntu-latest or a self-hosted runner
     steps:
-      - name: Pull image from docker hub
-        run: docker pull soumendigitalmitro/business_list:latest
-      - name: Delete old container
-        run: docker rm -f nodejs-app-container
-      - name: Run docker container
-        run: docker run -d -p 5000:5000 --name nodejs-app-container integrationninjas/nodejs-app
+      - name: Checkout source
+        uses: actions/checkout@v3
+
+      - name: SSH to EC2 and deploy
+        uses: appleboy/ssh-action@v0.1.0
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ec2-user
+          key: ${{ secrets.EC2_PRIVATE_KEY }}
+          script: |
+            # Pull the latest image
+            docker pull soumendigitalmitro/business_list:latest
+            
+            # Stop and remove the old container if it exists
+            docker rm -f nodejs-app-container || true
+            
+            # Run the new container
+            docker run -d -p 5000:5000 --name nodejs-app-container soumendigitalmitro/business_list:latest
