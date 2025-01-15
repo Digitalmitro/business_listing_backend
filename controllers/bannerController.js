@@ -9,8 +9,12 @@ exports.createBanner = async (req, res) => {
     if (!title || !req.file) {
       return res.status(400).json({ message: "Please provide both title and banner image" });
     }
-    const banerUrl = `${req.protocol}://${req.get('host')}/uploads/${req.file.filename}`;
-    
+    const banerUrl = ''
+    if (req.files.image) {
+      // iconUrl = `${req.protocol}://${req.get('host')}/uploads/${req.file.filename}`;
+      const iconUpload = req.files.image[0];
+      banerUrl = iconUpload.location;
+  }
     const banner = new Banner({
       title,
       imageUrl: banerUrl

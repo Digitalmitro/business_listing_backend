@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 name: Deploy to EC2
 
 on:
@@ -30,3 +31,44 @@ jobs:
           EOF
         env:
           PRIVATE_KEY: ${{ secrets.EC2_PRIVATE_KEY }}
+=======
+name: CICD
+
+on:
+  push:
+    branches: [soumen]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v3
+
+      - name: Login to Docker Hub
+        run: echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
+
+      - name: Build Docker image
+        run: docker build -t soumendigitalmitro/business_list:latest .
+
+      - name: Publish image to Docker Hub
+        run: docker push soumendigitalmitro/business_list:latest
+  deploy:
+    needs: build
+    runs-on: [self-hosted]
+    steps:
+    - name: Pull image from Docker Hub
+      run: docker pull soumendigitalmitro/business_list:latest
+
+    - name: Delete old container
+      run: docker rm -f nodejs-app-container || true
+
+    - name: Run Docker container with .env file and restart policy
+      run: |
+        docker run -d \
+          --env-file=/home/ubuntu/.env \
+          -p 5000:5000 \
+          --name nodejs-app-container \
+          --restart unless-stopped \
+          soumendigitalmitro/business_list:latest
+>>>>>>> 87d2230e898cc0c644011c7f3ad212f6728b806c

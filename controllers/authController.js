@@ -176,12 +176,14 @@ exports.getUserProfile = async (req,res) =>{
 
 exports.updateUserProfile = async (req,res) =>{
   const userId = req.user.id; 
-  const updates = req.body;
-  let iconUrl;
+  // let iconUrl;
   try {
-      if (req.file) {
-          iconUrl = `${req.protocol}://${req.get('host')}/uploads/${req.file.filename}`;
-          updates.userImage = iconUrl; 
+    const updates = req.body;
+
+      if (req.files.image) {
+          // iconUrl = `${req.protocol}://${req.get('host')}/uploads/${req.file.filename}`;
+          const iconUpload = req.files.image[0];
+          updates.userImage =iconUpload.location;
       }
       const updatedUser = await User.findByIdAndUpdate(userId, updates, {
           new: true, 
