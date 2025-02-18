@@ -30,6 +30,7 @@
     "multer-s3": "^3.0.1",
     "nodemailer": "^6.9.16",
     "nodemon": "^3.1.7",
+    "otp-generator": "^4.0.1",
     "react-redux": "^9.1.2"
   }
 }
