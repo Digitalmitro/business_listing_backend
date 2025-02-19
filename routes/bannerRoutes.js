@@ -1,6 +1,7 @@
 const express = require('express');
 const { createBanner, getAllBanners } = require('../controllers/bannerController');
-const { upload } = require('../config/multerConfig');
+// const { upload } = require('../config/multerConfig');
+const upload = require('../middlewares/uploadMiddleware')
 
 const router = express.Router();
 

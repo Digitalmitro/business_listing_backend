@@ -13,5 +13,4 @@ router.get('/user-business', authMiddleware, getuserBusiness)
 router.get('/search', searchServices)
 router.patch('/block/:businessId',blockBusiness)
 router.delete('/delete/:businessId', deleteBusiness)
-
 module.exports = router;

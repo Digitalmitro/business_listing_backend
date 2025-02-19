@@ -1,37 +1,3 @@
-<<<<<<< HEAD
-name: Deploy to EC2
-
-on:
-  push:
-    branches: [soumen]  # Change to your default branch if different
-
-jobs:
-  deploy:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v2
-
-      - name: Set up SSH
-        run: |
-          mkdir -p ~/.ssh
-          echo "${{ secrets.EC2_PRIVATE_KEY }}" > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -H your-ec2-instance-ip >> ~/.ssh/known_hosts
-
-      - name: Deploy to EC2
-        run: |
-          ssh -i ~/.ssh/deploy_key ubuntu@your-ec2-instance-ip << 'EOF'
-          cd /path/to/your/project
-          git pull origin main
-          npm install
-          pm2 restart all
-          sudo systemctl restart nginx
-          EOF
-        env:
-          PRIVATE_KEY: ${{ secrets.EC2_PRIVATE_KEY }}
-=======
 name: CICD
 
 on:
@@ -71,4 +37,3 @@ jobs:
           --name nodejs-app-container \
           --restart unless-stopped \
           soumendigitalmitro/business_list:latest
->>>>>>> 87d2230e898cc0c644011c7f3ad212f6728b806c
