@@ -1,36 +1,54 @@
 const Admin = require('../models/Admin');
 const jwt = require('jsonwebtoken');
 const User = require('../models/User')
+const otpGenerator = require("otp-generator");
+const bcrypt = require("bcryptjs");
+const sendMail = require("../services/sendMail");
+
+const OTP_EXPIRATION_TIME = 5 * 60 * 1000;
 // Admin login
 exports.login = async (req, res) => {
   const { email, password } = req.body;
-//  console.log(email, password)
+
   try {
     // Find admin by email
     const admin = await Admin.findOne({ email });
     if (!admin) {
-      return res.status(400).json({ success: false, message: 'Invalid credentials' });
+      return res.status(400).json({ success: false, message: "Invalid credentials" });
     }
 
     // Compare provided password with stored hash
-    const isMatch = await admin.comparePassword(password);
+    const isMatch = await bcrypt.compare(password, admin.password);
     if (!isMatch) {
-      return res.status(400).json({ success: false, message: 'Invalid credentials' });
+      return res.status(400).json({ success: false, message: "Invalid credentials" });
     }
 
-    // Generate JWT token
-    const token = admin.generateAuthToken();
+    // Generate 6-digit OTP
+    const otp = otpGenerator.generate(6, { upperCase: false, specialChars: false });
+    const otpExpiration = new Date(Date.now() + OTP_EXPIRATION_TIME);
 
-    res.status(200).json({
-      success: true,
-      message: 'Login successful',
-      token,
-    });
+    // Store OTP & expiration in the database
+    admin.otp = otp;
+    admin.otpExpiration = otpExpiration;
+    await admin.save();
+
+    // Send OTP email
+    const emailBody = `Your OTP for login is: ${otp}\n\nThis OTP is valid for 5 minutes.`;
+    const mailSent = await sendMail(admin.email, "Your OTP for Admin Login", emailBody);
+
+    if (mailSent) {
+      return res.status(200).json({
+        success: true,
+        message: "OTP sent to email. Please check your email to complete login.",
+      });
+    } else {
+      return res.status(500).json({ success: false, message: "Failed to send OTP email" });
+    }
   } catch (error) {
-    res.status(500).json({ success: false, message: 'Server error' });
+    console.error(error);
+    res.status(500).json({ success: false, message: "Server error" });
   }
 };
-
 exports.register = async (req,res) =>{
   try {
     const { email, password } = req.body;
@@ -73,3 +91,39 @@ exports.getAlluserAndseller = async (req,res) =>{
   res.status(500).json({ success: false, message: error.message });
  }
 }
+
+// Admin Login - Step 2: Verify OTP & Generate Token
+exports.verifyOtp = async (req, res) => {
+  const { email, otp } = req.body;
+// console.log({ email, otp })
+  try {
+    const admin = await Admin.findOne({ email });
+
+    if (!admin) {
+      return res.status(400).json({ success: false, message: "Invalid credentials" });
+    }
+
+    const currentTime = new Date();
+
+    // Check if OTP is valid and not expired
+    if (admin.otp === otp && currentTime < admin.otpExpiration) {
+      const token = await admin.generateAuthToken(); // Generate JWT token
+
+      // Clear OTP fields after successful verification
+      admin.otp = null;
+      admin.otpExpiration = null;
+      await admin.save();
+
+      return res.status(200).json({
+        success: true,
+        message: "OTP verified successfully, login complete.",
+        token,
+      });
+    } else {
+      return res.status(400).json({ success: false, message: "Invalid or expired OTP" });
+    }
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+};
