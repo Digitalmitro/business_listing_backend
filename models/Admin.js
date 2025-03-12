@@ -43,7 +43,7 @@ AdminSchema.methods.comparePassword = async function (candidatePassword) {
 
 AdminSchema.methods.generateAuthToken = function () {
   const payload = { id: this._id, role:this.role };
-  return jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '1h' });
+  return jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '30d' });
 };
 
 module.exports = mongoose.model('Admin', AdminSchema);

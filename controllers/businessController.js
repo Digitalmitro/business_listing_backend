@@ -8,7 +8,6 @@ exports.createBusiness = async (req, res) => {
     const { useid } = businessData;
     const isAdmin = req.user?.role === 'admin';
     const userId = isAdmin && useid ? useid : loggedInUserId;
-    //  console.log(businessData)
     if (!businessData) {
       return res.status(400).json({ message: 'Add all mandatory fields.' });
     }

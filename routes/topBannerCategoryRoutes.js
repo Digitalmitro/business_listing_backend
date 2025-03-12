@@ -1,6 +1,7 @@
 const express = require('express');
 const { createTopBannerCategory, getAllTopBannerCategories } = require('../controllers/topBannerCategoryController');
-const { upload } = require('../config/multerConfig');
+// const { upload } = require('../config/multerConfig');
+const { upload }=require("../config/Cloudinary")
 
 const router = express.Router();
 

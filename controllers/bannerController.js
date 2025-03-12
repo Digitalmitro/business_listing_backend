@@ -4,8 +4,7 @@ const Banner = require('../models/Banner');
 exports.createBanner = async (req, res) => {
   try {
     const { title } = req.body;
-    console.log("show file",req.file)
-    console.log("show title",title)
+    
     // Validate required fields
     if (!title || !req.file) {
       return res.status(400).json({ message: "Please provide both title and banner image" });
@@ -25,7 +24,7 @@ exports.createBanner = async (req, res) => {
     res.status(201).json({ message: "Banner created successfully", banner });
   } catch (error) {
     res.status(500).json({ message: "An error occurred while creating the banner", error: error.message });
-    console.log(error)
+    
   }
 };
 

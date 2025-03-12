@@ -1,5 +1,5 @@
 const TopBannerCategory = require('../models/TopBannerCategory');
-
+const { uploadToCloudinary }=require('../config/Cloudinary')
 // Create Top Banner Category
 exports.createTopBannerCategory = async (req, res) => {
   try {
@@ -9,7 +9,9 @@ exports.createTopBannerCategory = async (req, res) => {
       return res.status(400).json({ message: "Title, paragraph, and image are required" });
     }
 
-    const imageUrl = `${req.protocol}://${req.get('host')}/uploads/${req.file.filename}`;
+    // const imageUrl = `${req.protocol}://${req.get('host')}/uploads/${req.file.filename}`;
+
+    const imageUrl=await uploadToCloudinary(req.file.buffer ,"topBanner");
 
     const topBannerCategory = new TopBannerCategory({ title, paragraph, imageUrl });
     await topBannerCategory.save();

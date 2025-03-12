@@ -1,7 +1,7 @@
 const express = require('express');
-const { createCategory, getAllCategories, getCategorywithTop, deleteCategory } = require('../controllers/categoryController');
-// const { upload } = require('../config/multerConfig');
-const upload = require('../middlewares/uploadMiddleware')
+const { createCategory, getAllCategories, getCategorywithTop, deleteCategory,getCategoryById,updateCategory} = require('../controllers/categoryController');
+const { upload } = require('../config/Cloudinary');
+// const upload = require('../middlewares/uploadMiddleware')
 
 const router = express.Router();
 
@@ -13,5 +13,7 @@ router.get('/categories', getAllCategories);
 
 router.get('/category-with-top', getCategorywithTop);
 router.delete('/:id', deleteCategory)
+router.get("/:categoryId", getCategoryById);
+router.put("/:categoryId", updateCategory);
 
 module.exports = router;

@@ -95,7 +95,7 @@ exports.getAlluserAndseller = async (req,res) =>{
 // Admin Login - Step 2: Verify OTP & Generate Token
 exports.verifyOtp = async (req, res) => {
   const { email, otp } = req.body;
-// console.log({ email, otp })
+
   try {
     const admin = await Admin.findOne({ email });
 
