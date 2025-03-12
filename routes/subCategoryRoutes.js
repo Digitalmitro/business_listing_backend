@@ -1,6 +1,8 @@
 const express = require("express");
 const router = express.Router();
-const { upload } = require("../config/multerConfig");
+const { upload } = require('../config/Cloudinary');
+
+
 const {
   createSubCategory,
   getSubCategories,

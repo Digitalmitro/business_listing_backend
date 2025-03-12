@@ -1,28 +1,37 @@
-const SubCategory = require('../models/SubCategory');  // Adjust path
-const Category = require('../models/Category');  // Adjust path to Category model
+const SubCategory = require('../models/SubCategory');  
+const Category = require('../models/Category');  
+const { uploadToCloudinary } = require("../config/Cloudinary");
 
 exports.createSubCategory = async (req, res) => {
   try {
     const { name, category } = req.body;
-    if (!name || !category  || !req.file) {
-      return res.status(400).json({ message: "Name and category are required" });
+
+    if (!name || !category || !req.file) {
+      return res.status(400).json({ message: "Name, category, and icon image are required" });
     }
+
     const existingCategory = await Category.findById(category);
     if (!existingCategory) {
       return res.status(404).json({ message: "Category not found" });
     }
-    const iconUrl = `${req.protocol}://${req.get('host')}/uploads/${req.file.filename}`;
+
+    const iconUrl = await uploadToCloudinary(req.file.buffer, "subCategoryIcons");
+
     const subCategory = new SubCategory({
       name,
       category,
       iconUrl
     });
+
     await subCategory.save();
+
     res.status(201).json({ message: "SubCategory created successfully", subCategory });
+
   } catch (error) {
     res.status(500).json({ message: "Error creating subcategory", error: error.message });
   }
 };
+
 
 exports.getSubCategories = async (req, res) => {
     try {
@@ -107,13 +116,11 @@ exports.updateSubCategory = async (req, res) => {
       }
     }
 
-    // Handle icon update if a new file is uploaded
-    let iconUrl = subCategory.iconUrl; // Keep existing icon if no new file
+    let iconUrl = subCategory.iconUrl; 
     if (req.file) {
-      iconUrl = `${req.protocol}://${req.get('host')}/uploads/${req.file.filename}`;
+      iconUrl = await uploadToCloudinary(req.file.buffer, "subCategoryIcons");
     }
 
-    // Update subcategory fields
     subCategory.name = name || subCategory.name;
     subCategory.category = category || subCategory.category;
     subCategory.iconUrl = iconUrl;
@@ -125,4 +132,5 @@ exports.updateSubCategory = async (req, res) => {
     res.status(500).json({ message: "Error updating subcategory", error: error.message });
   }
 };
+
 
