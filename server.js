@@ -18,6 +18,7 @@ const enquiryRoutes = require('./routes/enquiryRoutes.js')
 const questionRoutes = require('./routes/questionRoutes.js')
 const topServiesRoutes=require("./routes/topServicesRoutes")
 const freeListingRoutes=require("./routes/freeListingRoutes")
+const verticalRoutes = require("./routes/verticalRoutes");
 const fs = require('fs');
 const path = require('path');
 
@@ -53,6 +54,7 @@ app.use('/api', enquiryRoutes)
 app.use('/api', questionRoutes)
 app.use('/api', topServiesRoutes)
 app.use('/api', freeListingRoutes)
+app.use("/api/verticals", verticalRoutes); 
 
 const PORT = process.env.PORT || 5000
 app.listen(PORT, (err)=>{
