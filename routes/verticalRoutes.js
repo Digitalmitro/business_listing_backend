@@ -10,7 +10,7 @@ const {
 
 const router = express.Router();
 
-router.post("/", insertManyVerticals); // Create a new vertical
+router.post("/", createVertical); // Create a new vertical
 router.get("/", getAllVerticals); // Get all verticals
 router.get("/:title", getVerticalByTitle); // Get vertical by title
 router.put("/:title", updateVertical); // Update vertical by title

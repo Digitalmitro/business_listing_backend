@@ -3,11 +3,11 @@ const Vertical = require("../models/Vertical");
 exports.insertManyVerticals = async (req, res) => {
     try {
         const verticalsData = [
-            { title: "B2B", description: "Business-to-business (B2B) services provide products and solutions tailored for businesses." },
-            { title: "All India", description: "A platform covering diverse business sectors across India." },
-            { title: "Doctors", description: "Medical professionals providing healthcare services." },
-            { title: "Bills & Recharge", description: "Online bill payments and mobile recharges made easy." },
-            { title: "Accommodation", description: "Hotels, hostels, and rental accommodations for travelers and professionals." },
+            { title: "B2B", description: "Business-to-business (B2B) commerce involves transactions between companies rather than between a business and a consumer. It includes manufacturers, wholesalers, distributors, and service providers catering to other businesses. B2B companies often focus on bulk transactions, supply chain management, industrial equipment, and corporate services. In the digital age, B2B e-commerce platforms have made it easier for businesses to connect, negotiate, and conduct transactions efficiently." },
+            { title: "All India", description: "This category covers businesses and services that operate nationwide in India. It includes a wide range of industries such as manufacturing, retail, logistics, and technology. Companies listed under this category have a broad reach and provide products and services across different states and cities." },
+            { title: "Doctors", description: "This category includes healthcare professionals such as general physicians, specialists, surgeons, and alternative medicine practitioners. It also covers clinics, hospitals, and telemedicine services. The demand for qualified doctors is always high, and digital platforms help connect patients with medical experts." },
+            { title: "Bills & Recharge", description: "A category dedicated to mobile recharges, utility bill payments, and subscription renewals. With the rise of digital payments, many online platforms offer easy bill payments for electricity, water, gas, and mobile services." },
+            { title: "Accommodation", description: "This includes hotels, resorts, guest houses, and rental properties. The accommodation industry caters to travelers, students, corporate employees, and tourists looking for short-term or long-term stays." },
             { title: "Advertising & PR", description: "Marketing, branding, and public relations services." },
             { title: "Agriculture", description: "Farming, seeds, fertilizers, and agriculture technology solutions." },
             { title: "Apparel", description: "Clothing and fashion industry, including retail and wholesale." },
@@ -78,12 +78,16 @@ exports.getAllVerticals = async (req, res) => {
     res.status(500).json({ message: "Server error", error });
   }
 };
-
+const escapeRegex = (text) => {
+    return text.replace(/[-\/\\^$*+?.()|[\]{}]/g, "\\$&");
+  };
+  
 // Get a vertical by title
 exports.getVerticalByTitle = async (req, res) => {
   try {
     const { title } = req.params;
-    const vertical = await Vertical.findOne({ title: { $regex: new RegExp(title, "i") } });
+    const safeTitle = escapeRegex(title);
+    const vertical = await Vertical.findOne({ $regex: new RegExp(safeTitle, "i") });
     if (!vertical) {
       return res.status(404).json({ message: "Vertical not found" });
     }
