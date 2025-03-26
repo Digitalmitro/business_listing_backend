@@ -78,15 +78,18 @@ exports.getAllVerticals = async (req, res) => {
     res.status(500).json({ message: "Server error", error });
   }
 };
-const escapeRegex = (text) => {
-    return text.replace(/[-\/\\^$*+?.()|[\]{}]/g, "\\$&");
-  };
-  
+
 // Get a vertical by title
 exports.getVerticalByTitle = async (req, res) => {
   try {
     const { title } = req.params;
-    const safeTitle = escapeRegex(title);
+    let safeTitle;
+
+    if (title.includes("-")) {
+      safeTitle = title.replace(/-/g, "&"); // Replace "-" with "&"
+    } else {
+      safeTitle = title; // Keep the title as it is
+    }
     const vertical = await Vertical.findOne({ $regex: new RegExp(safeTitle, "i") });
     if (!vertical) {
       return res.status(404).json({ message: "Vertical not found" });
