@@ -16,6 +16,16 @@ const questionSchema = new Schema({
         type: Schema.Types.ObjectId,
         ref: 'User',
     },
+    status: {
+        type: String,
+        enum: ["pending", "answered", "rejected"],
+        default: "pending",
+    },
+    reply: {
+        type: String, // Admin's response message
+        trim: true,
+        default: "",
+    },
     createdAt: {
         type: Date,
         default: Date.now,
