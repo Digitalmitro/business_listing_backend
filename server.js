@@ -49,11 +49,11 @@ app.use('/api', topCountryRoutes);
 app.use('/admin', adminRoutes);
 app.use('/api/plan', planRoutes);
 app.use('/api/review', reviewRoutes);
-app.use('/api', appointmentRoutes)
-app.use('/api', enquiryRoutes)
-app.use('/api', questionRoutes)
-app.use('/api', topServiesRoutes)
-app.use('/api', freeListingRoutes)
+app.use('/api', appointmentRoutes);
+app.use('/api', enquiryRoutes);
+app.use('/api', questionRoutes);
+app.use('/api', topServiesRoutes);
+app.use('/api', freeListingRoutes);
 app.use("/api/verticals", verticalRoutes); 
 
 const PORT = process.env.PORT || 5000

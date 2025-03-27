@@ -40,9 +40,9 @@ exports.replyAnswer = async (req,res) =>{
     const { reply } = req.body;
 
     // Validate status
-    if (!["answered", "rejected"].includes(status)) {
-      return res.status(400).json({ message: "Invalid status" });
-    }
+    // if (!["answered", "rejected"].includes(status)) {
+    //   return res.status(400).json({ message: "Invalid status" });
+    // }
 
     if (!reply || reply.trim() === "") {
       return res.status(400).json({ message: "Reply message is required" });
