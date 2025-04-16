@@ -257,7 +257,6 @@ exports.deleteById = async (req, res) => {
     res.status(200).json({ message: "User deleted successfully", deletedUser });
   } catch (error) {
     res.status(500).json({ message: "Server error", error: error.message });
-    console.log(error)
+    console.log(error);
   }
 };
-

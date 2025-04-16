@@ -1,7 +1,6 @@
-
 const Business = require('../models/Business');
 const Question = require('../models/Questions');
-const sendMail = require('../services/sendMail')
+const sendMail = require('../services/sendMail');
 
 exports.CreateQuestion = async (req, res) => {
     const { businessId, question } = req.body;
@@ -89,5 +88,3 @@ exports.replyAnswer = async (req,res) =>{
     res.status(500).json({ message: "Server Error" });
   }
 }
-
-

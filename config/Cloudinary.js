@@ -36,5 +36,5 @@ const uploadToCloudinary = (fileBuffer, folder = "uploads") => {
   });
 };
 
-module.exports = { upload, uploadToCloudinary };
+module.exports = { upload, uploadToCloudinary ,cloudinary };
 
