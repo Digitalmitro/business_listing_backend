@@ -19,7 +19,27 @@ const TopCountrySchema = new Schema({
   updatedAt: {
     type: Date,
     default: Date.now
-  }
+  },
+  mustVisitPlaces: [
+    {
+      name: String,
+      image: String
+    }
+  ],
+  funFacts: [String],
+  restaurants: [
+    {
+      name: String,
+      image: String
+    }
+  ],
+  hotels: [
+    {
+      name: String,
+      image: String
+    }
+  ]
+  
 });
 
 // Create a model based on the schema
