@@ -13,7 +13,7 @@ const CategorySchema = new Schema({
   },
   bgImage: {
     type: String, 
-    required: false 
+    required: false
   },
   createdAt: {
     type: Date,

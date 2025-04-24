@@ -11,6 +11,10 @@ const SubCategorySchema = new Schema({
     type: String,
     required: true
   },
+  bgImage: {
+    type: String,
+    required: false
+  },
   category: {
     type: Schema.Types.ObjectId,
     ref: 'Category',

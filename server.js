@@ -54,7 +54,7 @@ app.use('/api', enquiryRoutes);
 app.use('/api', questionRoutes);
 app.use('/api', topServiesRoutes);
 app.use('/api', freeListingRoutes);
-app.use("/api/verticals", verticalRoutes); 
+app.use("/api/verticals", verticalRoutes);
 
 const PORT = process.env.PORT || 5000
 app.listen(PORT, (err)=>{

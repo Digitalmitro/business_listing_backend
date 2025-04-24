@@ -108,8 +108,9 @@ exports.getAllCategories = async (req, res) => {
   try {
     const categories = await Category.find()
       .sort({ createdAt: 1 })
-      .select("_id name  iconUrl createdAt");
+      .select("_id name  iconUrl createdAt bgImage");
     res.status(200).json(categories);
+
   } catch (error) {
     res
       .status(500)
