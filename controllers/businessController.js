@@ -1,20 +1,21 @@
-const Business = require('../models/Business')
-const User = require('../models/User')
+const Business = require("../models/Business");
+const User = require("../models/User");
 ///this api use combine for admin and users
 exports.createBusiness = async (req, res) => {
   try {
     const loggedInUserId = req.user.id;
     const businessData = req.body.businessData;
+    console.log(req.body);
     const { useid } = businessData;
-    const isAdmin = req.user?.role === 'admin';
+    const isAdmin = req.user?.role === "admin";
     const userId = isAdmin && useid ? useid : loggedInUserId;
     if (!businessData) {
-      return res.status(400).json({ message: 'Add all mandatory fields.' });
+      return res.status(400).json({ message: "Add all mandatory fields." });
     }
     const newBusiness = new Business(businessData);
     const savedBusiness = await newBusiness.save();
     const user = await User.findById(userId);
-    if (!user) return res.status(404).json({ message: 'User not found.' });
+    if (!user) return res.status(404).json({ message: "User not found." });
 
     user.businesses.push(savedBusiness._id);
     user.isSeller = true;
@@ -22,22 +23,23 @@ exports.createBusiness = async (req, res) => {
 
     res.status(201).json({ success: true, business: savedBusiness });
   } catch (error) {
-    res.status(400).json({ success: false, message: error.message });
+    console.log("error--->: ", error);
+    res.status(400).json({ success: false, message: error._message });
   }
 };
 ///this api use combnie for admin and users
 exports.getBusiness = async (req, res) => {
   try {
-    const { page = 1, limit = 10, search = '' } = req.query;
+    const { page = 1, limit = 10, search = "" } = req.query;
 
     const skip = (page - 1) * limit;
     const query = search
       ? {
-        $or: [
-          { "contact.email": { $regex: search, $options: 'i' } },
-          { "contact.mobile": { $regex: search, $options: 'i' } }
-        ]
-      }
+          $or: [
+            { "contact.email": { $regex: search, $options: "i" } },
+            { "contact.mobile": { $regex: search, $options: "i" } },
+          ],
+        }
       : {};
 
     const businesses = await Business.find(query)
@@ -54,7 +56,7 @@ exports.getBusiness = async (req, res) => {
     });
   } catch (error) {
     console.error(error);
-    res.status(500).json({ message: 'Internal server error' });
+    res.status(500).json({ message: "Internal server error" });
   }
 };
 
@@ -63,50 +65,52 @@ exports.searchServices = async (req, res) => {
     const { query, location } = req.query;
 
     if (!query || !location) {
-      return res.status(400).json({ message: "Location (address) is required" });
+      return res
+        .status(400)
+        .json({ message: "Location (address) is required" });
     }
 
     const services = await Business.aggregate([
       {
         $lookup: {
-          from: 'categories',
-          localField: 'category',
-          foreignField: '_id',
-          as: 'categoryDetails'
-        }
+          from: "categories",
+          localField: "category",
+          foreignField: "_id",
+          as: "categoryDetails",
+        },
       },
       {
         $lookup: {
-          from: 'subcategories',
-          localField: 'subCategory',
-          foreignField: '_id',
-          as: 'subCategoryDetails'
-        }
+          from: "subcategories",
+          localField: "subCategory",
+          foreignField: "_id",
+          as: "subCategoryDetails",
+        },
       },
 
       {
         $match: {
-          "addressString": { $regex: location, $options: 'i' },
+          addressString: { $regex: location, $options: "i" },
           $or: [
-            { businessName: { $regex: query, $options: 'i' } },
-            { 'categoryDetails.name': { $regex: query, $options: 'i' } },
-            { 'subCategoryDetails.name': { $regex: query, $options: 'i' } },
-            { servicesTypes: { $elemMatch: { $regex: query, $options: 'i' } } }
-          ]
-        }
+            { businessName: { $regex: query, $options: "i" } },
+            { "categoryDetails.name": { $regex: query, $options: "i" } },
+            { "subCategoryDetails.name": { $regex: query, $options: "i" } },
+            { servicesTypes: { $elemMatch: { $regex: query, $options: "i" } } },
+          ],
+        },
       },
 
       {
         $unwind: {
-          path: '$categoryDetails',
-          preserveNullAndEmptyArrays: true
-        }
+          path: "$categoryDetails",
+          preserveNullAndEmptyArrays: true,
+        },
       },
       {
         $unwind: {
-          path: '$subCategoryDetails',
-          preserveNullAndEmptyArrays: true
-        }
+          path: "$subCategoryDetails",
+          preserveNullAndEmptyArrays: true,
+        },
       },
 
       {
@@ -118,8 +122,8 @@ exports.searchServices = async (req, res) => {
           address: 1,
           contact: 1,
           businessTiming: 1,
-          category: '$categoryDetails.name',
-          subCategory: '$subCategoryDetails.name',
+          category: "$categoryDetails.name",
+          subCategory: "$subCategoryDetails.name",
           photos: 1,
           rating: 1,
           totalReviews: 1,
@@ -134,22 +138,25 @@ exports.searchServices = async (req, res) => {
           businessSummary: 1,
           createdAt: 1,
           updatedAt: 1,
-        }
-      }
+        },
+      },
     ]);
 
     if (services.length === 0) {
-      return res.status(404).json({ message: "No services found matching your criteria" });
+      return res
+        .status(404)
+        .json({ message: "No services found matching your criteria" });
     }
 
     return res.status(200).json({
       message: "Services found",
-      businesses: services
+      businesses: services,
     });
-
   } catch (error) {
     console.error(error);
-    return res.status(500).json({ message: 'Error searching for services', error: error.message });
+    return res
+      .status(500)
+      .json({ message: "Error searching for services", error: error.message });
   }
 };
 
@@ -157,25 +164,30 @@ exports.blockBusiness = async (req, res) => {
   try {
     const { businessId } = req.params;
     const { isBlocked } = req.body;
-    if (!businessId) return res.status(401).json({ message: 'missig businessid' })
+    if (!businessId)
+      return res.status(401).json({ message: "missig businessid" });
     const business = await Business.findById(businessId);
     if (!business) {
-      return res.status(404).json({ message: 'Business not found' });
+      return res.status(404).json({ message: "Business not found" });
     }
     const updateData = {
       isBlocked: isBlocked,
     };
     const result = await Business.updateOne(
       { _id: businessId },
-      { $set: updateData },
+      { $set: updateData }
     );
     if (result.modifiedCount === 0) {
-      return res.status(400).json({ message: 'No changes were made, or business already blocked' });
+      return res
+        .status(400)
+        .json({ message: "No changes were made, or business already blocked" });
     }
-    res.status(200).json({ message: 'Business successfully blocked', business });
+    res
+      .status(200)
+      .json({ message: "Business successfully blocked", business });
   } catch (error) {
     console.error(error);
-    res.status(500).json({ message: 'Internal server error' });
+    res.status(500).json({ message: "Internal server error" });
   }
 };
 
@@ -184,18 +196,18 @@ exports.deleteBusiness = async (req, res) => {
     const { businessId } = req.params;
     const business = await Business.findByIdAndDelete(businessId);
     if (!business) {
-      return res.status(404).json({ message: 'Business not found' });
+      return res.status(404).json({ message: "Business not found" });
     }
-    const user = await User.findOne({ "businesses": businessId });
+    const user = await User.findOne({ businesses: businessId });
     if (user) {
       user.businesses.pull(businessId);
       user.isSeller = false;
       await user.save();
     }
-    res.status(200).json({ message: 'Business successfully deleted' });
+    res.status(200).json({ message: "Business successfully deleted" });
   } catch (error) {
     console.error(error);
-    res.status(500).json({ message: 'Internal server error' });
+    res.status(500).json({ message: "Internal server error" });
   }
 };
 
@@ -203,34 +215,36 @@ exports.updateBusiness = async (req, res) => {
   const businessId = req.body.id;
   const updates = req.body.updateData;
   if (!businessId || !updates || Object.keys(updates).length === 0) {
-    return res.status(400).json({ message: 'Invalid request: businessId and updates are required' });
+    return res.status(400).json({
+      message: "Invalid request: businessId and updates are required",
+    });
   }
   try {
     const business = await Business.findById(businessId);
     if (!business) {
-      return res.status(404).json({ error: 'Business not found' });
+      return res.status(404).json({ error: "Business not found" });
     }
     const allowedFields = [
-      'businessName',
-      'description',
-      'isBlocked',
-      'address',
-      'contact',
-      'businessTiming',
-      'category',
-      'subCategory',
-      'photos',
-      'rating',
-      'totalReviews',
-      'verified',
-      'trust',
-      'claimed',
-      'enquiryCount',
-      'openUntil',
-      'yearsOfEstablishment',
-      'servicesTypes',
-      'hygiene',
-      'businessSummary',
+      "businessName",
+      "description",
+      "isBlocked",
+      "address",
+      "contact",
+      "businessTiming",
+      "category",
+      "subCategory",
+      "photos",
+      "rating",
+      "totalReviews",
+      "verified",
+      "trust",
+      "claimed",
+      "enquiryCount",
+      "openUntil",
+      "yearsOfEstablishment",
+      "servicesTypes",
+      "hygiene",
+      "businessSummary",
     ];
     const sanitizedUpdates = {};
     Object.keys(updates).forEach((key) => {
@@ -260,21 +274,26 @@ exports.updateBusiness = async (req, res) => {
       };
     }
     sanitizedUpdates.updatedAt = new Date();
-    const updatedBusiness = await await Business.updateOne({ _id: businessId }, sanitizedUpdates);
+    const updatedBusiness = await await Business.updateOne(
+      { _id: businessId },
+      sanitizedUpdates
+    );
     res.status(200).json({
-      message: 'Business updated successfully',
+      message: "Business updated successfully",
       business: updatedBusiness,
     });
   } catch (error) {
-    console.error('Error updating business:', error);
-    res.status(500).json({ error: 'An error occurred while updating the business' });
+    console.error("Error updating business:", error);
+    res
+      .status(500)
+      .json({ error: "An error occurred while updating the business" });
   }
-}
+};
 
 exports.getuserBusiness = async (req, res) => {
   try {
     const userId = req.user.id;
-    const user = await User.findById(userId).populate('businesses').exec();
+    const user = await User.findById(userId).populate("businesses").exec();
 
     if (!user) {
       return res.status(404).json({ message: "User not found" });
@@ -284,12 +303,12 @@ exports.getuserBusiness = async (req, res) => {
       email: user.email,
       userImage: user.userImage,
       isSeller: user.isSeller,
-      businesses: user.businesses
+      businesses: user.businesses,
     });
   } catch (error) {
     return res.status(500).json({ error: error.message });
   }
-}
+};
 
 exports.getAllBusiness = async (req, res) => {
   try {
@@ -304,15 +323,15 @@ exports.getAllBusiness = async (req, res) => {
       hasDeals,
       isTrusted,
       sortBy,
-      type
+      type,
     } = req.query;
     const skip = (Number(page) - 1) * Number(limit);
     const query = {
       $and: [
         { isBlocked: false },
         ...(category ? [{ category }] : []),
-        ...(isVerified ? [{ verified: isVerified === 'true' }] : []),
-        ...(isTrusted ? [{ trust: isTrusted === 'true' }] : []),
+        ...(isVerified ? [{ verified: isVerified === "true" }] : []),
+        ...(isTrusted ? [{ trust: isTrusted === "true" }] : []),
         ...(type ? [{ type: { $in: type.split(",") } }] : []),
       ],
     };
@@ -331,7 +350,7 @@ exports.getAllBusiness = async (req, res) => {
     }
 
     const businesses = await Business.find(query)
-      .populate('category')
+      .populate("category")
       .sort(sortCondition)
       .skip(skip)
       .limit(Number(limit));
@@ -349,5 +368,26 @@ exports.getAllBusiness = async (req, res) => {
       message: "internal server error",
       error: error.message,
     });
+  }
+};
+
+exports.checkPhoneExists = async (req, res) => {
+  try {
+    const { phone } = req.body;
+    const existingUser = await User.findOne({ phone });
+    if (existingUser) {
+      return res.status(409).json({
+        available: false,
+        message: "Phone number already exists",
+        success: false,
+      });
+    }
+    return res.status(200).json({
+      available: true,
+      message: "Phone number available",
+      success: true,
+    });
+  } catch (error) {
+    res.status(500).json({ message: "Internal Server error" });
   }
 };
