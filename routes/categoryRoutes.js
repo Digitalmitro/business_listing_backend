@@ -24,6 +24,13 @@ router.get("/categories", getAllCategories);
 router.get("/category-with-top", getCategorywithTop);
 router.delete("/:id", deleteCategory);
 router.get("/:categoryId", getCategoryById);
-router.put("/:categoryId", updateCategory);
+router.put(
+  "/:categoryId",
+  upload.fields([
+    { name: "icon", maxCount: 1 },
+    { name: "bgImage", maxCount: 1 },
+  ]),
+  updateCategory
+);
 
 module.exports = router;

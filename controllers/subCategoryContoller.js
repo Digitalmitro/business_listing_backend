@@ -4,7 +4,7 @@ const { uploadToCloudinary } = require("../config/Cloudinary");
 
 exports.createSubCategory = async (req, res) => {
   try {
-    const { name, category } = req.body;
+    const { name, description, category } = req.body;
 
     if (!name || !category || !req.file) {
       return res.status(400).json({ message: "Name, category, and icon image are required" });
@@ -20,6 +20,7 @@ exports.createSubCategory = async (req, res) => {
     const subCategory = new SubCategory({
       name,
       category,
+      description,
       iconUrl
     });
 
@@ -97,7 +98,7 @@ exports.deleteSubCategory = async (req, res) => {
 // update api
 exports.updateSubCategory = async (req, res) => {
   try {
-    const { name, category } = req.body;
+    const { name, description, category } = req.body;
     const { id } = req.params;
 
     if (!id) {
@@ -123,6 +124,7 @@ exports.updateSubCategory = async (req, res) => {
 
     subCategory.name = name || subCategory.name;
     subCategory.category = category || subCategory.category;
+    subCategory.description = description || subCategory.description;
     subCategory.iconUrl = iconUrl;
 
     await subCategory.save();

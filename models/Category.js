@@ -7,6 +7,9 @@ const CategorySchema = new Schema({
     required: true,
     unique: true
   },
+  description: {
+    type: String,
+  },
   iconUrl: {
     type: String,
     required: true

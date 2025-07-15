@@ -11,6 +11,9 @@ const SubCategorySchema = new Schema({
     type: String,
     required: true
   },
+  description: {
+    type: String,
+  },
   bgImage: {
     type: String,
     required: false

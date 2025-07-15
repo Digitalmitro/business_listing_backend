@@ -6,7 +6,7 @@ const { uploadToCloudinary ,cloudinary} = require("../config/Cloudinary");
 
 exports.createCategory = async (req, res) => {
   try {
-    const { name } = req.body;
+    const { name, description } = req.body;
     if (!name || !req.files.icon) {
       return res
         .status(400)
@@ -33,7 +33,7 @@ exports.createCategory = async (req, res) => {
         "categoryBackgrounds"
       );
     }
-    const category = new Category({ name, iconUrl, bgImage: bgImageUrl });
+    const category = new Category({ name, description, iconUrl, bgImage: bgImageUrl });
     await category.save();
 
     res
@@ -51,7 +51,7 @@ exports.createCategory = async (req, res) => {
 exports.updateCategory = async (req, res) => {
   try {
     const { categoryId } = req.params;
-    const { name } = req.body;
+    const { name, description } = req.body;
 
     // Find existing category
     const category = await Category.findById(categoryId);
@@ -62,6 +62,10 @@ exports.updateCategory = async (req, res) => {
     // Update name if provided
     if (name) {
       category.name = name;
+    }
+
+    if (description) {
+      category.description = description;
     }
 
     // Update icon if provided
@@ -81,6 +85,7 @@ exports.updateCategory = async (req, res) => {
 
     res.status(200).json({ message: "Category updated successfully", category });
   } catch (error) {
+    console.log(error)
     res.status(500).json({ message: "Error updating category", error: error.message });
   }
 };
@@ -108,7 +113,7 @@ exports.getAllCategories = async (req, res) => {
   try {
     const categories = await Category.find()
       .sort({ createdAt: 1 })
-      .select("_id name  iconUrl createdAt bgImage");
+      .select("_id name description  iconUrl createdAt bgImage");
     res.status(200).json(categories);
 
   } catch (error) {
