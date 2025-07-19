@@ -17,8 +17,10 @@ exports.createSubCategory = async (req, res) => {
 
     const iconUrl = await uploadToCloudinary(req.file.buffer, "subCategoryIcons");
 
+    const slug = name.toLowerCase().split(' ').join('-')
     const subCategory = new SubCategory({
       name,
+      slug,
       category,
       description,
       iconUrl
@@ -52,6 +54,7 @@ exports.getSubCategories = async (req, res) => {
         subCategories: subCategories.map(subCategory => ({
           _id: subCategory._id,
           name: subCategory.name,
+          slug: subCategory.slug,
           iconUrl:subCategory.iconUrl
         }))
       });
@@ -98,7 +101,7 @@ exports.deleteSubCategory = async (req, res) => {
 // update api
 exports.updateSubCategory = async (req, res) => {
   try {
-    const { name, description, category } = req.body;
+    const { name, description, slug, category } = req.body;
     const { id } = req.params;
 
     if (!id) {
@@ -125,6 +128,7 @@ exports.updateSubCategory = async (req, res) => {
     subCategory.name = name || subCategory.name;
     subCategory.category = category || subCategory.category;
     subCategory.description = description || subCategory.description;
+    subCategory.slug = slug || subCategory.slug;
     subCategory.iconUrl = iconUrl;
 
     await subCategory.save();

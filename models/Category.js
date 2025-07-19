@@ -7,6 +7,9 @@ const CategorySchema = new Schema({
     required: true,
     unique: true
   },
+  slug: {
+    type: String,
+  },
   description: {
     type: String,
   },

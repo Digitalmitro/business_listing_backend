@@ -33,7 +33,8 @@ exports.createCategory = async (req, res) => {
         "categoryBackgrounds"
       );
     }
-    const category = new Category({ name, description, iconUrl, bgImage: bgImageUrl });
+    const slug = name.toLowerCase().split(' ').join('-')
+    const category = new Category({ name, description, iconUrl,slug, bgImage: bgImageUrl });
     await category.save();
 
     res
@@ -51,7 +52,7 @@ exports.createCategory = async (req, res) => {
 exports.updateCategory = async (req, res) => {
   try {
     const { categoryId } = req.params;
-    const { name, description } = req.body;
+    const { name, description, slug } = req.body;
 
     // Find existing category
     const category = await Category.findById(categoryId);
@@ -66,6 +67,10 @@ exports.updateCategory = async (req, res) => {
 
     if (description) {
       category.description = description;
+    }
+
+    if(slug){
+      category.slug = slug;
     }
 
     // Update icon if provided
@@ -113,7 +118,7 @@ exports.getAllCategories = async (req, res) => {
   try {
     const categories = await Category.find()
       .sort({ createdAt: 1 })
-      .select("_id name description  iconUrl createdAt bgImage");
+      .select("_id name description slug iconUrl createdAt bgImage");
     res.status(200).json(categories);
 
   } catch (error) {
