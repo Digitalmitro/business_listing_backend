@@ -8,7 +8,8 @@ const {
   getSubCategories,
   getAllsubcategory,
   deleteSubCategory,
-  updateSubCategory
+  updateSubCategory,
+  getSubCategoriesByCategoryIds
 } = require("../controllers/subCategoryContoller"); // Adjust path
 
 // Create a new SubCategory
@@ -16,6 +17,7 @@ router.post("/subcategories", upload.single("icon"), createSubCategory);
 
 // Get all SubCategories or a specific SubCategory by ID
 router.get("/subcategories/:categoryId", getSubCategories);
+router.post("/subcategories/by-categories", getSubCategoriesByCategoryIds);
 router.get("/subcategories", getAllsubcategory);
 router.delete("/:subCategoryId", deleteSubCategory);
 router.put('/subcategories/:id', upload.single('icon'), updateSubCategory);

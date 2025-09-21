@@ -17,8 +17,16 @@ exports.createSubCategory = async (req, res) => {
 
     const iconUrl = await uploadToCloudinary(req.file.buffer, "subCategoryIcons");
 
+    let id = 1;
+
+    const findLatestSubcategory = SubCategory.find({}).sort({createdAt: -1}).limit(1);
+    if(findLatestSubcategory.id){
+      id = findLatestSubcategory.id
+    }
+
     const slug = name.toLowerCase().split(' ').join('-')
     const subCategory = new SubCategory({
+      id,
       name,
       slug,
       category,
@@ -53,6 +61,7 @@ exports.getSubCategories = async (req, res) => {
         category,
         subCategories: subCategories.map(subCategory => ({
           _id: subCategory._id,
+          id: subCategory.id,
           name: subCategory.name,
           slug: subCategory.slug,
           iconUrl:subCategory.iconUrl
@@ -62,6 +71,59 @@ exports.getSubCategories = async (req, res) => {
       res.status(500).json({ message: "Error fetching subcategories", error: error.message });
     }
 };
+
+exports.getSubCategoriesByCategoryIds = async (req, res) => {
+  try {
+    let categoryIds = [];
+
+    // Support both GET (query) and POST (body)
+    if (req.method === "GET" && req.query.categoryIds) {
+      categoryIds = req.query.categoryIds.split(",");
+    } else if (req.body.categoryIds) {
+      categoryIds = req.body.categoryIds;
+    }
+
+    if (!Array.isArray(categoryIds) || categoryIds.length === 0) {
+      return res.status(400).json({ message: "Category IDs are required" });
+    }
+
+    // Fetch all matching subcategories
+    const subCategories = await SubCategory.find({
+      category: { $in: categoryIds },
+    })
+      .populate("category", "name iconUrl bgImage")
+      .select("-__v -createdAt -updatedAt");
+
+    if (!subCategories || subCategories.length === 0) {
+      return res.status(404).json({ message: "No subcategories found for given categories" });
+    }
+
+    // Optional: Group by category
+    const grouped = {};
+    subCategories.forEach((subCat) => {
+      const catId = subCat.category._id.toString();
+      if (!grouped[catId]) {
+        grouped[catId] = {
+          category: subCat.category,
+          subCategories: [],
+        };
+      }
+      grouped[catId].subCategories.push({
+        _id: subCat._id,
+        id: subCat.id,
+        name: subCat.name,
+        slug: subCat.slug,
+        iconUrl: subCat.iconUrl,
+      });
+    });
+
+    res.status(200).json({ data: grouped });
+  } catch (error) {
+    res.status(500).json({ message: "Error fetching subcategories", error: error.message });
+  }
+};
+
+
 //this use for admin
 exports.getAllsubcategory = async (req,res) =>{
   try {

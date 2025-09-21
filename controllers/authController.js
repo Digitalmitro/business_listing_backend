@@ -5,6 +5,7 @@ const { OAuth2Client } = require("google-auth-library");
 const jwt = require("jsonwebtoken");
 const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 const moment = require("moment");
+const { default: axios } = require("axios");
 
 function generateOTPWithExpiration() {
   const otp = Math.floor(100000 + Math.random() * 900000).toString();
@@ -258,5 +259,57 @@ exports.deleteById = async (req, res) => {
   } catch (error) {
     res.status(500).json({ message: "Server error", error: error.message });
     console.log(error);
+  }
+};
+
+exports.fetchUserLocation = async (req, res) => {
+  const { lat, lon } = req.query;
+  try {
+    const response = await axios.get(
+      `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}`,
+    );
+
+    return res.status(200).json(response.data);
+  } catch (error) {
+    console.error("Reverse geocoding error:", error.message);
+    res.status(500).json({ error: "Failed to reverse geocode" });
+  }
+};
+
+exports.fetchCoordinates = async (req, res) => {
+  try {
+    const { address } = req.body;
+
+    if (!address) {
+      return res.status(400).json({ message: 'Address is required' });
+    }
+
+    console.log(address)
+
+    const response = await axios.get('https://nominatim.openstreetmap.org/search', {
+      params: {
+        q: address.split(' ')[0],
+        format: 'json',
+        addressdetails: 1,
+        limit: 1
+      },
+    });
+
+    if (response.data.length === 0) {
+      return res.status(404).json({ message: 'Address not found' });
+    }
+
+    const result = response.data[0];
+    const { lat, lon, display_name, address: addressDetails } = result;
+
+    res.json({
+      latitude: parseFloat(lat),
+      longitude: parseFloat(lon),
+      displayName: display_name,
+      addressDetails
+    });
+  } catch (error) {
+    console.error('Geocoding error:', error);
+    res.status(500).json({ message: 'Geocoding service unavailable' });
   }
 };

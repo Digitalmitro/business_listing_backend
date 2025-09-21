@@ -7,6 +7,7 @@ const BusinessSchema = new Schema(
     businessName: { type: String, required: true },
     description: { type: String },
     isBlocked: { type: Boolean, default: false },
+    businessLogo: { type: String },
     address: {
       blockName: { type: String },
       streetName: { type: String },
@@ -14,68 +15,39 @@ const BusinessSchema = new Schema(
       landmark: { type: String },
       pincode: { type: String, required: true },
       city: { type: String, required: true },
+      country: { type: String, required: true },
       state: { type: String, required: true },
     },
     addressString: { type: String },
-    contact: {
-      customerName: { type: String, required: true },
-      mobile: {
-        type: [String],
+    location: {
+      type: {
+        type: String,
+        enum: ["Point"],
+        default: "Point",
+      },
+      coordinates: {
+        type: [Number], // [longitude, latitude]
         required: true,
-        validate: {
-          validator: async function (value) {
-            const existing = await mongoose.models.Business.findOne({
-              "contact.mobile": { $in: value },
-            });
-            return !existing; // Ensure no matching mobile exists
-          },
-          message: "Mobile number(s) must be unique.",
-        },
-      },
-      whatsapp: {
-        type: [String],
-        validate: {
-          validator: async function (value) {
-            const existing = await mongoose.models.Business.findOne({
-              "contact.whatsapp": { $in: value },
-            });
-            return !existing; // Ensure no matching WhatsApp exists
-          },
-          message: "WhatsApp number(s) must be unique.",
-        },
-      },
-      email: {
-        type: [String],
-        // validate: {
-        //   validator: async function (value) {
-        //     const existing = await mongoose.models.Business.findOne({
-        //       "contact.email": { $in: value },
-        //     });
-        //     return !existing; // Ensure no matching email exists
-        //   },
-        //   message: "Email(s) must be unique.",
-        // },
       },
     },
-    // businessTiming: {
-    //   weeksSet: {
-    //     type: [String],
-    //     enum: ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"],
-    //     required: true
-    //   },
-    //   timing: [
-    //     {
-    //       day: {type: String, required: true},
-    //       start: { type: String, required: true },
-    //       end: { type: String, required: true },
-    //     },
-    //   ],
-    // },
+    contact: {
+      customerName: { type: String }, // Deprecated
+      mobile: { type: [String] }, // Deprecated, no validation
+      whatsapp: { type: [String] }, // Deprecated, no validation
+      email: { type: [String] }, // Deprecated
+      contactDetails: [
+        {
+          title: { type: String, enum: ["Mr", "Mrs"], required: true },
+          name: { type: String, required: true },
+          designation: { type: String },
+          mobileNumbers: { type: [String], required: true },
+          whatsappNumbers: { type: [String] },
+          emails: { type: [String] },
+        },
+      ],
+    },
     businessTiming: {
-      isOpen24Hours: {
-        type: Boolean,
-        default: false,
-      },
+      isOpen24Hours: { type: Boolean, default: false },
       daysOfWeek: {
         type: [String],
         enum: ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"],
@@ -85,80 +57,80 @@ const BusinessSchema = new Schema(
         type: Map,
         of: [
           {
-            openAt: { type: String, required: true }, // Format: "HH:MM" (e.g., "09:00")
-            closeAt: { type: String, required: true }, // Format: "HH:MM" (e.g., "17:00")
+            openAt: { type: String, required: true },
+            closeAt: { type: String, required: true },
           },
         ],
         default: {},
       },
     },
-    category: {
+    category: [
+      {
+        type: Schema.Types.ObjectId,
+        ref: "Category",
+        required: true,
+      },
+    ],
+    subCategory: [
+      {
+        type: Schema.Types.ObjectId,
+        ref: "SubCategory",
+      },
+    ],
+    photos: [{ type: String }],
+    rating: { type: Number, default: 0 },
+    totalReviews: { type: Number, default: 0 },
+    verified: { type: Boolean, default: false },
+    trust: { type: Boolean, default: false },
+    claimed: { type: Boolean, default: false },
+    enquiryCount: { type: Number, default: 0 },
+    openUntil: { type: String },
+    yearsOfEstablishment: { type: Number, default: 0 },
+    servicesTypes: { type: [String] },
+    hygiene: { type: String, default: "" },
+    businessSummary: { type: String },
+    createdAt: { type: Date, default: Date.now },
+    updatedAt: { type: Date, default: Date.now },
+    subscriptionActive: { type: Boolean, default: false },
+    kyc: {
+      country: { type: String, enum: ["USA", "Europe", "India"] },
+      documents: { type: Map, of: String, default: {} },
+      status: { type: String, enum: ["pending", "verified", "rejected"], default: "pending" },
+      rejectionReason: { type: String },
+      verifiedAt: { type: Date },
+    },
+    userId: {
       type: Schema.Types.ObjectId,
-      ref: "Category",
+      ref: 'User', // Assuming a User model exists
       required: true,
     },
-    subCategory: {
-      type: Schema.Types.ObjectId,
-      ref: "SubCategory",
-      required: false,
+    // New section for social links, website, and video URL
+    socialLinks: {
+      type: Map,
+      of: String,
+      default: {},
+      // Example usage: { facebook: "https://facebook.com/business", instagram: "https://instagram.com/business" }
     },
-    photos: [{ type: String }],
-    rating: {
-      type: Number,
-      default: 0,
-    },
-    totalReviews: {
-      type: Number,
-      default: 0,
-    },
-    verified: {
-      type: Boolean,
-      default: false,
-    },
-    trust: {
-      type: Boolean,
-      default: false,
-    },
-    claimed: {
-      type: Boolean,
-      default: false,
-    },
-    enquiryCount: {
-      type: Number,
-      default: 0,
-    },
-    openUntil: {
+    website: {
       type: String,
+      // Optional validation for URL format can be added (e.g., using a regex or validator plugin)
     },
-    yearsOfEstablishment: {
+    videoUrl: {
+      type: String,
+      // Optional validation for video URL (e.g., YouTube/Vimeo) can be added
+    },
+    profileCompletionScore: {
       type: Number,
       default: 0,
-    },
-    servicesTypes: {
-      type: [String],
-    },
-    hygiene: {
-      type: String,
-      default: "",
-    },
-    businessSummary: {
-      type: String,
-    },
-    createdAt: {
-      type: Date,
-      default: Date.now,
-    },
-    updatedAt: {
-      type: Date,
-      default: Date.now,
-    },
-    subscriptionActive: {
-      type: Boolean,
-      default: false,
+      min: 0,
+      max: 100,
     },
   },
   { timestamps: true }
 );
+
+// ✅ Create a 2dsphere index on the location field
+BusinessSchema.index({ location: "2dsphere" });
 
 BusinessSchema.pre("save", function (next) {
   const address = this.address;
@@ -172,6 +144,56 @@ BusinessSchema.pre("save", function (next) {
     address.pincode,
   ];
   this.addressString = parts.filter(Boolean).join(", ");
+
+  // Ensure contactDetails is initialized as an empty array if undefined
+  if (!this.contact) this.contact = {};
+  if (!this.contact.contactDetails) this.contact.contactDetails = [];
+
+  next();
+});
+
+// Simplified pre-save hook to allow same number within one contact
+BusinessSchema.pre("save", async function (next) {
+  const contactDetails = this.contact.contactDetails || [];
+
+  // Collect numbers by contact index to allow duplicates within the same contact
+  const numberMap = new Map();
+  contactDetails.forEach((cd, index) => {
+    const numbers = [
+      ...(cd.mobileNumbers || []).filter(num => num && num.trim()),
+      ...(cd.whatsappNumbers || []).filter(num => num && num.trim()),
+    ];
+    numbers.forEach(num => {
+      if (!numberMap.has(num)) {
+        numberMap.set(num, new Set([index]));
+      } else {
+        numberMap.get(num).add(index);
+      }
+    });
+  });
+
+  // Check for duplicates across different contact persons
+  for (let [num, indices] of numberMap) {
+    if (indices.size > 1) {
+      return next(new Error(`Number ${num} is used by multiple contact persons within the same business.`));
+    }
+  }
+
+  // Check uniqueness across businesses (excluding current document)
+  const allNumbers = Array.from(numberMap.keys());
+  if (allNumbers.length > 0) {
+    const existing = await mongoose.models.Business.findOne({
+      _id: { $ne: this._id },
+      $or: [
+        { "contact.contactDetails.mobileNumbers": { $in: allNumbers } },
+        { "contact.contactDetails.whatsappNumbers": { $in: allNumbers } },
+      ],
+    });
+    if (existing) {
+      return next(new Error("One or more numbers are already in use by another business."));
+    }
+  }
+
   next();
 });
 

@@ -3,6 +3,9 @@ const Schema = mongoose.Schema;
 
 // SubCategory Schema
 const SubCategorySchema = new Schema({
+  id: {
+    type: Number
+  },
   name: {
     type: String,
     required: true
