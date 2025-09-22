@@ -16,6 +16,7 @@ const {
   updateBusinessContactDetails,
   updateSocialInfo,
   calculateProfileCompletionScore,
+  updateBusinessStatus,
 } = require("../controllers/businessController");
 const { getOffers, createOffer } = require("../controllers/offerController");
 const { authMiddleware } = require("../middlewares/authMiddleware");
@@ -52,6 +53,7 @@ router.put(
 
 router.delete("/kyc-delete-document/:id", authMiddleware, deleteKYCDocument);
 
+router.patch("/update-status/:id", authMiddleware, upload.single("video"), updateBusinessStatus);
 router.post("/update-social-info/:businessId", authMiddleware, upload.single("video"), updateSocialInfo);
 router.get('/profile-completion-score/:businessId', authMiddleware, calculateProfileCompletionScore);
 

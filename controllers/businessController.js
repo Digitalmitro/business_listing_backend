@@ -104,36 +104,60 @@ exports.createBusiness = async (req, res) => {
 ///this api use combnie for admin and users
 exports.getBusiness = async (req, res) => {
   try {
-    const { page = 1, limit = 10, search = "" } = req.query;
+    const { page = 1, limit = 10, search = "", country = "", verified, trust, claimed } = req.query;
 
-    const skip = (page - 1) * limit;
-    const query = search
-      ? {
-          $or: [
-            { "contact.email": { $regex: search, $options: "i" } },
-            { "contact.mobile": { $regex: search, $options: "i" } },
-            { "contact.contactDetails.mobileNumbers": { $regex: search, $options: "i" } },
-            { "contact.contactDetails.whatsappNumbers": { $regex: search, $options: "i" } },
-            { "contact.contactDetails.emails": { $regex: search, $options: "i" } },
-          ],
-        }
-      : {};
+    // Validate pagination parameters
+    const pageNum = Math.max(1, Number(page));
+    const limitNum = Math.max(1, Number(limit));
+    const skip = (pageNum - 1) * limitNum;
 
+    // Build query object
+    let query = {};
+    if (search) {
+      query = {
+        $or: [
+          { businessName: { $regex: search, $options: "i" } },
+          { "address.city": { $regex: search, $options: "i" } },
+          { "address.area": { $regex: search, $options: "i" } },
+          { "contact.email": { $regex: search, $options: "i" } },
+          { "contact.mobile": { $regex: search, $options: "i" } },
+          { "contact.contactDetails.name": { $regex: search, $options: "i" } },
+          { "contact.contactDetails.mobileNumbers": { $regex: search, $options: "i" } },
+          { "contact.contactDetails.whatsappNumbers": { $regex: search, $options: "i" } },
+          { "contact.contactDetails.emails": { $regex: search, $options: "i" } },
+        ],
+      };
+    }
+    if (country) {
+      query["address.country"] = { $regex: new RegExp(`^${country}$`, "i") };
+    }
+    // Add status filters
+    const statusFilters = {};
+    if (verified !== undefined) statusFilters.verified = verified === 'true';
+    if (trust !== undefined) statusFilters.trust = trust === 'true';
+    if (claimed !== undefined) statusFilters.claimed = claimed === 'true';
+    if (Object.keys(statusFilters).length > 0) {
+      query = { ...query, ...statusFilters };
+    }
+
+    // Fetch businesses with pagination
     const businesses = await Business.find(query)
+      .select('businessName address contact businessTiming verified trust claimed isBlocked subscriptionActive _id')
       .skip(skip)
-      .limit(Number(limit));
+      .limit(limitNum)
+      .lean();
 
     const total = await Business.countDocuments(query);
 
     res.status(200).json({
       businesses,
       total,
-      page: Number(page),
-      totalPages: Math.ceil(total / limit),
+      page: pageNum,
+      totalPages: Math.ceil(total / limitNum),
     });
   } catch (error) {
-    console.error(error);
-    res.status(500).json({ message: "Internal server error" });
+    console.error('Error fetching businesses:', error.message);
+    res.status(500).json({ message: 'Internal server error', error: error.message });
   }
 };
 
@@ -452,6 +476,9 @@ exports.updateBusiness = async (req, res) => {
       "isOpen24Hours",
       "yearsOfEstablishment",
       "photos",
+      "verified", // Added for status update
+      "trust",    // Added for status update
+      "claimed",  // Added for status update
     ];
 
     const updates = {};
@@ -487,7 +514,6 @@ exports.updateBusiness = async (req, res) => {
     }
 
     updates.updatedAt = new Date();
-    
 
     const updatedBusiness = await Business.findByIdAndUpdate(
       businessId,
@@ -504,6 +530,32 @@ exports.updateBusiness = async (req, res) => {
     return res
       .status(500)
       .json({ message: "Failed to update business", error: err.message });
+  }
+};
+
+exports.updateBusinessStatus = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { verified, trust, claimed } = req.body;
+
+    const updateData = {};
+    if (verified !== undefined) updateData.verified = Boolean(verified);
+    if (trust !== undefined) updateData.trust = Boolean(trust);
+    if (claimed !== undefined) updateData.claimed = Boolean(claimed);
+
+    if (Object.keys(updateData).length === 0) {
+      return res.status(400).json({ message: 'No status updates provided' });
+    }
+
+    const business = await Business.findByIdAndUpdate(id, { $set: updateData }, { new: true, runValidators: true });
+    if (!business) {
+      return res.status(404).json({ message: 'Business not found' });
+    }
+
+    res.status(200).json({ message: 'Business status updated successfully', business });
+  } catch (error) {
+    console.error('Error updating business status:', error.message);
+    res.status(500).json({ message: 'Internal server error', error: error.message });
   }
 };
 
