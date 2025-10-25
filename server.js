@@ -19,6 +19,8 @@ const questionRoutes = require('./routes/questionRoutes.js')
 const topServiesRoutes=require("./routes/topServicesRoutes")
 const freeListingRoutes=require("./routes/freeListingRoutes")
 const verticalRoutes = require("./routes/verticalRoutes");
+const claimRoutes = require("./routes/claimRoutes");
+const emailCampaignRoutes = require("./routes/emailCampaignRoutes")
 const fs = require('fs');
 const path = require('path');
 
@@ -50,6 +52,8 @@ app.use('/admin', adminRoutes);
 app.use('/api/plan', planRoutes);
 app.use('/api/review', reviewRoutes);
 app.use('/api', appointmentRoutes);
+app.use("/api", claimRoutes);
+app.use("/api", emailCampaignRoutes);
 app.use('/api', enquiryRoutes);
 app.use('/api', questionRoutes);
 app.use('/api', topServiesRoutes);

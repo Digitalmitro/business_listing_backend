@@ -76,7 +76,7 @@ exports.createBusiness = async (req, res) => {
     if (businessData.contact.mobile) businessData.contact.mobile = businessData.contact.mobile.filter((num) => num.trim());
     if (businessData.contact.whatsapp) businessData.contact.whatsapp = businessData.contact.whatsapp.filter((num) => num.trim());
     if (businessData.contact.email) businessData.contact.email = businessData.contact.email.filter((email) => email.trim());
-
+    businessData.claimed = true;
     // ✅ Create and save business
     const newBusiness = new Business(businessData);
     newBusiness.userId = userId; // Use the determined userId

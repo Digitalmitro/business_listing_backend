@@ -6,6 +6,7 @@ const jwt = require("jsonwebtoken");
 const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 const moment = require("moment");
 const { default: axios } = require("axios");
+const momentTz = require('moment-timezone');
 
 function generateOTPWithExpiration() {
   const otp = Math.floor(100000 + Math.random() * 900000).toString();
@@ -15,25 +16,40 @@ function generateOTPWithExpiration() {
 
 exports.register = async (req, res) => {
   try {
-    const { name, email, password, isAgree } = req.body;
-    if (!name || !email || !password) {
-      return res
-        .status(400)
-        .json({ message: "Please provide full name, email, and password" });
+    const { full_name, email, password, phone, isAgree, timeZone, country } = req.body;
+    if (!full_name || !email || !password || !isAgree) {
+      return res.status(400).json({ message: 'Please provide full name, email, password, and agree to terms' });
     }
-    const existingUser = await User.findOne({ email });
+    if (phone && !/^\+?[1-9]\d{1,14}$/.test(phone)) {
+      return res.status(400).json({ message: 'Invalid phone number format' });
+    }
+    if (timeZone && !momentTz.tz.names().includes(timeZone)) {
+      return res.status(400).json({ message: 'Invalid time zone' });
+    }
+    if (country && !/^[A-Za-z\s]{1,100}$/.test(country)) {
+      return res.status(400).json({ message: 'Invalid country name' });
+    }
+    const existingUser = await mongoose.model('User').findOne({ email });
     if (existingUser) {
-      return res.status(400).json({ message: "Email is already registered" });
+      return res.status(400).json({ message: 'Email is already registered' });
     }
-    const user = new User({ full_name: name, email, password, isAgree });
+    const user = new (mongoose.model('User'))({
+      full_name,
+      email,
+      password,
+      phone,
+      isAgree,
+      subscribedToEmails: true,
+      timeZone: timeZone || 'UTC',
+      country: country || 'Unknown',
+    });
     await user.save();
-
-    res.status(201).json({ message: "User registered successfully" });
+    res.status(201).json({ message: 'User registered successfully' });
   } catch (error) {
-    if (error.name === "ValidationError") {
-      return res.status(400).json({ message: "Invalid data provided" });
+    if (error.name === 'ValidationError') {
+      return res.status(400).json({ message: 'Invalid data provided' });
     }
-    res.status(500).json({ message: "internal server error" });
+    res.status(500).json({ message: 'Internal server error' });
   }
 };
 
@@ -221,7 +237,7 @@ exports.updateUserProfile = async (req, res) => {
 //use for admin
 exports.getAllUsers = async (req, res) => {
   try {
-    const { search = "", page = 1, limit = 10 } = req.query;
+    const { search = "", page = 1, limit = 10, country } = req.query;
     const pageNumber = parseInt(page, 10);
     const pageLimit = parseInt(limit, 10);
     const skip = (pageNumber - 1) * pageLimit;
@@ -231,6 +247,9 @@ exports.getAllUsers = async (req, res) => {
         { phone: { $regex: search, $options: "i" } },
       ],
     };
+    if (country) {
+      searchQuery.country = country;
+    }
     const users = await User.find(searchQuery).skip(skip).limit(pageLimit);
     const totalUsers = await User.countDocuments(searchQuery);
 
