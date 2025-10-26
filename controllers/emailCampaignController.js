@@ -201,12 +201,10 @@ const createCampaign = async (req, res) => {
       !fromEmail ||
       (!recipients.users.length && !recipients.customEmails.length)
     ) {
-      return res
-        .status(400)
-        .json({
-          message:
-            "Name, template, sender email, and at least one recipient are required",
-        });
+      return res.status(400).json({
+        message:
+          "Name, template, sender email, and at least one recipient are required",
+      });
     }
 
     const sender = await SenderEmail.findOne({ email: fromEmail });
@@ -313,9 +311,8 @@ const getCampaignById = async (req, res) => {
       _id: req.params.id,
       createdBy: req.user.id,
     })
-      .populate("templateId", "name subject")
-      .populate("senderEmailId", "email displayName")
-      .populate("userIds", "email");
+      .populate("template", "name subject")
+      .populate("recipients.users", "email country timeZone");
     if (!campaign) {
       return res
         .status(404)
@@ -332,7 +329,7 @@ const getCampaignById = async (req, res) => {
 // Update a campaign
 const updateCampaign = async (req, res) => {
   try {
-    const { name, templateId, senderEmailId, userIds, scheduleTime } = req.body;
+    const { name, template, fromEmail, recipients, scheduledAt } = req.body;
     const campaign = await EmailCampaign.findOne({
       _id: req.params.id,
       createdBy: req.user.id,
@@ -342,66 +339,87 @@ const updateCampaign = async (req, res) => {
         .status(404)
         .json({ message: "Campaign not found or unauthorized" });
     }
-    if (campaign.status === "sent" || campaign.status === "completed") {
+    if (campaign.status === "sent") {
       return res.status(400).json({ message: "Cannot update a sent campaign" });
     }
 
     if (name) campaign.name = name;
-    if (templateId) {
-      const template = await EmailTemplate.findById(templateId);
-      if (!template) {
+    if (template) {
+      const templateDoc = await EmailTemplate.findById(template);
+      if (!templateDoc) {
         return res.status(404).json({ message: "Template not found" });
       }
-      campaign.templateId = templateId;
+      campaign.template = template;
     }
-    if (senderEmailId) {
-      const sender = await SenderEmail.findById(senderEmailId);
+    if (fromEmail) {
+      const sender = await SenderEmail.findOne({ email: fromEmail });
       if (!sender || !sender.isActive) {
         return res
           .status(400)
           .json({ message: "Invalid or inactive sender email" });
       }
-      campaign.senderEmailId = senderEmailId;
+      campaign.fromEmail = fromEmail;
     }
-    if (userIds) {
-      const users = await User.find({
-        _id: { $in: userIds },
-        subscribedToEmails: true,
-      });
-      if (!users.length) {
-        return res.status(400).json({ message: "No valid users selected" });
+    if (recipients) {
+      if (recipients.users) {
+        const users = await User.find({
+          _id: { $in: recipients.users },
+          subscribedToEmails: true,
+        });
+        if (recipients.users.length && !users.length) {
+          return res.status(400).json({ message: "No valid users selected" });
+        }
+        campaign.recipients.users = recipients.users;
       }
-      campaign.userIds = userIds;
+      if (recipients.customEmails) {
+        for (const email of recipients.customEmails) {
+          if (!validateEmail(email)) {
+            return res
+              .status(400)
+              .json({ message: `Invalid custom email: ${email}` });
+          }
+        }
+        campaign.recipients.customEmails = recipients.customEmails;
+      }
     }
-    if (scheduleTime) {
+    if (scheduledAt) {
+      const users = await User.find({
+        _id: { $in: campaign.recipients.users },
+      });
       const timeZones = [
-        ...new Set(
-          campaign.userIds.map((id) => {
-            const user = users.find(
-              (u) => u._id.toString() === id.toString()
-            ) || { timeZone: "UTC" };
-            return user.timeZone || "UTC";
-          })
-        ),
+        ...new Set(users.map((user) => user.timeZone || "UTC")),
       ];
       const jobs = timeZones.map((timeZone) => {
         const usersInTimeZone = users.filter(
           (user) => (user.timeZone || "UTC") === timeZone
         );
         const localScheduleTime = moment
-          .tz(scheduleTime, "HH:mm", timeZone)
+          .tz(scheduledAt, "YYYY-MM-DD HH:mm", timeZone)
           .utc()
           .toDate();
         return {
           campaignId: campaign._id,
           timeZone,
           userIds: usersInTimeZone.map((user) => user._id),
-          senderEmailId: campaign.senderEmailId,
+          fromEmail: campaign.fromEmail,
+          template: campaign.template,
           localScheduleTime,
         };
       });
 
-      await emailQueue.removeJobs(`email-campaigns-${campaign._id}-*`);
+      // Remove existing jobs
+      const existingJobs = await emailQueue.getJobs([
+        "waiting",
+        "active",
+        "delayed",
+      ]);
+      for (const job of existingJobs) {
+        if (job.id.startsWith(`email-campaigns-${campaign._id}-`)) {
+          await job.remove();
+          console.log(`Removed job ${job.id}`);
+        }
+      }
+
       for (const job of jobs) {
         const delay = new Date(job.localScheduleTime) - new Date();
         if (delay <= 0) {
@@ -416,11 +434,21 @@ const updateCampaign = async (req, res) => {
           backoff: { type: "exponential", delay: 5000 },
         });
       }
-      campaign.scheduleTime = scheduleTime;
+      campaign.scheduledAt = moment(scheduledAt, "YYYY-MM-DD HH:mm").toDate();
       campaign.status = "scheduled";
-    } else if (scheduleTime === null) {
-      await emailQueue.removeJobs(`email-campaigns-${campaign._id}-*`);
-      campaign.scheduleTime = null;
+    } else if (scheduledAt === null) {
+      const existingJobs = await emailQueue.getJobs([
+        "waiting",
+        "active",
+        "delayed",
+      ]);
+      for (const job of existingJobs) {
+        if (job.id.startsWith(`email-campaigns-${campaign._id}-`)) {
+          await job.remove();
+          console.log(`Removed job ${job.id}`);
+        }
+      }
+      campaign.scheduledAt = null;
       campaign.status = "draft";
     }
 
@@ -429,6 +457,7 @@ const updateCampaign = async (req, res) => {
       .status(200)
       .json({ message: "Campaign updated successfully", campaign });
   } catch (error) {
+    console.error("Error updating campaign:", error.stack);
     res
       .status(500)
       .json({ message: "Error updating campaign", error: error.message });
@@ -450,12 +479,23 @@ const cancelScheduledCampaign = async (req, res) => {
     if (campaign.status !== "scheduled") {
       return res.status(400).json({ message: "Campaign is not scheduled" });
     }
-    await emailQueue.removeJobs(`email-campaigns-${campaign._id}-*`);
+    const existingJobs = await emailQueue.getJobs([
+      "waiting",
+      "active",
+      "delayed",
+    ]);
+    for (const job of existingJobs) {
+      if (job.id.startsWith(`email-campaigns-${campaign._id}-`)) {
+        await job.remove();
+        console.log(`Removed job ${job.id}`);
+      }
+    }
     campaign.status = "draft";
-    campaign.scheduleTime = null;
+    campaign.scheduledAt = null;
     await campaign.save();
     res.status(200).json({ message: "Scheduled campaign cancelled" });
   } catch (error) {
+    console.error("Error cancelling campaign:", error.stack);
     res
       .status(500)
       .json({ message: "Error cancelling campaign", error: error.message });
@@ -620,27 +660,44 @@ const toggleSenderEmailStatus = async (req, res) => {
 
 // Delete a campaign
 const deleteCampaign = async (req, res) => {
-    try {
-      const campaign = await EmailCampaign.findOne({
-        _id: req.params.id,
-        createdBy: req.user.id,
-      });
-      if (!campaign) {
-        return res.status(404).json({ message: "Campaign not found or unauthorized" });
-      }
-    //   if (campaign.status === "sent") {
-    //     return res.status(400).json({ message: "Cannot delete a sent campaign" });
-    //   }
-      if (campaign.status === "scheduled") {
-        await emailQueue.removeJobs(`email-campaigns-${campaign._id}-*`);
-      }
-      await EmailCampaign.findOneAndDelete({ _id: req.params.id, createdBy: req.user.id });
-      res.status(200).json({ message: "Campaign deleted successfully" });
-    } catch (error) {
-      console.error("Error deleting campaign:", error.stack);
-      res.status(500).json({ message: "Error deleting campaign", error: error.message });
+  try {
+    const campaign = await EmailCampaign.findOne({
+      _id: req.params.id,
+      createdBy: req.user.id,
+    });
+    if (!campaign) {
+      return res
+        .status(404)
+        .json({ message: "Campaign not found or unauthorized" });
     }
-  };
+    if (campaign.status === "sent") {
+      return res.status(400).json({ message: "Cannot delete a sent campaign" });
+    }
+    if (campaign.status === "scheduled") {
+      const existingJobs = await emailQueue.getJobs([
+        "waiting",
+        "active",
+        "delayed",
+      ]);
+      for (const job of existingJobs) {
+        if (job.id.startsWith(`email-campaigns-${campaign._id}-`)) {
+          await job.remove();
+          console.log(`Removed job ${job.id}`);
+        }
+      }
+    }
+    await EmailCampaign.findOneAndDelete({
+      _id: req.params.id,
+      createdBy: req.user.id,
+    });
+    res.status(200).json({ message: "Campaign deleted successfully" });
+  } catch (error) {
+    console.error("Error deleting campaign:", error.stack);
+    res
+      .status(500)
+      .json({ message: "Error deleting campaign", error: error.message });
+  }
+};
 
 module.exports = {
   createTemplate,
