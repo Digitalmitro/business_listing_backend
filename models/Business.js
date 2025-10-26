@@ -103,7 +103,6 @@ const BusinessSchema = new Schema(
     userId: {
       type: Schema.Types.ObjectId,
       ref: 'User', // Assuming a User model exists
-      required: true,
     },
     // New section for social links, website, and video URL
     socialLinks: {
