@@ -7,6 +7,7 @@ const BusinessSchema = new Schema(
     businessName: { type: String, required: true },
     description: { type: String },
     isBlocked: { type: Boolean, default: false },
+    isAdmin: { type: Boolean, default: false },
     businessLogo: { type: String },
     address: {
       blockName: { type: String },
