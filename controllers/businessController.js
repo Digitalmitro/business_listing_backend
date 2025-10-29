@@ -574,34 +574,35 @@ exports.updateBusiness = async (req, res) => {
     const { businessData } = req.body;
 
     if (!businessData) {
-      return res.status(400).json({ message: "Missing businessData" });
+      return res.status(400).json({ message: 'Missing businessData' });
     }
 
     const parsedData = JSON.parse(businessData);
     const { _id: businessId } = parsedData;
 
     if (!businessId) {
-      return res.status(400).json({ message: "Business ID is required" });
+      return res.status(400).json({ message: 'Business ID is required' });
     }
 
     const business = await Business.findById(businessId);
     if (!business) {
-      return res.status(404).json({ message: "Business not found" });
+      return res.status(404).json({ message: 'Business not found' });
     }
 
-    // ✅ Extract allowed fields
+    // Define allowed fields
     const allowedFields = [
-      "businessName",
-      "contact",
-      "address",
-      "businessSummary",
-      "businessTiming",
-      "isOpen24Hours",
-      "yearsOfEstablishment",
-      "photos",
-      "verified", // Added for status update
-      "trust", // Added for status update
-      "claimed", // Added for status update
+      'businessName',
+      'contact',
+      'address',
+      'businessSummary',
+      'businessTiming',
+      'isOpen24Hours',
+      'yearsOfEstablishment',
+      'photos',
+      'verified',
+      'trust',
+      'claimed',
+      'kyc', // Added to allow KYC updates
     ];
 
     const updates = {};
@@ -611,62 +612,67 @@ exports.updateBusiness = async (req, res) => {
       }
     }
 
-    // ✅ Handle contact.contactDetails specifically
-    if (
-      parsedData.contact?.contactDetails &&
-      Array.isArray(parsedData.contact.contactDetails)
-    ) {
+    // Handle contact.contactDetails specifically
+    if (parsedData.contact?.contactDetails && Array.isArray(parsedData.contact.contactDetails)) {
       updates.contact = updates.contact || {};
-      updates.contact.contactDetails = parsedData.contact.contactDetails.map(
-        (contact) => ({
-          title: contact.title || "Mr",
-          name: contact.name || "",
-          designation: contact.designation || "",
-          mobileNumbers: contact.mobileNumbers?.filter((num) => num.trim()) || [
-            "",
-          ],
-          whatsappNumbers: contact.whatsappNumbers?.filter((num) =>
-            num.trim()
-          ) || [""],
-          emails: contact.emails?.filter((email) => email.trim()) || [""],
-        })
-      );
+      updates.contact.contactDetails = parsedData.contact.contactDetails.map((contact) => ({
+        title: contact.title || 'Mr',
+        name: contact.name || '',
+        designation: contact.designation || '',
+        mobileNumbers: contact.mobileNumbers?.filter((num) => num.trim()) || [''],
+        whatsappNumbers: contact.whatsappNumbers?.filter((num) => num.trim()) || [''],
+        emails: contact.emails?.filter((email) => email.trim()) || [''],
+      }));
+      // Sync top-level contact fields if provided
+      if (parsedData.contact.mobile) updates.contact.mobile = parsedData.contact.mobile.filter((num) => num.trim());
+      if (parsedData.contact.whatsapp) updates.contact.whatsapp = parsedData.contact.whatsapp.filter((num) => num.trim());
+      if (parsedData.contact.email) updates.contact.email = parsedData.contact.email.filter((email) => email.trim());
     }
 
-    // ✅ Handle uploaded businessLogo
+    // Handle KYC updates
+    if (updates.kyc) {
+      updates.kyc = {
+        ...business.kyc, // Preserve existing KYC fields
+        ...updates.kyc, // Apply provided updates
+        // Set verifiedAt based on status
+        verifiedAt: updates.kyc.status === 'verified' ? new Date() : updates.kyc.status === 'rejected' || updates.kyc.status === 'pending' ? null : business.kyc.verifiedAt,
+      };
+      // Validate KYC status
+      if (updates.kyc.status && !['pending', 'verified', 'rejected'].includes(updates.kyc.status)) {
+        return res.status(400).json({ message: 'Invalid KYC status' });
+      }
+      // Ensure documents is a Map
+      if (updates.kyc.documents) {
+        updates.kyc.documents = new Map(Object.entries(updates.kyc.documents));
+      }
+    }
+
+    // Handle uploaded businessLogo
     if (req.files?.businessLogo?.[0]) {
       const logoFileName = path.basename(req.files.businessLogo[0].path);
       updates.businessLogo = logoFileName;
     }
 
-    // ✅ Handle uploaded photos
+    // Handle uploaded photos
     if (req.files?.photos) {
-      const photoFileNames = req.files.photos.map((file) =>
-        path.basename(file.path)
-      );
-      updates.photos = [
-        ...(updates.photos || business.photos || []),
-        ...photoFileNames,
-      ];
+      const photoFileNames = req.files.photos.map((file) => path.basename(file.path));
+      updates.photos = [...(updates.photos || business.photos || []), ...photoFileNames];
     }
 
     updates.updatedAt = new Date();
 
-    const updatedBusiness = await Business.findByIdAndUpdate(
-      businessId,
-      updates,
-      { new: true }
-    );
+    const updatedBusiness = await Business.findByIdAndUpdate(businessId, updates, {
+      new: true,
+      runValidators: true,
+    });
 
     return res.status(200).json({
-      message: "Business updated successfully",
+      message: 'Business updated successfully',
       business: updatedBusiness,
     });
   } catch (err) {
-    console.error("Error updating business:", err);
-    return res
-      .status(500)
-      .json({ message: "Failed to update business", error: err.message });
+    console.error('Error updating business:', err);
+    return res.status(500).json({ message: 'Failed to update business', error: err.message });
   }
 };
 
