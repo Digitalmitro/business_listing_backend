@@ -1,5 +1,6 @@
 const Offer = require('../models/Offer');
 const mongoose = require('mongoose');
+const Business = require('../models/Business');
 
 exports.createOffer = async (req, res) => {
   const { businessId, couponCode, discountRate, expirationDate, categoryId, subCategoryId } = req.body;
