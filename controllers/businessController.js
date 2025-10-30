@@ -3,6 +3,8 @@ const User = require("../models/User");
 const path = require("path");
 const { default: mongoose } = require("mongoose");
 const validator = require("validator");
+const Category = require("../models/Category");
+const SubCategory = require("../models/SubCategory");
 
 ///this api use combine for admin and users
 exports.createBusiness = async (req, res) => {
@@ -32,89 +34,146 @@ exports.createBusiness = async (req, res) => {
     // Convert coordinates to GeoJSON
     const coords = businessData.address?.coordinates;
     if (!coords?.latitude || !coords?.longitude) {
-      return res.status(400).json({ message: "Latitude and longitude are required." });
+      return res
+        .status(400)
+        .json({ message: "Latitude and longitude are required." });
     }
 
-    businessData.location = {
-      type: "Point",
-      coordinates: [coords.longitude, coords.latitude],
-    };
+    // Validate and convert categories and subCategories to ObjectId
+    const validCategories = businessData.category // Changed from businessData.categories
+      ? businessData.category
+          .filter((id) => mongoose.Types.ObjectId.isValid(id))
+          .map((id) => new mongoose.Types.ObjectId(id))
+      : [];
+    const validSubCategories = businessData.subCategory // Changed from businessData.subCategories
+      ? businessData.subCategory
+          .filter((id) => mongoose.Types.ObjectId.isValid(id))
+          .map((id) => new mongoose.Types.ObjectId(id))
+      : [];
 
-    delete businessData.address.coordinates;
+    // Verify categories exist (since category is required)
+    if (validCategories.length === 0) {
+      return res.status(400).json({ message: "At least one category is required." });
+    }
+    const existingCategories = await Category.find({
+      _id: { $in: validCategories },
+    });
+    if (existingCategories.length !== validCategories.length) {
+      return res.status(400).json({ message: "One or more categories are invalid." });
+    }
+
+    // Verify subCategories exist
+    if (validSubCategories.length > 0) {
+      const existingSubCategories = await SubCategory.find({
+        _id: { $in: validSubCategories },
+      });
+      if (existingSubCategories.length !== validSubCategories.length) {
+        return res.status(400).json({ message: "One or more subcategories are invalid." });
+      }
+    }
 
     // Attach uploaded file names
     const businessLogo = req.files?.businessLogo?.[0];
-    const photos = req.files?.photos || [];
+    const photos = Array.isArray(req.files?.photos)
+      ? req.files.photos
+      : req.files?.photos
+      ? [req.files.photos]
+      : [];
 
-    if (businessLogo) {
-      businessData.businessLogo = businessLogo.filename;
-    }
-
-    businessData.photos = photos.map((photo) => photo.filename);
+    console.log("Received files:", req.files);
+    console.log("Processed photos:", photos);
+    console.log("Category:", validCategories);
+    console.log("SubCategory:", validSubCategories);
 
     // Initialize and validate contact object
-    businessData.contact = businessData.contact || {};
-    const { mobile, whatsapp, email, contactDetails } = businessData.contact;
+    const contact = businessData.contact || {};
+    const { mobile, whatsapp, email, contactDetails } = contact;
 
     // Handle contactDetails
-    if (contactDetails && Array.isArray(contactDetails)) {
-      businessData.contact.contactDetails = contactDetails.map((contact) => ({
-        title: contact.title || "Mr",
-        name: contact.name || "Default Name",
-        designation: contact.designation || "",
-        mobileNumbers: mobile?.filter((num) => num.trim()) || [""],
-        whatsappNumbers: whatsapp?.filter((num) => num.trim()) || [""],
-        emails: email?.filter((em) => em.trim()) || [""],
-      }));
-    } else {
-      // Initialize with top-level contact fields
-      businessData.contact.contactDetails = [{
-        title: "Mr",
-        name: contactDetails?.[0]?.name || "Default Name",
-        designation: contactDetails?.[0]?.designation || "",
-        mobileNumbers: mobile?.filter((num) => num.trim()) || [""],
-        whatsappNumbers: whatsapp?.filter((num) => num.trim()) || [""],
-        emails: email?.filter((em) => em.trim()) || [""],
-      }];
-    }
+    const validatedContactDetails = contactDetails && Array.isArray(contactDetails)
+      ? contactDetails.map((contact) => ({
+          title: contact.title || "Mr",
+          name: contact.name || "Default Name",
+          designation: contact.designation || "",
+          mobileNumbers: mobile?.filter((num) => num.trim()) || [""],
+          whatsappNumbers: whatsapp?.filter((num) => num.trim()) || [""],
+          emails: email?.filter((em) => em.trim()) || [""],
+        }))
+      : [
+          {
+            title: "Mr",
+            name: contactDetails?.[0]?.name || "Default Name",
+            designation: contactDetails?.[0]?.designation || "",
+            mobileNumbers: mobile?.filter((num) => num.trim()) || [""],
+            whatsappNumbers: whatsapp?.filter((num) => num.trim()) || [""],
+            emails: email?.filter((em) => em.trim()) || [""],
+          },
+        ];
 
-    // Handle top-level contact fields
-    businessData.contact.mobile = mobile?.filter((num) => num.trim()) || [];
-    businessData.contact.whatsapp = whatsapp?.filter((num) => num.trim()) || [];
-    businessData.contact.email = email?.filter((em) => em.trim()) || [];
+    // Create business object explicitly
+    const newBusinessData = {
+      businessName: businessData.businessName,
+      address: {
+        blockName: businessData.address?.blockName || "",
+        streetName: businessData.address?.streetName,
+        area: businessData.address?.area,
+        country: businessData.address?.country,
+        landmark: businessData.address?.landmark || "",
+        pincode: businessData.address?.pincode,
+        city: businessData.address?.city,
+        state: businessData.address?.state,
+      },
+      location: {
+        type: "Point",
+        coordinates: [coords.longitude, coords.latitude],
+      },
+      contact: {
+        contactDetails: validatedContactDetails,
+        mobile: mobile?.filter((num) => num.trim()) || [],
+        whatsapp: whatsapp?.filter((num) => num.trim()) || [],
+        email: email?.filter((em) => em.trim()) || [],
+      },
+      businessTiming: {
+        isOpen24Hours: businessData.businessTiming?.isOpen24Hours ?? false,
+        daysOfWeek: businessData.businessTiming?.daysOfWeek || [],
+        schedule: businessData.businessTiming?.schedule || {},
+      },
+      category: validCategories,
+      subCategory: validSubCategories,
+      businessLogo: businessLogo ? businessLogo.filename : undefined,
+      photos: photos.map((photo) => photo.filename),
+      userId: userId,
+      claimed: !isAdmin,
+      isAdmin: isAdmin,
+    };
 
-    // Remove legacy customerName if not used
-    delete businessData.contact.customerName;
-
-    if (!isAdmin) {
-      businessData.claimed = true;
-    }
-
-    if (isAdmin) {
-      businessData.isAdmin = true;
-    }
+    console.log("New business data:", newBusinessData);
 
     // Create and save business
-    const newBusiness = new Business(businessData);
-    if (userId) {
-      newBusiness.userId = userId;
-    }
+    const newBusiness = new Business(newBusinessData);
     const savedBusiness = await newBusiness.save();
+
+    console.log("Saved business:", savedBusiness);
 
     // Attach business to user if userId is provided
     if (userId) {
       const user = await User.findById(userId);
       if (!user) {
-        return res.status(404).json({ message: "User not found." });
+        return res.status(400).json({ message: "User not found." });
       }
       user.businesses.push(savedBusiness._id);
       user.isSeller = true;
       await user.save();
     }
 
-    res.status(201).json({ success: true, business: savedBusiness });
+    res.status(201).json({
+      success: true,
+      message: "Business created successfully",
+      business: savedBusiness,
+      businessId: savedBusiness._id,
+    });
   } catch (error) {
-    console.error("error--->: ", error);
+    console.error("Error creating business:", error);
     res.status(400).json({
       success: false,
       message: error._message || error.message || "Failed to create business",
@@ -559,7 +618,9 @@ exports.deleteBusiness = async (req, res) => {
     const user = await User.findOne({ businesses: businessId });
     if (user) {
       user.businesses.pull(businessId);
-      user.isSeller = false;
+      if (user.businesses.length === 0) {
+        user.isSeller = false;
+      }
       await user.save();
     }
     res.status(200).json({ message: "Business successfully deleted" });
@@ -574,35 +635,35 @@ exports.updateBusiness = async (req, res) => {
     const { businessData } = req.body;
 
     if (!businessData) {
-      return res.status(400).json({ message: 'Missing businessData' });
+      return res.status(400).json({ message: "Missing businessData" });
     }
 
     const parsedData = JSON.parse(businessData);
     const { _id: businessId } = parsedData;
 
     if (!businessId) {
-      return res.status(400).json({ message: 'Business ID is required' });
+      return res.status(400).json({ message: "Business ID is required" });
     }
 
     const business = await Business.findById(businessId);
     if (!business) {
-      return res.status(404).json({ message: 'Business not found' });
+      return res.status(404).json({ message: "Business not found" });
     }
 
     // Define allowed fields
     const allowedFields = [
-      'businessName',
-      'contact',
-      'address',
-      'businessSummary',
-      'businessTiming',
-      'isOpen24Hours',
-      'yearsOfEstablishment',
-      'photos',
-      'verified',
-      'trust',
-      'claimed',
-      'kyc', // Added to allow KYC updates
+      "businessName",
+      "contact",
+      "address",
+      "businessSummary",
+      "businessTiming",
+      "isOpen24Hours",
+      "yearsOfEstablishment",
+      "photos",
+      "verified",
+      "trust",
+      "claimed",
+      "kyc", // Added to allow KYC updates
     ];
 
     const updates = {};
@@ -613,20 +674,38 @@ exports.updateBusiness = async (req, res) => {
     }
 
     // Handle contact.contactDetails specifically
-    if (parsedData.contact?.contactDetails && Array.isArray(parsedData.contact.contactDetails)) {
+    if (
+      parsedData.contact?.contactDetails &&
+      Array.isArray(parsedData.contact.contactDetails)
+    ) {
       updates.contact = updates.contact || {};
-      updates.contact.contactDetails = parsedData.contact.contactDetails.map((contact) => ({
-        title: contact.title || 'Mr',
-        name: contact.name || '',
-        designation: contact.designation || '',
-        mobileNumbers: contact.mobileNumbers?.filter((num) => num.trim()) || [''],
-        whatsappNumbers: contact.whatsappNumbers?.filter((num) => num.trim()) || [''],
-        emails: contact.emails?.filter((email) => email.trim()) || [''],
-      }));
+      updates.contact.contactDetails = parsedData.contact.contactDetails.map(
+        (contact) => ({
+          title: contact.title || "Mr",
+          name: contact.name || "",
+          designation: contact.designation || "",
+          mobileNumbers: contact.mobileNumbers?.filter((num) => num.trim()) || [
+            "",
+          ],
+          whatsappNumbers: contact.whatsappNumbers?.filter((num) =>
+            num.trim()
+          ) || [""],
+          emails: contact.emails?.filter((email) => email.trim()) || [""],
+        })
+      );
       // Sync top-level contact fields if provided
-      if (parsedData.contact.mobile) updates.contact.mobile = parsedData.contact.mobile.filter((num) => num.trim());
-      if (parsedData.contact.whatsapp) updates.contact.whatsapp = parsedData.contact.whatsapp.filter((num) => num.trim());
-      if (parsedData.contact.email) updates.contact.email = parsedData.contact.email.filter((email) => email.trim());
+      if (parsedData.contact.mobile)
+        updates.contact.mobile = parsedData.contact.mobile.filter((num) =>
+          num.trim()
+        );
+      if (parsedData.contact.whatsapp)
+        updates.contact.whatsapp = parsedData.contact.whatsapp.filter((num) =>
+          num.trim()
+        );
+      if (parsedData.contact.email)
+        updates.contact.email = parsedData.contact.email.filter((email) =>
+          email.trim()
+        );
     }
 
     // Handle KYC updates
@@ -635,11 +714,20 @@ exports.updateBusiness = async (req, res) => {
         ...business.kyc, // Preserve existing KYC fields
         ...updates.kyc, // Apply provided updates
         // Set verifiedAt based on status
-        verifiedAt: updates.kyc.status === 'verified' ? new Date() : updates.kyc.status === 'rejected' || updates.kyc.status === 'pending' ? null : business.kyc.verifiedAt,
+        verifiedAt:
+          updates.kyc.status === "verified"
+            ? new Date()
+            : updates.kyc.status === "rejected" ||
+              updates.kyc.status === "pending"
+            ? null
+            : business.kyc.verifiedAt,
       };
       // Validate KYC status
-      if (updates.kyc.status && !['pending', 'verified', 'rejected'].includes(updates.kyc.status)) {
-        return res.status(400).json({ message: 'Invalid KYC status' });
+      if (
+        updates.kyc.status &&
+        !["pending", "verified", "rejected"].includes(updates.kyc.status)
+      ) {
+        return res.status(400).json({ message: "Invalid KYC status" });
       }
       // Ensure documents is a Map
       if (updates.kyc.documents) {
@@ -655,24 +743,35 @@ exports.updateBusiness = async (req, res) => {
 
     // Handle uploaded photos
     if (req.files?.photos) {
-      const photoFileNames = req.files.photos.map((file) => path.basename(file.path));
-      updates.photos = [...(updates.photos || business.photos || []), ...photoFileNames];
+      const photoFileNames = req.files.photos.map((file) =>
+        path.basename(file.path)
+      );
+      updates.photos = [
+        ...(updates.photos || business.photos || []),
+        ...photoFileNames,
+      ];
     }
 
     updates.updatedAt = new Date();
 
-    const updatedBusiness = await Business.findByIdAndUpdate(businessId, updates, {
-      new: true,
-      runValidators: true,
-    });
+    const updatedBusiness = await Business.findByIdAndUpdate(
+      businessId,
+      updates,
+      {
+        new: true,
+        runValidators: true,
+      }
+    );
 
     return res.status(200).json({
-      message: 'Business updated successfully',
+      message: "Business updated successfully",
       business: updatedBusiness,
     });
   } catch (err) {
-    console.error('Error updating business:', err);
-    return res.status(500).json({ message: 'Failed to update business', error: err.message });
+    console.error("Error updating business:", err);
+    return res
+      .status(500)
+      .json({ message: "Failed to update business", error: err.message });
   }
 };
 
@@ -784,22 +883,18 @@ exports.updateSocialInfo = async (req, res) => {
         .json({ success: false, message: "Failed to update business" });
     }
 
-    res
-      .status(200)
-      .json({
-        success: true,
-        message: "Social information updated successfully",
-        business: updatedBusiness,
-      });
+    res.status(200).json({
+      success: true,
+      message: "Social information updated successfully",
+      business: updatedBusiness,
+    });
   } catch (err) {
     console.error("Error updating social info:", err);
-    res
-      .status(500)
-      .json({
-        success: false,
-        message: "Server error while updating social information",
-        error: err.message,
-      });
+    res.status(500).json({
+      success: false,
+      message: "Server error while updating social information",
+      error: err.message,
+    });
   }
 };
 
@@ -943,13 +1038,11 @@ exports.calculateProfileCompletionScore = async (req, res) => {
     });
   } catch (err) {
     console.error("Error calculating profile completion score:", err);
-    res
-      .status(500)
-      .json({
-        success: false,
-        message: "Server error while calculating profile completion score",
-        error: err.message,
-      });
+    res.status(500).json({
+      success: false,
+      message: "Server error while calculating profile completion score",
+      error: err.message,
+    });
   }
 };
 
