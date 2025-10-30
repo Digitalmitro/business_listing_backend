@@ -10,7 +10,6 @@ const OfferSchema = new Schema({
   couponCode: { 
     type: String, 
     required: true, 
-    unique: true 
   },
   discountRate: { 
     type: Number, 
