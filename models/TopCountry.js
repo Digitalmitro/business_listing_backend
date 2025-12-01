@@ -1,4 +1,4 @@
-const mongoose = require('mongoose');
+const mongoose = require("mongoose");
 const { Schema } = mongoose;
 
 // Define the schema for TopCountry
@@ -6,41 +6,49 @@ const TopCountrySchema = new Schema({
   name: {
     type: String,
     required: true,
-    unique: true
+    unique: true,
   },
   imageUrl: {
     type: String,
-    required: true
+    required: true,
   },
+  gallery: [
+    {
+      image: { type: String, required: true },
+      caption: { type: String, default: "" },
+    },
+  ],
   createdAt: {
     type: Date,
-    default: Date.now
+    default: Date.now,
   },
   updatedAt: {
     type: Date,
-    default: Date.now
+    default: Date.now,
   },
   mustVisitPlaces: [
     {
       name: String,
-      image: String
-    }
+      description: { type: String, default: "" },
+      image: String,
+    },
   ],
   funFacts: [String],
   restaurants: [
     {
       name: String,
-      image: String
-    }
+      description: { type: String, default: "" },
+      image: String,
+    },
   ],
   hotels: [
     {
       name: String,
-      image: String
-    }
-  ]
-  
+      description: { type: String, default: "" },
+      image: String,
+    },
+  ],
 });
 
 // Create a model based on the schema
-module.exports = mongoose.model('TopCountry', TopCountrySchema);
+module.exports = mongoose.model("TopCountry", TopCountrySchema);

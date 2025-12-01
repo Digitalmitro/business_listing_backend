@@ -96,13 +96,29 @@ const BusinessSchema = new Schema(
     kyc: {
       country: { type: String, enum: ["USA", "Europe", "India"] },
       documents: { type: Map, of: String, default: {} },
-      status: { type: String, enum: ["pending", "verified", "rejected"], default: "pending" },
+      status: {
+        type: String,
+        enum: ["pending", "verified", "rejected"],
+        default: "pending",
+      },
       rejectionReason: { type: String },
       verifiedAt: { type: Date },
     },
     userId: {
       type: Schema.Types.ObjectId,
-      ref: 'User', // Assuming a User model exists
+      ref: "User", // Assuming a User model exists
+    },
+    seo: {
+      title: { type: String, trim: true },
+      description: { type: String, trim: true },
+      keywords: [{ type: String, trim: true }],
+      ogImage: { type: String },
+      robots: {
+        type: String,
+        enum: ["index, follow", "noindex, nofollow"],
+        default: "index, follow",
+      },
+      canonicalUrl: { type: String },
     },
     // New section for social links, website, and video URL
     socialLinks: {
@@ -160,10 +176,10 @@ BusinessSchema.pre("save", async function (next) {
   const numberMap = new Map();
   contactDetails.forEach((cd, index) => {
     const numbers = [
-      ...(cd.mobileNumbers || []).filter(num => num && num.trim()),
-      ...(cd.whatsappNumbers || []).filter(num => num && num.trim()),
+      ...(cd.mobileNumbers || []).filter((num) => num && num.trim()),
+      ...(cd.whatsappNumbers || []).filter((num) => num && num.trim()),
     ];
-    numbers.forEach(num => {
+    numbers.forEach((num) => {
       if (!numberMap.has(num)) {
         numberMap.set(num, new Set([index]));
       } else {
@@ -175,7 +191,11 @@ BusinessSchema.pre("save", async function (next) {
   // Check for duplicates across different contact persons
   for (let [num, indices] of numberMap) {
     if (indices.size > 1) {
-      return next(new Error(`Number ${num} is used by multiple contact persons within the same business.`));
+      return next(
+        new Error(
+          `Number ${num} is used by multiple contact persons within the same business.`
+        )
+      );
     }
   }
 
@@ -190,8 +210,17 @@ BusinessSchema.pre("save", async function (next) {
       ],
     });
     if (existing) {
-      return next(new Error("One or more numbers are already in use by another business."));
+      return next(
+        new Error("One or more numbers are already in use by another business.")
+      );
     }
+  }
+
+  if (!this.seo?.canonicalUrl && this._id) {
+    this.seo = this.seo || {};
+    this.seo.canonicalUrl = `${
+      process.env.FRONTEND_URL || "https://urbancitations.com"
+    }/serviceprofile/${this._id}`;
   }
 
   next();

@@ -332,3 +332,18 @@ exports.fetchCoordinates = async (req, res) => {
     res.status(500).json({ message: 'Geocoding service unavailable' });
   }
 };
+
+
+exports.getUserPlan = async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id).select('subscription isPaidSubscriber hasActiveSubscription');
+    res.json({
+      success: true,
+      subscription: user.subscription,
+      isPaidSubscriber: user.isPaidSubscriber,
+      hasActiveSubscription: user.hasActiveSubscription
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+}

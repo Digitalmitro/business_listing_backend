@@ -1,23 +1,40 @@
-const multer = require('multer');
-const path = require('path');
+// config/multerConfig.js
+const multer = require("multer");
+const path = require("path");
 
-// Set up multer storage for local file storage
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    cb(null, 'public/uploads/'); // Save files in 'public/uploads' directory
+    cb(null, "public/uploads/");
   },
   filename: (req, file, cb) => {
-    const uniqueName = Date.now() + '-' + file.originalname;
-    cb(null, uniqueName);  // Unique file name to avoid overwrites
-  }
+    cb(null, Date.now() + "-" + file.originalname);
+  },
 });
 
 const upload = multer({ storage });
 
-module.exports = { upload };
+const dynamicUpload = (req, res, next) => {
+  const fields = [
+    { name: "icon", maxCountCount: 1 },
+    { name: "galleryImages", maxCount: 30 },
+  ];
 
+  // MUST VISIT
+  for (let i = 0; i < 20; i++) {
+    fields.push({ name: `mustVisitPlacesImages_${i}`, maxCount: 1 });
+  }
 
+  // RESTAURANTS
+  for (let i = 0; i < 20; i++) {
+    fields.push({ name: `restaurantsImages_${i}`, maxCount: 1 });
+  }
 
+  // HOTELS
+  for (let i = 0; i < 20; i++) {
+    fields.push({ name: `hotelsImages_${i}`, maxCount: 1 });
+  }
 
+  upload.fields(fields)(req, res, next);
+};
 
-
+module.exports = { upload, dynamicUpload };

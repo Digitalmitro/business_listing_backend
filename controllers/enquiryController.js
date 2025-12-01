@@ -1,99 +1,139 @@
-const Enquiry = require("../models/Enquiry"); 
-const Business = require("../models/Business"); 
-const sendMail = require("../services/sendMail")
+// controllers/enquiryController.js
+const Enquiry = require("../models/Enquiry");
 
+// CREATE ENQUIRY — FROM TOPLIST SIDEBAR (Now accepts location)
 exports.createEnquiry = async (req, res) => {
   try {
-    const { businessId, categoryId, interest, name, phone } = req.body;
-    if ( !categoryId || !interest || !name || !phone) {
-      return res.status(400).json({ message: "All fields are required." });
+    const { name, phone, interest, location } = req.body;
+
+    // Validation
+    if (!name || !phone || !interest || !Array.isArray(interest) || interest.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Name, phone, and at least one interest are required.",
+      });
     }
 
+    // Clean & validate phone
+    const cleanPhone = phone.toString().replace(/\D/g, "").slice(-10);
+    if (cleanPhone.length !== 10) {
+      return res.status(400).json({
+        success: false,
+        message: "Please enter a valid 10-digit Indian mobile number.",
+      });
+    }
+
+    // Clean interests
+    const cleanedInterests = interest.map(i => i.toString().trim()).filter(Boolean);
+
+    // Create enquiry with location
     const newEnquiry = new Enquiry({
-      businessId,
-      categoryId,
-      interest,
-      name,
-      phone,
+      name: name.trim(),
+      phone: cleanPhone,
+      interest: cleanedInterests,
+      location: location?.trim() || "Unknown", // Now saves real city/town
+      businessId: null,
+      categoryId: null,
+      source: "TopList - Get Free List Form",
+      status: "pending",
     });
 
     await newEnquiry.save();
-    const business = await Business.findByIdAndUpdate(
-      businessId,
-      { $inc: { enquiryCount: 1 } },
-      { new: true }
-    );
 
-    if (!business) {
-      return res.status(404).json({ message: "Business not found." });
-    }
-
-    res.status(201).json({
-      message: "Enquiry created successfully.",
+    return res.status(201).json({
+      success: true,
+      message: "Thank you! We'll send you the list shortly.",
       enquiry: newEnquiry,
     });
   } catch (error) {
-    console.error("Error creating enquiry:", error);
-    res.status(500).json({ error: error.message });
+    console.error("Create Enquiry Error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Server error. Please try again later.",
+    });
   }
 };
 
-exports.getAllEnquiry = async(req,res) =>{
+// GET ALL ENQUIRIES — FOR ADMIN PANEL (Now includes location & status)
+exports.getAllEnquiry = async (req, res) => {
   try {
-    const enquiry = await Enquiry.find({}).populate('businessId categoryId','businessName name');
-    return res.status(200).json(enquiry)
-  } catch (error) {
-    return res.status(500).json({ message: "Server error", details: error.message })
-  }
-}
+    const enquiries = await Enquiry.find({})
+      .sort({ createdAt: -1 })
+      .limit(500)
+      .select("name phone interest location source status createdAt resolvedAt");
 
-exports.resloveEnquiry  = async (req,res) =>{
+    return res.status(200).json({
+      success: true,
+      count: enquiries.length,
+      enquiries,
+    });
+  } catch (error) {
+    console.error("Get Enquiries Error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch enquiries",
+    });
+  }
+};
+
+// MARK AS RESOLVED
+exports.resolveEnquiry = async (req, res) => {
   try {
-    const enquiry = await Enquiry.findById(req.params.id).populate("businessId");
+    const enquiry = await Enquiry.findById(req.params.id);
 
     if (!enquiry) {
-      return res.status(404).json({ message: "Inquiry not found" });
+      return res.status(404).json({
+        success: false,
+        message: "Enquiry not found",
+      });
     }
 
     if (enquiry.status === "resolved") {
-      return res.status(400).json({ message: "Inquiry is already resolved" });
+      return res.status(400).json({
+        success: false,
+        message: "Enquiry already resolved",
+      });
     }
 
-    // Mark inquiry as resolved
     enquiry.status = "resolved";
+    enquiry.resolvedAt = new Date();
     await enquiry.save();
 
-    // Get Business Owner's Email
-    const business = enquiry.businessId;
-    if (business?.contact?.email?.length > 0) {
-      const businessEmail = business.contact.email[0];
+    return res.status(200).json({
+      success: true,
+      message: "Enquiry marked as resolved",
+      enquiry,
+    });
+  } catch (error) {
+    console.error("Resolve Enquiry Error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Server error",
+    });
+  }
+};
 
-      // Send email to business owner
-      await sendMail(
-        businessEmail,
-        "New Inquiry Received",
-        `
-        Dear ${business?.contact?.customerName || "Business Owner"},
-        
-        You have received a new inquiry from a potential customer.
-        
-        **Customer Details:**
-        - **Name:** ${enquiry.name}
-        - **Phone:** ${enquiry.phone}
-        - **Interests:** ${enquiry.interest.join(", ")}
+// DELETE ENQUIRY — FOR ADMIN
+exports.deleteEnquiry = async (req, res) => {
+  try {
+    const enquiry = await Enquiry.findByIdAndDelete(req.params.id);
 
-        Please follow up with the customer as soon as possible.
-        
-        Regards,  
-        Your Team
-        `
-      );
+    if (!enquiry) {
+      return res.status(404).json({
+        success: false,
+        message: "Enquiry not found",
+      });
     }
 
-    res.json({ message: "Inquiry resolved and email sent successfully" });
-
+    return res.status(200).json({
+      success: true,
+      message: "Enquiry deleted successfully",
+    });
   } catch (error) {
-    console.error(error);
-    res.status(500).json({ message: "Server Error" });
+    console.error("Delete Enquiry Error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Server error",
+    });
   }
-}
+};

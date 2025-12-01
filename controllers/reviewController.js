@@ -1,5 +1,6 @@
 const Review = require("../models/Review");
 const Business = require("../models/Business");
+const { default: mongoose } = require("mongoose");
 
 exports.createReview = async (req, res) => {
   const { businessId, rating, comment, subCategoryId } = req.body;
@@ -37,7 +38,7 @@ exports.createReview = async (req, res) => {
 
     // Optimize aggregation using MongoDB aggregation
     const aggregationResult = await Review.aggregate([
-      { $match: { businessId: mongoose.Types.ObjectId(businessId) } },
+      { $match: { businessId: new mongoose.Types.ObjectId(businessId) } },
       {
         $group: {
           _id: null,

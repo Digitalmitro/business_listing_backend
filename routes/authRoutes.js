@@ -16,6 +16,7 @@ const {
   deleteById,
   fetchUserLocation,
   fetchCoordinates,
+  getUserPlan,
 } = require("../controllers/authController.js");
 
 router.post("/register", register);
@@ -35,5 +36,7 @@ router.get("/get-all-user", getAllUsers);
 router.delete("/:id", deleteById);
 router.get('/fetch-user-location', fetchUserLocation)
 router.post('/fetch-coordinates', fetchCoordinates)
+
+router.get("/my-plan", authMiddleware, getUserPlan);
 
 module.exports = router;
