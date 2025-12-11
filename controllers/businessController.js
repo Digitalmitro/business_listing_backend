@@ -1461,11 +1461,11 @@ exports.getAllBusiness = async (req, res) => {
         },
       }),
 
-      // SUBCATEGORY — AB KABHI BHI ERROR NAHI AAYEGA!
+      // SUBCATEGORY — Safe handling
       ...(subCategory &&
         toObjectIdArray(subCategory).length > 0 && {
           subCategory: {
-            $in: toObjectIdArray(subCategory), // ← Hamesha array milega
+            $in: toObjectIdArray(subCategory),
           },
         }),
 
@@ -1582,7 +1582,7 @@ exports.getAllBusiness = async (req, res) => {
       { $skip: skip },
       { $limit: Number(limit) },
 
-      // Populate Category Names
+      // === POPULATE CATEGORY NAMES ===
       {
         $lookup: {
           from: "categories",
@@ -1599,7 +1599,7 @@ exports.getAllBusiness = async (req, res) => {
               in: {
                 $let: {
                   vars: {
-                    cat: {
+                    catDetail: {
                       $arrayElemAt: [
                         {
                           $filter: {
@@ -1613,7 +1613,7 @@ exports.getAllBusiness = async (req, res) => {
                   },
                   in: {
                     _id: "$$this",
-                    name: "$$cat.name",
+                    name: "$$catDetail.name",
                   },
                 },
               },
@@ -1623,7 +1623,7 @@ exports.getAllBusiness = async (req, res) => {
       },
       { $unset: "categoryDetails" },
 
-      // Optional: Populate SubCategory Names (Bonus for frontend)
+      // === POPULATE SUBCATEGORY NAMES ===
       {
         $lookup: {
           from: "subcategories",
@@ -1640,7 +1640,7 @@ exports.getAllBusiness = async (req, res) => {
               in: {
                 $let: {
                   vars: {
-                    sub: {
+                    subDetail: {
                       $arrayElemAt: [
                         {
                           $filter: {
@@ -1654,7 +1654,7 @@ exports.getAllBusiness = async (req, res) => {
                   },
                   in: {
                     _id: "$$this",
-                    name: "$$sub.name",
+                    name: "$$subDetail.name",
                   },
                 },
               },
