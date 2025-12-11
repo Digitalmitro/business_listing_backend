@@ -1,24 +1,35 @@
-const mongoose = require('mongoose');
-const Schema = mongoose.Schema;
+// models/Banner.js
+const mongoose = require("mongoose");
 
-// Banner Schema
-const BannerSchema = new Schema({
-  title: {
-    type: String,
-    required: true
+const BannerSchema = new mongoose.Schema(
+  {
+    title: {
+      type: String,
+      required: true,
+      trim: true,
+    },
+    imageUrl: {
+      type: String,
+      required: true,
+    },
+    bgImage: {
+      type: String,
+      default: "",
+    },
+    link: {
+      type: String,
+      default: "",
+    },
+    priority: {
+      type: Number,
+      default: 10,
+    },
+    isActive: {
+      type: Boolean,
+      default: true,
+    },
   },
-  imageUrl: {
-    type: String,
-    required: true // URL for the banner image
-  },
-  createdAt: {
-    type: Date,
-    default: Date.now
-  },
-  updatedAt: {
-    type: Date,
-    default: Date.now
-  }
-});
+  { timestamps: true }
+);
 
-module.exports = mongoose.model('Banner', BannerSchema);
+module.exports = mongoose.model("Banner", BannerSchema);

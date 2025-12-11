@@ -24,6 +24,8 @@ const emailCampaignRoutes = require("./routes/emailCampaignRoutes");
 const pageSeoRoutes = require("./routes/pageSeo");
 const pricingRoutes = require("./routes/pricingRoutes");
 const subscriptionRoutes = require("./routes/subscriptionRoutes");
+const homeRoutes = require("./routes/homeRoutes");
+const blogRoutes = require("./routes/blogRoutes");
 const fs = require("fs");
 const path = require("path");
 
@@ -58,7 +60,7 @@ app.get("/", (req, res) => {
 app.use("/api/auth", authRoutes);
 app.use("/api/category", categoryRoutes);
 app.use("/api/banner", bannerRoutes);
-app.use("/api/top_banner", topBannerCategoryRoutes);
+app.use("/api", topBannerCategoryRoutes);
 app.use("/api/subCategory", subCategoryRoutes);
 app.use("/api/business", business);
 app.use("/api/notification", notificationRoutes);
@@ -77,6 +79,8 @@ app.use("/api/seo", pageSeoRoutes);
 app.use("/api/pricing", pricingRoutes);
 app.use("/api/verticals", verticalRoutes);
 app.use("/api/subscription", subscriptionRoutes);
+app.use("/api/home", homeRoutes);
+app.use("/api/blog", blogRoutes);
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, (err) => {

@@ -118,3 +118,45 @@ exports.getOffers = async (req, res) => {
       });
   }
 };
+
+exports.deleteOffer = async (req, res) => {
+  const { offerId } = req.params;
+  const userId = req.user.id; // from authMiddleware
+
+  try {
+    const offer = await Offer.findById(offerId);
+    if (!offer) {
+      return res.status(404).json({
+        success: false,
+        message: "Offer not found",
+      });
+    }
+
+    // Security: Only owner of the business can delete its offer
+    const business = await Business.findById(offer.businessId);
+    if (!business) {
+      return res.status(404).json({ success: false, message: "Business not found" });
+    }
+
+    if (business.userId.toString() !== userId) {
+      return res.status(403).json({
+        success: false,
+        message: "You are not authorized to delete this offer",
+      });
+    }
+
+    await Offer.findByIdAndDelete(offerId);
+
+    res.status(200).json({
+      success: true,
+      message: "Offer deleted successfully!",
+    });
+  } catch (err) {
+    console.error("Error deleting offer:", err);
+    res.status(500).json({
+      success: false,
+      message: "Failed to delete offer",
+      error: err.message,
+    });
+  }
+};

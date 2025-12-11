@@ -1,13 +1,24 @@
-const moment = require('moment');
-const Appointment = require('../models/Appointment');
-const Business = require('../models/Business');
-const sendMail = require('../services/sendMail');
+const moment = require("moment");
+const Appointment = require("../models/Appointment");
+const Business = require("../models/Business");
+const sendMail = require("../services/sendMail");
 
 exports.CreateAppointment = async (req, res) => {
   try {
-    const { businessId, appointmentDate, timeSlot } = req.body;
+    const { businessId, appointmentDate, timeSlot, serviceId, serviceName } =
+      req.body;
     const userId = req.user.id;
-    const normalizedDate = moment(appointmentDate).startOf('day').toISOString();
+
+    // Validation
+    if (!businessId || !appointmentDate || !timeSlot) {
+      return res
+        .status(400)
+        .json({ message: "Business ID, date, and time slot are required." });
+    }
+
+    const normalizedDate = moment(appointmentDate).startOf("day").toISOString();
+
+    // Check if slot already booked
     const existingAppointment = await Appointment.findOne({
       businessId,
       appointmentDate: normalizedDate,
@@ -16,116 +27,178 @@ exports.CreateAppointment = async (req, res) => {
     });
 
     if (existingAppointment) {
-      return res.status(400).json({ message: "Time slot already booked." });
+      return res
+        .status(400)
+        .json({ message: "This time slot is already booked." });
     }
+
+    // Create new appointment
     const appointment = new Appointment({
       userId,
       businessId,
+      serviceId: serviceId || null,
+      serviceName: serviceName || "Service",
       appointmentDate: normalizedDate,
       timeSlot,
+      status: "Scheduled",
     });
 
     await appointment.save();
 
-    const business = await Business.findById(businessId);
+    // Fetch business details
+    const business = await Business.findById(businessId).select(
+      "businessName contact subscriptionActive"
+    );
     if (!business) {
       return res.status(404).json({ message: "Business not found." });
     }
-   
-   const appointmentDetails = `
-    Appointment Details:
-    - Business: ${business.businessName}
-    - Business ID: ${businessId}
-    - Date: ${moment(normalizedDate).format("YYYY-MM-DD")}
-    - Time: ${timeSlot}
-    - User ID: ${userId}
-  `;
-  
-  if (business.subscriptionActive) {
-    // Seller has a subscription - Send booking details to both seller and admin
-    await sendMail(business?.contact?.email[0], "New Appointment Booked", `
-      Dear ${business?.contact?.customerName},
+
+    const formattedDate = moment(normalizedDate).format("dddd, MMMM Do YYYY");
+    const appointmentDetails = `
+      New Appointment Booked!
       
-      A new appointment has been booked for your business:
-      
-      ${appointmentDetails}
-  
-      Regards,
-      Your Team
-    `);
-  
-    await sendMail('soumen.digitalmitro@gmail.com', "New Appointment Booked", `
-      Admin Notification:
-      
-      A new appointment has been booked for the following business:
-      
-      ${appointmentDetails}
-  
-      Regards,
-      Your Team
-    `);
-  } else {
-    // Seller does not have a subscription - Notify seller without appointment details
-    await sendMail(business?.contact?.email[0], "Action Required: Subscription Inactive", `
-      Dear ${business?.contact?.customerName},
-      
-      A customer has tried to book an appointment, but your subscription is inactive. Please subscribe to receive future bookings.
-  
-      Regards,
-      Your Team
-    `);
-  
-    // Notify admin with appointment details and subscription status
-    await sendMail('soumen.digitalmitro@gmail.com', "Appointment Created Without Active Subscription", `
-      Admin Notification:
-      
-      An appointment was created for the following business with an inactive subscription:
-      
-      ${appointmentDetails}
-  
-      Subscription Status: Inactive
-  
-      Regards,
-      Your Team
-    `);
-  }
-  
-    res.status(201).json({
-      message: "Appointment booked successfully.",
+      Business: ${business.businessName}
+      Service: ${serviceName || "Not specified"}
+      Date: ${formattedDate}
+      Time: ${timeSlot}
+      Customer ID: ${userId}
+      Appointment ID: ${appointment._id}
+    `;
+
+    // Email Logic
+    if (business.subscriptionActive) {
+      // Premium Business - Full details to owner
+      await sendMail(
+        business.contact?.email?.[0],
+        "New Appointment Booked!",
+        `
+        Dear ${business.contact?.customerName || "Owner"},
+        
+        Great news! A customer has booked an appointment:
+        
+        ${appointmentDetails}
+        
+        Login to your dashboard to manage bookings.
+        
+        Regards,
+        Team DigitalMitro
+        `
+      );
+
+      // Admin notification
+      await sendMail(
+        "soumen.digitalmitro@gmail.com",
+        `[NEW BOOKING] ${business.businessName}`,
+        `New appointment created:\n\n${appointmentDetails}\n\nBusiness has active subscription.`
+      );
+    } else {
+      // Free Business - Hide customer details
+      await sendMail(
+        business.contact?.email?.[0],
+        "Customer Wants to Book – Upgrade Required!",
+        `
+        Dear ${business.contact?.customerName || "Owner"},
+        
+        A customer tried to book an appointment but your subscription is inactive.
+        
+        To receive bookings and grow your business, please upgrade your plan now!
+        
+        Click here to upgrade: https://yourapp.com/pricing
+        
+        Regards,
+        Team DigitalMitro
+        `
+      );
+
+      await sendMail(
+        "soumen.digitalmitro@gmail.com",
+        `[BLOCKED] Booking Attempt - Inactive Subscription`,
+        `
+        A customer tried to book but business has no active subscription.
+        
+        Business: ${business.businessName}
+        Date: ${formattedDate}
+        Time: ${timeSlot}
+        Service: ${serviceName || "N/A"}
+        Action Required: Follow up with business owner.
+        `
+      );
+    }
+
+    return res.status(201).json({
+      success: true,
+      message: "Appointment booked successfully!",
       appointment,
     });
   } catch (error) {
-    console.error("Error creating appointment:", error);
-    res.status(500).json({ error: error.message });
+    console.error("Create Appointment Error:", error);
+    return res
+      .status(500)
+      .json({ success: false, message: "Server error. Please try again." });
   }
 };
 
 exports.GetAppointment = async (req, res) => {
   try {
     const userId = req.user.id;
-    if (!userId) return res.status(400).json({ message: 'missing userid' })
     const appointments = await Appointment.find({ userId })
-      .populate("businessId", "businessName address")
-      .sort({ appointmentDate: -1 });
+      .populate("businessId", "businessName businessLogo address")
+      .sort({ appointmentDate: -1, createdAt: -1 })
+      .lean();
+
     return res.status(200).json(appointments);
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    console.error("Get Appointments Error:", error);
+    return res.status(500).json({ message: "Failed to fetch appointments" });
   }
-}
+};
 
 exports.CancelAppointment = async (req, res) => {
   try {
     const { appointmentId } = req.params;
-    const result = await Appointment.updateOne(
-      { _id: appointmentId },
-      { $set: { status: "Canceled", updatedAt: Date.now() } }
-    );
-    if (result.matchedCount === 0) {
-      return res.status(404).json({ message: "Appointment not found" });
+    const userId = req.user.id;
+
+    const appointment = await Appointment.findOneAndUpdate(
+      { _id: appointmentId, userId },
+      { status: "Canceled", updatedAt: Date.now() },
+      { new: true }
+    ).populate("businessId", "businessName contact");
+
+    if (!appointment) {
+      return res
+        .status(404)
+        .json({ message: "Appointment not found or already canceled" });
     }
-    res.status(200).json({ message: "Appointment canceled successfully." });
+
+    // Notify business owner
+    const business = appointment.businessId;
+    if (business?.contact?.email?.[0]) {
+      await sendMail(
+        business.contact.email[0],
+        "Appointment Canceled",
+        `
+        Dear ${business.contact?.customerName || "Owner"},
+        
+        A customer has canceled their appointment:
+        
+        Service: ${appointment.serviceName}
+        Was scheduled for: ${moment(appointment.appointmentDate).format(
+          "dddd, MMMM Do YYYY"
+        )} at ${appointment.timeSlot}
+        
+        Regards,
+        Team DigitalMitro
+        `
+      );
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "Appointment canceled successfully",
+    });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    console.error("Cancel Appointment Error:", error);
+    return res.status(500).json({ message: "Server error" });
   }
 };
 
@@ -133,38 +206,98 @@ exports.RescheduleAppointment = async (req, res) => {
   try {
     const { appointmentId } = req.params;
     const { appointmentDate, timeSlot } = req.body;
-    const oldAppointment = await Appointment.findById(appointmentId);
+    const userId = req.user.id;
+
+    if (!appointmentDate || !timeSlot) {
+      return res
+        .status(400)
+        .json({ message: "New date and time are required" });
+    }
+
+    const oldAppointment = await Appointment.findOne({
+      _id: appointmentId,
+      userId,
+    });
     if (!oldAppointment) {
       return res.status(404).json({ message: "Appointment not found" });
     }
-    const existingAppointment = await Appointment.findOne({
-      businessId: oldAppointment.businessId,
-      appointmentDate: appointmentDate,
-      timeSlot: timeSlot,
-      status: { $ne: "Canceled" }
-    });
-    if (existingAppointment) {
-      return res.status(400).json({ message: "Time slot already booked." });
+
+    if (oldAppointment.status === "Canceled") {
+      return res
+        .status(400)
+        .json({ message: "Cannot reschedule a canceled appointment" });
     }
 
-    const newAppointmentData = {
-      ...oldAppointment._doc,
-      appointmentDate: appointmentDate,
-      timeSlot: timeSlot,
+    const normalizedNewDate = moment(appointmentDate)
+      .startOf("day")
+      .toISOString();
+
+    // Check if new slot is already taken
+    const slotTaken = await Appointment.findOne({
+      businessId: oldAppointment.businessId,
+      appointmentDate: normalizedNewDate,
+      timeSlot,
+      status: { $ne: "Canceled" },
+      _id: { $ne: oldAppointment._id },
+    });
+
+    if (slotTaken) {
+      return res
+        .status(400)
+        .json({ message: "This new time slot is already booked" });
+    }
+
+    // Mark old as Rescheduled
+    oldAppointment.status = "Rescheduled";
+    oldAppointment.updatedAt = Date.now();
+    await oldAppointment.save();
+
+    // Create new appointment
+    const newAppointment = new Appointment({
+      ...oldAppointment.toObject(),
+      _id: undefined,
+      appointmentDate: normalizedNewDate,
+      timeSlot,
       status: "Scheduled",
       rescheduledFrom: oldAppointment._id,
       createdAt: Date.now(),
       updatedAt: Date.now(),
-    };
-    delete newAppointmentData._id;
-    const newAppointment = new Appointment(newAppointmentData);
-    oldAppointment.status = "Rescheduled";
-    oldAppointment.updatedAt = Date.now();
-    await oldAppointment.save();
+    });
+
     await newAppointment.save();
-    return res.status(200).json({ message: "Appointment rescheduled successfully.", newAppointment });
+
+    // Notify business
+    const business = await Business.findById(oldAppointment.businessId);
+    if (business?.contact?.email?.[0]) {
+      await sendMail(
+        business.contact.email[0],
+        "Appointment Rescheduled",
+        `
+        Dear ${business.contact?.customerName || "Owner"},
+        
+        A customer has rescheduled their appointment:
+        
+        Service: ${newAppointment.serviceName}
+        New Date & Time: ${moment(normalizedNewDate).format(
+          "dddd, MMMM Do YYYY"
+        )} at ${timeSlot}
+        Old Slot: ${moment(oldAppointment.appointmentDate).format(
+          "dddd, MMMM Do YYYY"
+        )} at ${oldAppointment.timeSlot}
+        
+        Regards,
+        Team DigitalMitro
+        `
+      );
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "Appointment rescheduled successfully!",
+      newAppointment,
+    });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    console.error("Reschedule Error:", error);
+    return res.status(500).json({ message: "Server error during reschedule" });
   }
 };
-

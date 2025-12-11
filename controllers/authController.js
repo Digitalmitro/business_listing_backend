@@ -6,7 +6,10 @@ const jwt = require("jsonwebtoken");
 const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 const moment = require("moment");
 const { default: axios } = require("axios");
-const momentTz = require('moment-timezone');
+const momentTz = require("moment-timezone");
+const { default: mongoose } = require("mongoose");
+const ExcelJS = require("exceljs");
+const Business = require("../models/Business");
 
 function generateOTPWithExpiration() {
   const otp = Math.floor(100000 + Math.random() * 900000).toString();
@@ -16,40 +19,45 @@ function generateOTPWithExpiration() {
 
 exports.register = async (req, res) => {
   try {
-    const { full_name, email, password, phone, isAgree, timeZone, country } = req.body;
+    const { full_name, email, password, phone, isAgree, timeZone, country } =
+      req.body;
     if (!full_name || !email || !password || !isAgree) {
-      return res.status(400).json({ message: 'Please provide full name, email, password, and agree to terms' });
+      return res.status(400).json({
+        message:
+          "Please provide full name, email, password, and agree to terms",
+      });
     }
     if (phone && !/^\+?[1-9]\d{1,14}$/.test(phone)) {
-      return res.status(400).json({ message: 'Invalid phone number format' });
+      return res.status(400).json({ message: "Invalid phone number format" });
     }
     if (timeZone && !momentTz.tz.names().includes(timeZone)) {
-      return res.status(400).json({ message: 'Invalid time zone' });
+      return res.status(400).json({ message: "Invalid time zone" });
     }
     if (country && !/^[A-Za-z\s]{1,100}$/.test(country)) {
-      return res.status(400).json({ message: 'Invalid country name' });
+      return res.status(400).json({ message: "Invalid country name" });
     }
-    const existingUser = await mongoose.model('User').findOne({ email });
+    const existingUser = await mongoose.model("User").findOne({ email });
     if (existingUser) {
-      return res.status(400).json({ message: 'Email is already registered' });
+      return res.status(400).json({ message: "Email is already registered" });
     }
-    const user = new (mongoose.model('User'))({
+    const user = new (mongoose.model("User"))({
       full_name,
       email,
       password,
       phone,
       isAgree,
       subscribedToEmails: true,
-      timeZone: timeZone || 'UTC',
-      country: country || 'Unknown',
+      timeZone: timeZone || "UTC",
+      country: country || "Unknown",
     });
     await user.save();
-    res.status(201).json({ message: 'User registered successfully' });
+    res.status(201).json({ message: "User registered successfully" });
   } catch (error) {
-    if (error.name === 'ValidationError') {
-      return res.status(400).json({ message: 'Invalid data provided' });
+    if (error.name === "ValidationError") {
+      return res.status(400).json({ message: "Invalid data provided" });
     }
-    res.status(500).json({ message: 'Internal server error' });
+    console.log(error);
+    res.status(500).json({ message: "Internal server error" });
   }
 };
 
@@ -238,27 +246,82 @@ exports.updateUserProfile = async (req, res) => {
 exports.getAllUsers = async (req, res) => {
   try {
     const { search = "", page = 1, limit = 10, country } = req.query;
-    const pageNumber = parseInt(page, 10);
-    const pageLimit = parseInt(limit, 10);
+    const pageNumber = Math.max(1, parseInt(page, 10));
+    const pageLimit = Math.max(1, parseInt(limit, 10));
     const skip = (pageNumber - 1) * pageLimit;
-    const searchQuery = {
-      $or: [
+
+    // Build search query
+    let searchQuery = {};
+    if (search) {
+      searchQuery.$or = [
         { email: { $regex: search, $options: "i" } },
         { phone: { $regex: search, $options: "i" } },
-      ],
-    };
-    if (country) {
-      searchQuery.country = country;
+        { full_name: { $regex: search, $options: "i" } },
+      ];
     }
-    const users = await User.find(searchQuery).skip(skip).limit(pageLimit);
+    if (country) {
+      searchQuery.country = { $regex: new RegExp(`^${country}$`, "i") };
+    }
+
+    // Fetch users with populated business names
+    const users = await User.find(searchQuery)
+      .populate({
+        path: "businesses",
+        select:
+          "businessName address.city address.area address.state address.country",
+      })
+      .skip(skip)
+      .limit(pageLimit)
+      .lean(); // For better performance
+
     const totalUsers = await User.countDocuments(searchQuery);
 
+    // Format response with business names
+    const formattedUsers = users.map((user) => {
+      const businessNames =
+        user.businesses?.length > 0
+          ? user.businesses.map((b) => b.businessName).join(", ")
+          : "No Business";
+
+      const businessAddresses =
+        user.businesses?.length > 0
+          ? user.businesses
+              .map((b) => {
+                const addr = b.address;
+                return `${addr.area || ""}, ${addr.city || ""}, ${
+                  addr.state || ""
+                }, ${addr.country || ""}`
+                  .replace(/,\s*,/g, ",")
+                  .trim();
+              })
+              .join(" | ")
+          : "N/A";
+
+      return {
+        _id: user._id,
+        full_name: user.full_name || "N/A",
+        email: user.email,
+        phone: user.phone || "N/A",
+        isSeller: user.isSeller,
+        businessNames,
+        businessAddresses,
+        country: user.country || "N/A",
+        createdAt: user.createdAt,
+      };
+    });
+
     res.json({
-      users,
+      users: formattedUsers,
       totalUsers,
+      pagination: {
+        currentPage: pageNumber,
+        totalPages: Math.ceil(totalUsers / pageLimit),
+        limit: pageLimit,
+      },
     });
   } catch (error) {
-    res.status(500).json({ message: "Server error" });
+    console.error("Error fetching users:", error);
+    res.status(500).json({ message: "Server error", error: error.message });
   }
 };
 
@@ -283,67 +346,163 @@ exports.deleteById = async (req, res) => {
 
 exports.fetchUserLocation = async (req, res) => {
   const { lat, lon } = req.query;
+
+  if (!lat || !lon) {
+    return res.status(400).json({ error: "lat and lon are required" });
+  }
+
   try {
     const response = await axios.get(
-      `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}`,
+      "https://us1.locationiq.com/v1/reverse",
+      {
+        params: {
+          key: process.env.LOCATIONIQ_API_KEY,
+          lat,
+          lon,
+          format: "json"
+        }
+      }
     );
 
     return res.status(200).json(response.data);
   } catch (error) {
-    console.error("Reverse geocoding error:", error.message);
+    console.error("Reverse geocoding error:", error.response?.data || error.message);
     res.status(500).json({ error: "Failed to reverse geocode" });
   }
 };
+
 
 exports.fetchCoordinates = async (req, res) => {
   try {
     const { address } = req.body;
 
-    if (!address) {
-      return res.status(400).json({ message: 'Address is required' });
+    if (!address?.trim()) {
+      return res.status(400).json({ message: "Address is required" });
     }
 
-    console.log(address)
+    const response = await axios.get(
+      "https://us1.locationiq.com/v1/search",
+      {
+        params: {
+          key: process.env.LOCATIONIQ_API_KEY,
+          q: address,
+          format: "json",
+          limit: 1,
+          addressdetails: 1
+        }
+      }
+    );
 
-    const response = await axios.get('https://nominatim.openstreetmap.org/search', {
-      params: {
-        q: address.split(' ')[0],
-        format: 'json',
-        addressdetails: 1,
-        limit: 1
-      },
-    });
-
-    if (response.data.length === 0) {
-      return res.status(404).json({ message: 'Address not found' });
+    if (!response.data.length) {
+      return res.status(404).json({ message: "Address not found" });
     }
 
     const result = response.data[0];
     const { lat, lon, display_name, address: addressDetails } = result;
 
-    res.json({
-      latitude: parseFloat(lat),
-      longitude: parseFloat(lon),
+    return res.json({
+      latitude: Number(lat),
+      longitude: Number(lon),
       displayName: display_name,
       addressDetails
     });
+
   } catch (error) {
-    console.error('Geocoding error:', error);
-    res.status(500).json({ message: 'Geocoding service unavailable' });
+    console.error("Geocoding error:", error.response?.data || error.message);
+    res.status(500).json({ message: "Geocoding service unavailable" });
   }
 };
 
-
-exports.getUserPlan = async (req, res) => {
+exports.exportUsersToExcel = async (req, res) => {
   try {
-    const user = await User.findById(req.user.id).select('subscription isPaidSubscriber hasActiveSubscription');
-    res.json({
-      success: true,
-      subscription: user.subscription,
-      isPaidSubscriber: user.isPaidSubscriber,
-      hasActiveSubscription: user.hasActiveSubscription
+    // Fetch all users with populated businesses
+    const users = await User.find({})
+      .populate({
+        path: "businesses",
+        select:
+          "businessName address.area address.city address.state address.country address.streetName",
+      })
+      .lean();
+
+    const workbook = new ExcelJS.Workbook();
+    const worksheet = workbook.addWorksheet("Users");
+
+    // Columns
+    worksheet.columns = [
+      { header: "Customer Name", key: "full_name", width: 25 },
+      { header: "Email", key: "email", width: 30 },
+      { header: "Phone Number", key: "phone", width: 20 },
+      { header: "Business Name", key: "businessName", width: 35 },
+      { header: "Business Address", key: "businessAddress", width: 50 },
+      { header: "Is Seller", key: "isSeller", width: 12 },
+      { header: "Country", key: "country", width: 15 },
+      { header: "Created At", key: "createdAt", width: 20 },
+    ];
+
+    // Header Style
+    const headerRow = worksheet.getRow(1);
+    headerRow.font = { bold: true, color: { argb: "FFFFFFFF" } };
+    headerRow.fill = {
+      type: "pattern",
+      pattern: "solid",
+      fgColor: { argb: "FF1976D2" },
+    };
+    headerRow.alignment = { vertical: "middle", horizontal: "center" };
+
+    // Add rows — One row per business
+    users.forEach((user) => {
+      const businesses = user.businesses || [];
+      const userBaseData = {
+        full_name: user.full_name || "N/A",
+        email: user.email || "N/A",
+        phone: user.phone || "N/A",
+        isSeller: user.isSeller ? "Yes" : "No",
+        country: user.country || "N/A",
+        createdAt: new Date(user.createdAt).toLocaleDateString("en-GB"), // DD/MM/YYYY
+      };
+
+      if (businesses.length === 0) {
+        // No business → one row with N/A
+        worksheet.addRow({
+          ...userBaseData,
+          businessName: "No Business",
+          businessAddress: "N/A",
+        });
+      } else {
+        // One row per business
+        businesses.forEach((business) => {
+          const addr = business.address || {};
+          const fullAddress =
+            [addr.streetName, addr.area, addr.city, addr.state, addr.country]
+              .filter(Boolean)
+              .join(", ")
+              .trim() || "Location N/A";
+
+          worksheet.addRow({
+            ...userBaseData,
+            businessName: business.businessName || "N/A",
+            businessAddress: fullAddress,
+          });
+        });
+      }
     });
-  } catch (err) {
-    res.status(500).json({ success: false, message: "Server error" });
+
+    // Response headers
+    res.setHeader(
+      "Content-Type",
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    );
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename=UrbanCitations_Users_${
+        new Date().toISOString().split("T")[0]
+      }.xlsx`
+    );
+
+    await workbook.xlsx.write(res);
+    res.end();
+  } catch (error) {
+    console.error("Export error:", error);
+    res.status(500).json({ message: "Export failed", error: error.message });
   }
-}
+};

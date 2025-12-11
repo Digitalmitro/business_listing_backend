@@ -50,6 +50,7 @@ const updateStaticPageSEO = async (req, res) => {
 const getBusinessesForSEO = async (req, res) => {
   try {
     const { search = "", page = 1, limit = 10 } = req.query;
+
     const query = search
       ? {
           $or: [
@@ -61,21 +62,47 @@ const getBusinessesForSEO = async (req, res) => {
       : {};
 
     const businesses = await Business.find(query)
-      .select("businessName seo address.city contact.mobile contact.email")
+      .select(
+        "businessName seo address.city contact.mobile contact.email subscription"
+      )
+      .populate("subscription.packageId", "name") // ← Package name
       .limit(limit * 1)
       .skip((page - 1) * limit)
-      .sort({ businessName: 1 });
+      .sort({ businessName: 1 })
+      .lean(); // ← Important: .lean() so we can modify data
 
     const total = await Business.countDocuments(query);
 
+    // Format + Smart Package Logic
+    const formatted = businesses.map((b) => {
+      let displayPackage = "Free";
+
+      if (b.subscription && b.subscription.status === "active") {
+        displayPackage = b.subscription.packageName || "Premium";
+      }
+      // If status is pending/canceled/inactive → show "Free"
+
+      return {
+        _id: b._id,
+        businessName: b.businessName,
+        city: b.address?.city || "N/A",
+        mobile: b.contact?.mobile?.[0] || "N/A",
+        email: b.contact?.email?.[0] || "N/A",
+        seo: b.seo || {},
+        packageName: displayPackage,
+        subscriptionStatus: b.subscription?.status || "none",
+      };
+    });
+
     res.json({
-      businesses,
+      businesses: formatted,
       totalPages: Math.ceil(total / limit),
       currentPage: +page,
       total,
     });
   } catch (err) {
-    res.status(500).json({ message: err.message });
+    console.error("SEO Business fetch error:", err);
+    res.status(500).json({ message: "Server error" });
   }
 };
 
@@ -90,9 +117,10 @@ const getBusinessSEO = async (req, res) => {
     }
 
     // Return SEO or fallback
-    const seo = business.seo && Object.keys(business.seo).length > 0
-      ? business.seo
-      : generateFallbackSEO(business);
+    const seo =
+      business.seo && Object.keys(business.seo).length > 0
+        ? business.seo
+        : generateFallbackSEO(business);
 
     res.json({ seo });
   } catch (err) {
@@ -129,8 +157,14 @@ const updateBusinessSEO = async (req, res) => {
 // ========================
 
 const generateFallbackSEO = (business) => ({
-  title: `${business.businessName} - Best in ${business.address?.area || ""}, ${business.address?.city || ""}`,
-  description: `Book appointment at ${business.businessName}. ${business.address?.streetName}, ${business.address?.area}. Contact: ${business.contact?.mobile?.[0] || ""}`,
+  title: `${business.businessName} - Best in ${business.address?.area || ""}, ${
+    business.address?.city || ""
+  }`,
+  description: `Book appointment at ${business.businessName}. ${
+    business.address?.streetName
+  }, ${business.address?.area}. Contact: ${
+    business.contact?.mobile?.[0] || ""
+  }`,
   keywords: [
     business.businessName,
     business.address?.area,
@@ -146,9 +180,18 @@ const generateFallbackSEO = (business) => ({
 
 const getFallbackSEO = (pageKey) => {
   const fallbacks = {
-    home: { title: "UrbanCitations - Local Services Near You", description: "Find trusted salons, doctors, plumbers in your city" },
-    about: { title: "About Us - UrbanCitations", description: "India's fastest growing local business directory" },
-    privacy: { title: "Privacy Policy", description: "We respect your privacy" },
+    home: {
+      title: "UrbanCitations - Local Services Near You",
+      description: "Find trusted salons, doctors, plumbers in your city",
+    },
+    about: {
+      title: "About Us - UrbanCitations",
+      description: "India's fastest growing local business directory",
+    },
+    privacy: {
+      title: "Privacy Policy",
+      description: "We respect your privacy",
+    },
   };
   return fallbacks[pageKey] || { title: "UrbanCitations", description: "" };
 };

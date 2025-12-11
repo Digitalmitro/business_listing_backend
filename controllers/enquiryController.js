@@ -1,13 +1,19 @@
 // controllers/enquiryController.js
 const Enquiry = require("../models/Enquiry");
 
-// CREATE ENQUIRY — FROM TOPLIST SIDEBAR (Now accepts location)
+// CREATE ENQUIRY — FROM TOPLIST SIDEBAR (Now accepts location + businessId)
 exports.createEnquiry = async (req, res) => {
   try {
-    const { name, phone, interest, location } = req.body;
+    const { name, phone, interest, location, businessId } = req.body;
 
     // Validation
-    if (!name || !phone || !interest || !Array.isArray(interest) || interest.length === 0) {
+    if (
+      !name ||
+      !phone ||
+      !interest ||
+      !Array.isArray(interest) ||
+      interest.length === 0
+    ) {
       return res.status(400).json({
         success: false,
         message: "Name, phone, and at least one interest are required.",
@@ -24,17 +30,21 @@ exports.createEnquiry = async (req, res) => {
     }
 
     // Clean interests
-    const cleanedInterests = interest.map(i => i.toString().trim()).filter(Boolean);
+    const cleanedInterests = interest
+      .map((i) => i.toString().trim())
+      .filter(Boolean);
 
-    // Create enquiry with location
+    // Create enquiry with location and businessId
     const newEnquiry = new Enquiry({
       name: name.trim(),
       phone: cleanPhone,
       interest: cleanedInterests,
-      location: location?.trim() || "Unknown", // Now saves real city/town
-      businessId: null,
+      location: location?.trim() || "Unknown",
+      businessId: businessId || null, // ← Now handles businessId (can be null if not provided)
       categoryId: null,
-      source: "TopList - Get Free List Form",
+      source: businessId
+        ? "Business Profile Enquiry"
+        : "TopList - Get Free List Form",
       status: "pending",
     });
 
@@ -42,7 +52,9 @@ exports.createEnquiry = async (req, res) => {
 
     return res.status(201).json({
       success: true,
-      message: "Thank you! We'll send you the list shortly.",
+      message: businessId
+        ? "Thank you! The business will contact you soon."
+        : "Thank you! We'll send you the list shortly.",
       enquiry: newEnquiry,
     });
   } catch (error) {
@@ -54,13 +66,15 @@ exports.createEnquiry = async (req, res) => {
   }
 };
 
-// GET ALL ENQUIRIES — FOR ADMIN PANEL (Now includes location & status)
+// GET ALL ENQUIRIES — FOR ADMIN PANEL (Now includes location, status, businessId)
 exports.getAllEnquiry = async (req, res) => {
   try {
     const enquiries = await Enquiry.find({})
       .sort({ createdAt: -1 })
       .limit(500)
-      .select("name phone interest location source status createdAt resolvedAt");
+      .select(
+        "name phone interest location businessId source status createdAt resolvedAt"
+      );
 
     return res.status(200).json({
       success: true,

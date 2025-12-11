@@ -5,6 +5,11 @@ const { default: mongoose } = require("mongoose");
 const validator = require("validator");
 const Category = require("../models/Category");
 const SubCategory = require("../models/SubCategory");
+const Enquiry = require("../models/Enquiry");
+const Offer = require("../models/Offer");
+const toObjectIdArray = require("../helpers/convertToObjectId");
+const csv = require("csv-parser");
+const fs = require("fs");
 
 ///this api use combine for admin and users
 exports.createBusiness = async (req, res) => {
@@ -53,13 +58,17 @@ exports.createBusiness = async (req, res) => {
 
     // Verify categories exist (since category is required)
     if (validCategories.length === 0) {
-      return res.status(400).json({ message: "At least one category is required." });
+      return res
+        .status(400)
+        .json({ message: "At least one category is required." });
     }
     const existingCategories = await Category.find({
       _id: { $in: validCategories },
     });
     if (existingCategories.length !== validCategories.length) {
-      return res.status(400).json({ message: "One or more categories are invalid." });
+      return res
+        .status(400)
+        .json({ message: "One or more categories are invalid." });
     }
 
     // Verify subCategories exist
@@ -68,7 +77,9 @@ exports.createBusiness = async (req, res) => {
         _id: { $in: validSubCategories },
       });
       if (existingSubCategories.length !== validSubCategories.length) {
-        return res.status(400).json({ message: "One or more subcategories are invalid." });
+        return res
+          .status(400)
+          .json({ message: "One or more subcategories are invalid." });
       }
     }
 
@@ -90,25 +101,26 @@ exports.createBusiness = async (req, res) => {
     const { mobile, whatsapp, email, contactDetails } = contact;
 
     // Handle contactDetails
-    const validatedContactDetails = contactDetails && Array.isArray(contactDetails)
-      ? contactDetails.map((contact) => ({
-          title: contact.title || "Mr",
-          name: contact.name || "Default Name",
-          designation: contact.designation || "",
-          mobileNumbers: mobile?.filter((num) => num.trim()) || [""],
-          whatsappNumbers: whatsapp?.filter((num) => num.trim()) || [""],
-          emails: email?.filter((em) => em.trim()) || [""],
-        }))
-      : [
-          {
-            title: "Mr",
-            name: contactDetails?.[0]?.name || "Default Name",
-            designation: contactDetails?.[0]?.designation || "",
+    const validatedContactDetails =
+      contactDetails && Array.isArray(contactDetails)
+        ? contactDetails.map((contact) => ({
+            title: contact.title || "Mr",
+            name: contact.name || "Default Name",
+            designation: contact.designation || "",
             mobileNumbers: mobile?.filter((num) => num.trim()) || [""],
             whatsappNumbers: whatsapp?.filter((num) => num.trim()) || [""],
             emails: email?.filter((em) => em.trim()) || [""],
-          },
-        ];
+          }))
+        : [
+            {
+              title: "Mr",
+              name: contactDetails?.[0]?.name || "Default Name",
+              designation: contactDetails?.[0]?.designation || "",
+              mobileNumbers: mobile?.filter((num) => num.trim()) || [""],
+              whatsappNumbers: whatsapp?.filter((num) => num.trim()) || [""],
+              emails: email?.filter((em) => em.trim()) || [""],
+            },
+          ];
 
     // Create business object explicitly
     const newBusinessData = {
@@ -182,6 +194,183 @@ exports.createBusiness = async (req, res) => {
   }
 };
 
+exports.importBusinessFromCSV = async (req, res) => {
+  if (!req.file) return res.status(400).json({ message: "CSV file required" });
+
+  const filePath = req.file.path;
+  const results = [];
+  const errors = [];
+
+  // Read CSV
+  fs.createReadStream(filePath)
+    .pipe(csv())
+    .on("data", (data) => results.push(data))
+    .on("end", async () => {
+      try {
+        let created = 0;
+        let updated = 0;
+        let skipped = 0;
+
+        for (const row of results) {
+          try {
+            const {
+              "Business Name": businessName,
+              address,
+              Website: website,
+              Email: email,
+              Phone: phone,
+              Rating: ratingStr,
+              Reviews: reviewsStr,
+              Latitude: latStr,
+              Longitude: lonStr,
+              Category: rawCategory,
+            } = row;
+
+            if (!businessName || !address || !latStr || !lonStr) {
+              errors.push(
+                `Missing required fields: ${businessName || "Unknown"}`
+              );
+              skipped++;
+              continue;
+            }
+
+            const latitude = parseFloat(latStr);
+            const longitude = parseFloat(lonStr);
+            const rating = parseFloat(ratingStr) || 0;
+            const totalReviews = parseInt(reviewsStr) || 0;
+
+            // Extract city, state from address (basic parsing)
+            const addressParts = address.split(";");
+            const city =
+              addressParts[addressParts.length - 3]?.trim() || "Unknown City";
+            const state =
+              addressParts[addressParts.length - 2]?.trim() || "Unknown State";
+            const country = "United Kingdom"; // From your data
+
+            // Clean phone
+            const cleanedPhone = phone?.replace(/\D/g, "");
+            const mobile = cleanedPhone ? [cleanedPhone] : [];
+
+            // Find or create Category/Subcategory
+            const categoryText = rawCategory.replace("· ", "").trim();
+            let categoryObj = await Category.findOne({
+              name: { $regex: new RegExp(`^${categoryText}$`, "i") },
+            });
+
+            if (!categoryObj) {
+              categoryObj = await Category.create({ name: categoryText });
+            }
+
+            // Subcategory = same as category text (as per your requirement)
+            let subCategoryObj = await SubCategory.findOne({
+              name: categoryText,
+            });
+            if (!subCategoryObj) {
+              subCategoryObj = await SubCategory.create({
+                name: categoryText,
+                category: categoryObj._id,
+              });
+            }
+
+            // Check if business already exists (by name + city)
+            let business = await Business.findOne({
+              businessName: { $regex: new RegExp(`^${businessName}$`, "i") },
+              "address.city": city,
+            });
+
+            if (business) {
+              // APPEND categories if new
+              const newCatId = categoryObj._id.toString();
+              const newSubCatId = subCategoryObj._id.toString();
+
+              if (!business.category.includes(newCatId)) {
+                business.category.push(newCatId);
+              }
+              if (!business.subCategory.includes(newSubCatId)) {
+                business.subCategory.push(newSubCatId);
+              }
+
+              // Update other fields if better
+              if (!business.website && website) business.website = website;
+              if (!business.contact.email.length && email)
+                business.contact.email = [email];
+              if (!business.contact.mobile.length && mobile.length)
+                business.contact.mobile = mobile;
+              if (rating > business.rating) business.rating = rating;
+              if (totalReviews > business.totalReviews)
+                business.totalReviews = totalReviews;
+
+              await business.save();
+              updated++;
+            } else {
+              // CREATE NEW
+              business = new Business({
+                businessName,
+                address: {
+                  city,
+                  state,
+                  country,
+                  area: addressParts[addressParts.length - 4]?.trim() || "",
+                  pincode: addressParts[addressParts.length - 1]?.trim() || "",
+                  streetName: addressParts[0]?.trim() || "",
+                },
+                location: {
+                  type: "Point",
+                  coordinates: [longitude, latitude],
+                },
+                contact: {
+                  mobile,
+                  email: email ? [email] : [],
+                  contactDetails: [
+                    {
+                      title: "Mr",
+                      name: businessName,
+                      mobileNumbers: mobile,
+                      emails: email ? [email] : [],
+                    },
+                  ],
+                },
+                website,
+                rating,
+                totalReviews,
+                category: [categoryObj._id],
+                subCategory: [subCategoryObj._id],
+                verified: false,
+                claimed: false,
+                isBlocked: false,
+                profileCompletionScore: 70,
+              });
+
+              await business.save();
+              created++;
+            }
+          } catch (err) {
+            errors.push(
+              `Error processing ${row["Business Name"] || "row"}: ${
+                err.message
+              }`
+            );
+            skipped++;
+          }
+        }
+
+        // Delete uploaded file
+        fs.unlinkSync(filePath);
+
+        res.json({
+          message: "Import completed",
+          created,
+          updated,
+          skipped,
+          errors,
+        });
+      } catch (err) {
+        console.error("CSV Import error:", err);
+        res.status(500).json({ message: "Import failed", error: err.message });
+      }
+    });
+};
+
 ///this api use combnie for admin and users
 exports.getBusiness = async (req, res) => {
   try {
@@ -195,56 +384,74 @@ exports.getBusiness = async (req, res) => {
       claimed,
     } = req.query;
 
-    // Validate pagination parameters
+    // Validate pagination
     const pageNum = Math.max(1, Number(page));
     const limitNum = Math.max(1, Number(limit));
     const skip = (pageNum - 1) * limitNum;
 
-    // Build query object
-    let query = {};
-    if (search) {
-      query = {
-        $or: [
-          { businessName: { $regex: search, $options: "i" } },
-          { "address.city": { $regex: search, $options: "i" } },
-          { "address.area": { $regex: search, $options: "i" } },
-          { "contact.email": { $regex: search, $options: "i" } },
-          { "contact.mobile": { $regex: search, $options: "i" } },
-          { "contact.contactDetails.name": { $regex: search, $options: "i" } },
-          {
-            "contact.contactDetails.mobileNumbers": {
-              $regex: search,
-              $options: "i",
-            },
-          },
-          {
-            "contact.contactDetails.whatsappNumbers": {
-              $regex: search,
-              $options: "i",
-            },
-          },
-          {
-            "contact.contactDetails.emails": { $regex: search, $options: "i" },
-          },
-        ],
-      };
-    }
+    // SMART COUNTRY MAPPING
+    const countryMap = {
+      UK: "United Kingdom",
+      "United Kingdom": "United Kingdom",
+      USA: "United States",
+      "United States": "United States",
+      US: "United States",
+      India: "India",
+    };
+
+    let normalizedCountry = "";
     if (country) {
-      query["address.country"] = { $regex: new RegExp(`^${country}$`, "i") };
-    }
-    // Add status filters
-    const statusFilters = {};
-    if (verified !== undefined) statusFilters.verified = verified === "true";
-    if (trust !== undefined) statusFilters.trust = trust === "true";
-    if (claimed !== undefined) statusFilters.claimed = claimed === "true";
-    if (Object.keys(statusFilters).length > 0) {
-      query = { ...query, ...statusFilters };
+      const upperCountry = country.trim().toUpperCase();
+      normalizedCountry =
+        countryMap[upperCountry] || countryMap[country.trim()] || country;
     }
 
-    // Fetch businesses with pagination
+    // Build query
+    let query = {};
+
+    // Search query
+    if (search) {
+      query.$or = [
+        { businessName: { $regex: search, $options: "i" } },
+        { "address.city": { $regex: search, $options: "i" } },
+        { "address.area": { $regex: search, $options: "i" } },
+        { "contact.email": { $regex: search, $options: "i" } },
+        { "contact.mobile": { $regex: search, $options: "i" } },
+        { "contact.contactDetails.name": { $regex: search, $options: "i" } },
+        {
+          "contact.contactDetails.mobileNumbers": {
+            $regex: search,
+            $options: "i",
+          },
+        },
+        {
+          "contact.contactDetails.whatsappNumbers": {
+            $regex: search,
+            $options: "i",
+          },
+        },
+        { "contact.contactDetails.emails": { $regex: search, $options: "i" } },
+      ];
+    }
+
+    // Country filter (Smart Match)
+    if (normalizedCountry) {
+      query["address.country"] = {
+        $regex: new RegExp(`^${normalizedCountry}$`, "i"),
+      };
+    }
+
+    // Status filters
+    if (verified !== undefined) query.verified = verified === "true";
+    if (trust !== undefined) query.trust = trust === "true";
+    if (claimed !== undefined) query.claimed = claimed === "true";
+
+    console.log("Final Query:", query);
+
+    // Fetch businesses
     const businesses = await Business.find(query)
       .select(
-        "businessName address contact businessTiming verified trust claimed isBlocked subscriptionActive _id"
+        "businessName address contact businessTiming verified trust claimed isBlocked subscriptionActive _id rating totalReviews businessLogo photos"
       )
       .skip(skip)
       .limit(limitNum)
@@ -257,12 +464,14 @@ exports.getBusiness = async (req, res) => {
       total,
       page: pageNum,
       totalPages: Math.ceil(total / limitNum),
+      currentPage: pageNum,
     });
   } catch (error) {
     console.error("Error fetching businesses:", error.message);
-    res
-      .status(500)
-      .json({ message: "Internal server error", error: error.message });
+    res.status(500).json({
+      message: "Internal server error",
+      error: error.message,
+    });
   }
 };
 
@@ -270,6 +479,7 @@ exports.getBusinessById = async (req, res) => {
   try {
     const { id } = req.params;
 
+    // Fetch business with populated fields
     const business = await Business.findById(id)
       .populate("category")
       .populate("subCategory");
@@ -280,6 +490,30 @@ exports.getBusinessById = async (req, res) => {
         message: "Business not found",
       });
     }
+
+    const now = new Date();
+
+    // REAL-TIME ENQUIRY COUNT
+    const enquiryCount = await Enquiry.countDocuments({
+      businessId: id,
+      // status: "pending", // Remove if you want total enquiries
+    });
+
+    // FETCH ACTIVE OFFERS (Not expired)
+    const activeOffers = await Offer.find({
+      businessId: id,
+      expirationDate: { $gte: now },
+    })
+      .populate("categoryId", "name")
+      .populate("subCategoryId", "name")
+      .sort({ createdAt: -1 });
+
+    // Add readable service name
+    const offersWithService = activeOffers.map((offer) => ({
+      ...offer.toObject(),
+      serviceName:
+        offer.subCategoryId?.name || offer.categoryId?.name || "All Services",
+    }));
 
     // Calculate profile completion score
     const criteria = {
@@ -294,16 +528,16 @@ exports.getBusinessById = async (req, res) => {
         weight: 15,
         check:
           business.contact &&
-          (business.contact.mobile.length ||
-            business.contact.email.length ||
-            business.contact.contactDetails.length),
+          (business.contact.mobile?.length ||
+            business.contact.email?.length ||
+            business.contact.contactDetails?.length),
       },
       businessTiming: {
         weight: 10,
         check:
           business.businessTiming &&
           (business.businessTiming.isOpen24Hours ||
-            business.businessTiming.daysOfWeek.length ||
+            business.businessTiming.daysOfWeek?.length ||
             Object.keys(business.businessTiming.schedule || {}).length),
       },
       kyc: {
@@ -348,62 +582,61 @@ exports.getBusinessById = async (req, res) => {
       (completedWeight / totalWeight) * 100
     );
 
-    // Update the business with the score
+    // Update business document
     const updatedBusiness = await Business.findByIdAndUpdate(
       id,
-      { $set: { profileCompletionScore } },
+      {
+        $set: {
+          profileCompletionScore,
+          enquiryCount,
+          offerCount: offersWithService.length, // ← NEW: Save count in business
+        },
+      },
       { new: true, runValidators: true }
     )
       .populate("category")
       .populate("subCategory");
 
-    // Determine pending actions
+    // Pending actions
     const pendingActions = Object.entries(criteria)
       .filter(([, { check }]) => !check)
       .map(([key]) => {
-        switch (key) {
-          case "businessName":
-            return "Add Business Name";
-          case "address":
-            return "Complete Address Details";
-          case "contact":
-            return "Add Contact Information";
-          case "businessTiming":
-            return "Set Business Timings";
-          case "kyc":
-            return "Complete KYC Verification";
-          case "category":
-            return "Add Business Category";
-          case "subCategory":
-            return "Add Sub-Category";
-          case "photos":
-            return "Upload Photos";
-          case "socialLinks":
-            return "Add Social Links";
-          case "website":
-            return "Add Website";
-          case "videoUrl":
-            return "Add Video";
-          case "businessSummary":
-            return "Add Business Summary";
-          case "yearsOfEstablishment":
-            return "Add Years of Establishment";
-          default:
-            return "Complete Additional Info";
-        }
+        const actions = {
+          businessName: "Add Business Name",
+          address: "Complete Address Details",
+          contact: "Add Contact Information",
+          businessTiming: "Set Business Timings",
+          kyc: "Complete KYC Verification",
+          category: "Add Business Category",
+          subCategory: "Add Sub-Category",
+          photos: "Upload Photos",
+          socialLinks: "Add Social Links",
+          website: "Add Website",
+          videoUrl: "Add Video",
+          businessSummary: "Add Business Summary",
+          yearsOfEstablishment: "Add Years of Establishment",
+        };
+        return actions[key] || "Complete Additional Info";
       });
 
+    // FINAL RESPONSE
     return res.json({
       success: true,
       message: "Business fetched successfully",
-      business: updatedBusiness,
-      pendingActions, // Ensure this is included in the response
+      business: {
+        ...updatedBusiness.toObject(),
+        offerCount: offersWithService.length,
+        offers: offersWithService, // ← Full offer details for frontend
+      },
+      enquiryCount,
+      pendingActions,
     });
   } catch (err) {
-    console.error("Error fetching business:", err);
+    console.error("Error in getBusinessById:", err);
     return res.status(500).json({
       success: false,
       message: "Internal server error",
+      error: err.message,
     });
   }
 };
@@ -1185,16 +1418,15 @@ exports.getuserBusiness = async (req, res) => {
     return res.status(500).json({ error: error.message });
   }
 };
-
 exports.getAllBusiness = async (req, res) => {
   try {
     const {
       page = 1,
       limit = 10,
       category,
+      subCategory,
       isOpenNow,
       isTopRated,
-      isQuickResponse,
       isVerified,
       hasDeals,
       isTrusted,
@@ -1202,52 +1434,57 @@ exports.getAllBusiness = async (req, res) => {
       type,
       lat,
       lon,
-      radius = 100, // kilometers
+      radius = 100,
     } = req.query;
 
+    // Validation
     if (!lat || !lon) {
       return res.status(400).json({
         success: false,
-        message: "Query parameters `lat` and `lon` are required.",
+        message: "lat and lon are required for location-based search",
       });
     }
 
     const skip = (Number(page) - 1) * Number(limit);
+    const userLocation = [Number(lon), Number(lat)];
+    const maxDistance = Number(radius) * 1000;
+    const now = new Date();
 
-    // Convert radius to radians: radius_in_meters / Earth's radius in meters (≈ 6,378,100 m)
-    const radiusInRad = (Number(radius) * 1000) / 6378100;
-
-    // Build filters
-    const filters = {
+    // Base Filters
+    const postGeoFilters = {
       isBlocked: false,
 
-      // Geospatial: everything within the sphere
-      location: {
-        $geoWithin: {
-          $centerSphere: [[Number(lon), Number(lat)], radiusInRad],
+      // Category (safe)
+      ...(category && {
+        category: {
+          $in: toObjectIdArray(category),
         },
-      },
-      ...(category && { category }),
+      }),
+
+      // SUBCATEGORY — AB KABHI BHI ERROR NAHI AAYEGA!
+      ...(subCategory &&
+        toObjectIdArray(subCategory).length > 0 && {
+          subCategory: {
+            $in: toObjectIdArray(subCategory), // ← Hamesha array milega
+          },
+        }),
+
       ...(isVerified === "true" && { verified: true }),
       ...(isTrusted === "true" && { trust: true }),
       ...(type && { type: { $in: type.split(",") } }),
       ...(isTopRated === "true" && { rating: { $gte: 4.5 } }),
-      ...(isQuickResponse === "true" && { quickResponse: true }),
-      ...(hasDeals === "true" && {
-        deals: { $exists: true, $not: { $size: 0 } },
-      }),
     };
 
-    // Handle isOpenNow
+    // isOpenNow Logic
     if (isOpenNow === "true") {
       const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-      const now = new Date();
-      const dayKey = days[now.getDay()];
-      const hh = now.getHours().toString().padStart(2, "0");
-      const mm = now.getMinutes().toString().padStart(2, "0");
-      const currentTime = `${hh}:${mm}`;
+      const today = days[now.getDay()];
+      const currentTime = `${now.getHours().toString().padStart(2, "0")}:${now
+        .getMinutes()
+        .toString()
+        .padStart(2, "0")}`;
 
-      filters.$or = [
+      postGeoFilters.$or = [
         { "businessTiming.isOpen24Hours": true },
         {
           $expr: {
@@ -1256,7 +1493,7 @@ exports.getAllBusiness = async (req, res) => {
                 $size: {
                   $filter: {
                     input: {
-                      $ifNull: [`$businessTiming.schedule.${dayKey}`, []],
+                      $ifNull: [`$businessTiming.schedule.${today}`, []],
                     },
                     as: "slot",
                     cond: {
@@ -1276,27 +1513,177 @@ exports.getAllBusiness = async (req, res) => {
     }
 
     // Sorting
-    let sortCondition = {};
-    if (sortBy === "A-Z") sortCondition = { businessName: 1 };
-    else if (sortBy === "Z-A") sortCondition = { businessName: -1 };
-    else if (sortBy === "Newest") sortCondition = { createdAt: -1 };
-    else if (sortBy === "Oldest") sortCondition = { createdAt: 1 };
+    const userSort = {};
+    if (sortBy === "A-Z") userSort.businessName = 1;
+    else if (sortBy === "Z-A") userSort.businessName = -1;
+    else if (sortBy === "Newest") userSort.createdAt = -1;
+    else if (sortBy === "Oldest") userSort.createdAt = 1;
 
-    const [businesses, total] = await Promise.all([
-      Business.find(filters)
-        .populate("category")
-        .sort(sortCondition)
-        .skip(skip)
-        .limit(Number(limit)),
-      Business.countDocuments(filters),
-    ]);
+    // Main Aggregation Pipeline
+    const pipeline = [
+      {
+        $geoNear: {
+          near: { type: "Point", coordinates: userLocation },
+          distanceField: "distance",
+          maxDistance,
+          spherical: true,
+        },
+      },
+      { $match: postGeoFilters },
+
+      // Count Active Offers
+      {
+        $lookup: {
+          from: "offers",
+          let: { businessId: "$_id" },
+          pipeline: [
+            {
+              $match: {
+                $expr: { $eq: ["$businessId", "$$businessId"] },
+                expirationDate: { $gte: now },
+              },
+            },
+            { $count: "count" },
+          ],
+          as: "activeOffers",
+        },
+      },
+      {
+        $addFields: {
+          offerCount: {
+            $cond: {
+              if: { $gt: [{ $size: "$activeOffers" }, 0] },
+              then: { $arrayElemAt: ["$activeOffers.count", 0] },
+              else: 0,
+            },
+          },
+        },
+      },
+      { $unset: "activeOffers" },
+
+      // Filter businesses with deals (if hasDeals=true)
+      ...(hasDeals === "true" ? [{ $match: { offerCount: { $gt: 0 } } }] : []),
+
+      // Convert distance to KM
+      {
+        $addFields: {
+          distance: { $round: [{ $divide: ["$distance", 1000] }, 1] },
+        },
+      },
+
+      // Final Sort: Distance first, then user choice
+      {
+        $sort: {
+          distance: 1,
+          ...userSort,
+        },
+      },
+
+      { $skip: skip },
+      { $limit: Number(limit) },
+
+      // Populate Category Names
+      {
+        $lookup: {
+          from: "categories",
+          localField: "category",
+          foreignField: "_id",
+          as: "categoryDetails",
+        },
+      },
+      {
+        $addFields: {
+          category: {
+            $map: {
+              input: "$category",
+              in: {
+                $let: {
+                  vars: {
+                    cat: {
+                      $arrayElemAt: [
+                        {
+                          $filter: {
+                            input: "$categoryDetails",
+                            cond: { $eq: ["$$this._id", "$$this"] },
+                          },
+                        },
+                        0,
+                      ],
+                    },
+                  },
+                  in: {
+                    _id: "$$this",
+                    name: "$$cat.name",
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      { $unset: "categoryDetails" },
+
+      // Optional: Populate SubCategory Names (Bonus for frontend)
+      {
+        $lookup: {
+          from: "subcategories",
+          localField: "subCategory",
+          foreignField: "_id",
+          as: "subCategoryDetails",
+        },
+      },
+      {
+        $addFields: {
+          subCategory: {
+            $map: {
+              input: "$subCategory",
+              in: {
+                $let: {
+                  vars: {
+                    sub: {
+                      $arrayElemAt: [
+                        {
+                          $filter: {
+                            input: "$subCategoryDetails",
+                            cond: { $eq: ["$$this._id", "$$this"] },
+                          },
+                        },
+                        0,
+                      ],
+                    },
+                  },
+                  in: {
+                    _id: "$$this",
+                    name: "$$sub.name",
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      { $unset: "subCategoryDetails" },
+    ];
+
+    const businesses = await Business.aggregate(pipeline);
+
+    // Total Count Pipeline
+    const countPipeline = pipeline
+      .filter((stage) => !["$skip", "$limit"].includes(Object.keys(stage)[0]))
+      .concat([{ $count: "total" }]);
+
+    const totalResult = await Business.aggregate(countPipeline);
+    const total = totalResult[0]?.total || 0;
 
     return res.status(200).json({
       success: true,
       page: Number(page),
       limit: Number(limit),
       total,
-      businesses,
+      businesses: businesses.map((biz) => ({
+        ...biz,
+        offerCount: biz.offerCount || 0,
+      })),
     });
   } catch (error) {
     console.error("getAllBusiness error:", error);

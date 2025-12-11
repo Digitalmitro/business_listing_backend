@@ -1,24 +1,36 @@
+// routes/subCategoryRoutes.js — FINAL ORDER
 const express = require("express");
 const router = express.Router();
-const { upload } = require('../config/Cloudinary');
-
-
+const { upload } = require("../config/multerConfig");
 const {
   createSubCategory,
+  getAllsubcategory, // ← Paginated admin list
   getSubCategories,
-  getAllsubcategory,
   deleteSubCategory,
   updateSubCategory,
-  getSubCategoriesByCategoryIds
-} = require("../controllers/subCategoryContoller"); // Adjust path
+  getSubCategoriesByCategoryIds,
+  getPopularSearches,
+  importSubCategoriesFromCSV, // ← NEW
+  downloadSampleSubCategoryCSV,
+  getAllSubcategoryPaginated, // ← NEW
+} = require("../controllers/subCategoryContoller");
 
-// Create a new SubCategory
+// STATIC ROUTES FIRST
+router.get("/sample-subcategory-csv", downloadSampleSubCategoryCSV);
+router.post(
+  "/import-subcategory-csv",
+  upload.single("csvFile"),
+  importSubCategoriesFromCSV
+);
+
+// Existing routes
 router.post("/subcategories", upload.single("icon"), createSubCategory);
-
-// Get all SubCategories or a specific SubCategory by ID
+router.get("/subcategories", getAllsubcategory);
+router.get("/subcategories-paginated", getAllSubcategoryPaginated);
 router.get("/subcategories/:categoryId", getSubCategories);
 router.post("/subcategories/by-categories", getSubCategoriesByCategoryIds);
-router.get("/subcategories", getAllsubcategory);
 router.delete("/:subCategoryId", deleteSubCategory);
-router.put('/subcategories/:id', upload.single('icon'), updateSubCategory);
+router.put("/subcategories/:id", upload.single("icon"), updateSubCategory);
+router.get("/popular-searches", getPopularSearches);
+
 module.exports = router;

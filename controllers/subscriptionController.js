@@ -1,11 +1,10 @@
-// backend/controllers/subscriptionController.js
-const User = require("../models/User");
+const Business = require("../models/Business");
 const PricingPackage = require("../models/PricingPackage");
 const paypal = require("@paypal/checkout-server-sdk");
 const crypto = require("crypto");
-const fetch = require("node-fetch"); // npm install node-fetch@2.6.7
+const fetch = require("node-fetch");
 
-// PayPal Environment Setup
+// PayPal Environment
 const environment =
   process.env.NODE_ENV === "production"
     ? new paypal.core.LiveEnvironment(
@@ -17,9 +16,9 @@ const environment =
         process.env.PAYPAL_SECRET
       );
 
-const client = new paypal.core.PayPalHttpClient(environment);
+const paypalClient = new paypal.core.PayPalHttpClient(environment);
 
-// Razorpay Setup
+// Razorpay Instance
 const razorpay = new (require("razorpay"))({
   key_id: process.env.RAZORPAY_KEY_ID,
   key_secret: process.env.RAZORPAY_KEY_SECRET,
@@ -31,7 +30,9 @@ const getPayPalAccessToken = async () => {
     `${process.env.PAYPAL_CLIENT_ID}:${process.env.PAYPAL_SECRET}`
   ).toString("base64");
   const response = await fetch(
-    "https://api-m.sandbox.paypal.com/v1/oauth2/token",
+    process.env.NODE_ENV === "production"
+      ? "https://api-m.paypal.com/v1/oauth2/token"
+      : "https://api-m.sandbox.paypal.com/v1/oauth2/token",
     {
       method: "POST",
       headers: {
@@ -43,18 +44,35 @@ const getPayPalAccessToken = async () => {
   );
 
   const data = await response.json();
-  if (!data.access_token) {
-    throw new Error("Failed to get PayPal access token");
-  }
+  if (!data.access_token) throw new Error("Failed to get PayPal access token");
   return data.access_token;
 };
 
-// CREATE PAYPAL SUBSCRIPTION — 100% WORKING 2025
+// CREATE PAYPAL SUBSCRIPTION (Per Business)
 const createPayPalSubscription = async (req, res) => {
-  const { packageId } = req.body;
-  const user = req.user;
+  const { businessId, packageId } = req.body;
+  const userId = req.user.id;
 
   try {
+    if (!businessId || !packageId) {
+      return res
+        .status(400)
+        .json({
+          success: false,
+          message: "businessId and packageId are required",
+        });
+    }
+
+    const business = await Business.findOne({ _id: businessId, userId });
+    if (!business) {
+      return res
+        .status(404)
+        .json({
+          success: false,
+          message: "Business not found or you don't own it",
+        });
+    }
+
     const pricingPackage = await PricingPackage.findById(packageId);
     if (!pricingPackage || !pricingPackage.isActive) {
       return res
@@ -93,17 +111,16 @@ const createPayPalSubscription = async (req, res) => {
           plan_id: paypalPlanId,
           subscriber: {
             name: {
-              given_name: user.full_name.split(" ")[0] || "User",
-              surname: user.full_name.split(" ").slice(1).join(" ") || "Member",
+              given_name: business.businessName.slice(0, 20) || "Business",
             },
-            email_address: user.email,
+            email_address: req.user.email,
           },
           application_context: {
             brand_name: "UrbanCitations",
             locale: "en-IN",
             shipping_preference: "NO_SHIPPING",
             user_action: "SUBSCRIBE_NOW",
-            return_url: `${process.env.FRONTEND_URL}/subscription/success`,
+            return_url: `${process.env.FRONTEND_URL}/subscription/success?businessId=${businessId}`,
             cancel_url: `${process.env.FRONTEND_URL}/subscription/cancel`,
           },
         }),
@@ -113,26 +130,29 @@ const createPayPalSubscription = async (req, res) => {
     const subscription = await response.json();
 
     if (!response.ok) {
-      console.error("PayPal Subscription Error:", subscription);
-      return res.status(400).json({
-        success: false,
-        message: subscription.message || "Failed to create PayPal subscription",
-      });
+      console.error("PayPal Error:", subscription);
+      return res
+        .status(400)
+        .json({
+          success: false,
+          message: subscription.message || "PayPal subscription failed",
+        });
     }
-
-    await User.findByIdAndUpdate(user._id, {
-      "subscription.package": pricingPackage._id,
-      "subscription.packageName": pricingPackage.name,
-      "subscription.paypalSubscriptionId": subscription.id,
-      "subscription.status": "pending",
-      "subscription.paymentMethod": "paypal",
-      "subscription.startDate": new Date(),
-      "subscription.nextBillingDate": null,
-    });
 
     const approvalLink = subscription.links.find(
       (link) => link.rel === "approve"
     )?.href;
+
+    // Save pending subscription on business
+    business.subscription = {
+      packageId: pricingPackage._id,
+      packageName: pricingPackage.name,
+      paypalSubscriptionId: subscription.id,
+      status: "pending",
+      paymentGateway: "paypal",
+      startDate: new Date(),
+    };
+    await business.save();
 
     res.json({
       success: true,
@@ -140,12 +160,17 @@ const createPayPalSubscription = async (req, res) => {
       subscriptionId: subscription.id,
     });
   } catch (error) {
-    console.error("PayPal Create Error:", error);
-    res.status(500).json({ success: false, message: "Internal server error" });
+    console.error("createPayPalSubscription Error:", error);
+    res
+      .status(500)
+      .json({
+        success: false,
+        message: "Server error during PayPal subscription",
+      });
   }
 };
 
-// PAYPAL WEBHOOK — FULLY VERIFIED
+// PAYPAL WEBHOOK HANDLER
 const handlePayPalWebhook = async (req, res) => {
   const webhookId = process.env.PAYPAL_WEBHOOK_ID;
 
@@ -153,6 +178,7 @@ const handlePayPalWebhook = async (req, res) => {
     const headers = req.headers;
     const payload = req.body;
 
+    // Verify signature (optional but recommended)
     const verificationRequest =
       new paypal.notifications.WebhooksVerifySignatureRequest();
     verificationRequest.headers = {
@@ -162,7 +188,6 @@ const handlePayPalWebhook = async (req, res) => {
       "paypal-transmission-sig": headers["paypal-transmission-sig"],
       "paypal-transmission-time": headers["paypal-transmission-time"],
     };
-
     verificationRequest.requestBody({
       transmission_id: headers["paypal-transmission-id"],
       transmission_time: headers["paypal-transmission-time"],
@@ -173,53 +198,43 @@ const handlePayPalWebhook = async (req, res) => {
       webhook_event: payload,
     });
 
-    const verificationResponse = await client.execute(verificationRequest);
-
+    const verificationResponse = await paypalClient.execute(
+      verificationRequest
+    );
     if (verificationResponse.result.verification_status !== "SUCCESS") {
-      console.warn("Invalid PayPal webhook signature");
-      return res.status(400).send("Invalid signature");
+      return res.status(400).send("Invalid webhook signature");
     }
 
     const eventType = payload.event_type;
     const subId = payload.resource?.id;
 
-    if (!subId) {
-      return res.status(200).send("OK");
-    }
+    if (!subId) return res.status(200).send("OK");
+
+    const business = await Business.findOne({
+      "subscription.paypalSubscriptionId": subId,
+    });
+    if (!business) return res.status(200).send("Business not found");
 
     switch (eventType) {
       case "BILLING.SUBSCRIPTION.ACTIVATED":
       case "BILLING.SUBSCRIPTION.RENEWED":
-        await User.updateOne(
-          { "subscription.paypalSubscriptionId": subId },
-          {
-            "subscription.status": "active",
-            "subscription.nextBillingDate": payload.resource.billing_info
-              ?.next_billing_time
-              ? new Date(payload.resource.billing_info.next_billing_time)
-              : null,
-          }
-        );
+        business.subscription.status = "active";
+        business.subscription.nextBillingDate = payload.resource.billing_info
+          ?.next_billing_time
+          ? new Date(payload.resource.billing_info.next_billing_time)
+          : null;
         break;
-
       case "BILLING.SUBSCRIPTION.CANCELLED":
-        await User.updateOne(
-          { "subscription.paypalSubscriptionId": subId },
-          {
-            "subscription.status": "canceled",
-            "subscription.endDate": new Date(),
-          }
-        );
-        break;
-
       case "BILLING.SUBSCRIPTION.EXPIRED":
-        await User.updateOne(
-          { "subscription.paypalSubscriptionId": subId },
-          { "subscription.status": "expired" }
-        );
+        business.subscription.status = "canceled";
+        business.subscription.endDate = new Date();
+        break;
+      case "BILLING.SUBSCRIPTION.SUSPENDED":
+        business.subscription.status = "suspended";
         break;
     }
 
+    await business.save();
     res.status(200).send("OK");
   } catch (error) {
     console.error("PayPal Webhook Error:", error);
@@ -227,17 +242,30 @@ const handlePayPalWebhook = async (req, res) => {
   }
 };
 
-// RAZORPAY SUBSCRIPTION
+// CREATE RAZORPAY SUBSCRIPTION (Per Business)
 const createRazorpaySubscription = async (req, res) => {
-  const { packageId } = req.body;
-  const user = req.user;
+  const { businessId, packageId } = req.body;
+  const userId = req.user.id;
 
   try {
+    if (!businessId || !packageId) {
+      return res
+        .status(400)
+        .json({ success: false, message: "businessId and packageId required" });
+    }
+
+    const business = await Business.findOne({ _id: businessId, userId });
+    if (!business) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Business not found" });
+    }
+
     const pricingPackage = await PricingPackage.findById(packageId);
     if (!pricingPackage || !pricingPackage.isActive) {
       return res
         .status(400)
-        .json({ success: false, message: "Invalid or inactive package" });
+        .json({ success: false, message: "Invalid package" });
     }
 
     const planId =
@@ -252,20 +280,22 @@ const createRazorpaySubscription = async (req, res) => {
       plan_id: planId,
       total_count: 120,
       customer_notify: 1,
+      addons: [],
       notes: {
-        userId: user._id.toString(),
-        packageName: pricingPackage.name,
+        businessId: businessId.toString(),
+        businessName: business.businessName,
       },
     });
 
-    await User.findByIdAndUpdate(user._id, {
-      "subscription.package": pricingPackage._id,
-      "subscription.packageName": pricingPackage.name,
-      "subscription.razorpaySubscriptionId": subscription.id,
-      "subscription.status": "pending",
-      "subscription.paymentMethod": "razorpay",
-      "subscription.startDate": new Date(),
-    });
+    business.subscription = {
+      packageId: pricingPackage._id,
+      packageName: pricingPackage.name,
+      razorpaySubscriptionId: subscription.id,
+      status: "pending",
+      paymentGateway: "razorpay",
+      startDate: new Date(),
+    };
+    await business.save();
 
     res.json({
       success: true,
@@ -276,10 +306,7 @@ const createRazorpaySubscription = async (req, res) => {
     console.error("Razorpay Subscription Error:", error);
     res
       .status(500)
-      .json({
-        success: false,
-        message: "Failed to create Razorpay subscription",
-      });
+      .json({ success: false, message: "Failed to create subscription" });
   }
 };
 
@@ -293,7 +320,7 @@ const verifyRazorpayWebhook = async (req, res) => {
   }
 
   const shasum = crypto.createHmac("sha256", webhookSecret);
-  shasum.update(req.rawBody);
+  shasum.update(JSON.stringify(req.body));
   const digest = shasum.digest("hex");
 
   if (signature !== digest) {
@@ -304,8 +331,11 @@ const verifyRazorpayWebhook = async (req, res) => {
   const event = req.body;
   const subId = event.payload?.subscription?.entity?.id;
 
-  if (event.event === "subscription.charged") {
-    await User.updateOne(
+  if (
+    event.event === "subscription.charged" ||
+    event.event === "subscription.activated"
+  ) {
+    await Business.updateOne(
       { "subscription.razorpaySubscriptionId": subId },
       {
         "subscription.status": "active",
@@ -317,101 +347,137 @@ const verifyRazorpayWebhook = async (req, res) => {
   }
 
   if (["subscription.cancelled", "subscription.halted"].includes(event.event)) {
-    await User.updateOne(
+    await Business.updateOne(
       { "subscription.razorpaySubscriptionId": subId },
-      { "subscription.status": "canceled", "subscription.endDate": new Date() }
+      {
+        "subscription.status": "canceled",
+        "subscription.endDate": new Date(),
+      }
     );
   }
 
   res.json({ status: "ok" });
 };
 
-// USER: Get My Subscription
-const getMySubscription = async (req, res) => {
+// GET BUSINESS SUBSCRIPTION
+const getBusinessSubscription = async (req, res) => {
   try {
-    const user = await User.findById(req.user.id)
-      .select("subscription full_name email")
-      .populate("subscription.package", "name priceINR features");
+    const { businessId } = req.params;
+    const userId = req.user.id;
 
+    const business = await Business.findOne({ _id: businessId, userId })
+      .select("businessName subscription")
+      .populate("subscription.packageId", "name priceINR features");
+
+    if (!business) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Business not found" });
+    }
+
+    const sub = business.subscription || {};
     res.json({
       success: true,
-      subscription: user.subscription || {},
-      hasActiveSubscription: user.subscription?.status === "active",
-      isPaidSubscriber:
-        ["Gold", "Platinum", "Diamond"].includes(
-          user.subscription?.packageName
-        ) && user.subscription?.status === "active",
+      businessName: business.businessName,
+      subscription: sub,
+      isActive: sub.status === "active",
+      isPremium:
+        ["Gold", "Platinum", "Diamond"].includes(sub.packageName) &&
+        sub.status === "active",
     });
   } catch (error) {
-    console.error("Get Subscription Error:", error);
+    console.error("Get Business Subscription Error:", error);
     res.status(500).json({ success: false, message: "Server error" });
   }
 };
 
-// USER: Cancel Subscription
-const cancelSubscription = async (req, res) => {
-  const user = req.user;
-
+// CANCEL BUSINESS SUBSCRIPTION
+const cancelBusinessSubscription = async (req, res) => {
   try {
+    const { businessId } = req.params;
+    const userId = req.user.id;
+
+    const business = await Business.findOne({ _id: businessId, userId });
+    if (!business || !business.subscription) {
+      return res
+        .status(404)
+        .json({ success: false, message: "No active subscription found" });
+    }
+
     if (
-      user.subscription?.paymentMethod === "paypal" &&
-      user.subscription.paypalSubscriptionId
+      business.subscription.paymentGateway === "razorpay" &&
+      business.subscription.razorpaySubscriptionId
     ) {
-      const accessToken = await getPayPalAccessToken();
+      await razorpay.subscriptions.cancel(
+        business.subscription.razorpaySubscriptionId
+      );
+    }
+
+    if (
+      business.subscription.paymentGateway === "paypal" &&
+      business.subscription.paypalSubscriptionId
+    ) {
+      const token = await getPayPalAccessToken();
       await fetch(
-        `https://api-m.sandbox.paypal.com/v1/billing/subscriptions/${user.subscription.paypalSubscriptionId}/cancel`,
+        `https://api-m.sandbox.paypal.com/v1/billing/subscriptions/${business.subscription.paypalSubscriptionId}/cancel`,
         {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            Authorization: `Bearer ${accessToken}`,
+            Authorization: `Bearer ${token}`,
           },
           body: JSON.stringify({ reason: "User requested cancellation" }),
         }
       );
     }
 
-    await User.findByIdAndUpdate(user._id, {
-      "subscription.status": "canceled",
-      "subscription.endDate": new Date(),
-    });
+    business.subscription.status = "canceled";
+    business.subscription.endDate = new Date();
+    await business.save();
 
     res.json({ success: true, message: "Subscription canceled successfully" });
   } catch (error) {
-    console.error("Cancel Error:", error);
+    console.error("Cancel Subscription Error:", error);
     res
       .status(500)
       .json({ success: false, message: "Failed to cancel subscription" });
   }
 };
 
-// USER: Reactivate Subscription
-const reactivateSubscription = async (req, res) => {
-  const user = req.user;
-
+// REACTIVATE BUSINESS SUBSCRIPTION
+const reactivateBusinessSubscription = async (req, res) => {
   try {
+    const { businessId } = req.params;
+    const userId = req.user.id;
+
+    const business = await Business.findOne({ _id: businessId, userId });
+    if (!business || !business.subscription) {
+      return res
+        .status(404)
+        .json({ success: false, message: "No subscription found" });
+    }
+
     if (
-      user.subscription?.paymentMethod === "paypal" &&
-      user.subscription.paypalSubscriptionId
+      business.subscription.paymentGateway === "paypal" &&
+      business.subscription.paypalSubscriptionId
     ) {
-      const accessToken = await getPayPalAccessToken();
+      const token = await getPayPalAccessToken();
       await fetch(
-        `https://api-m.sandbox.paypal.com/v1/billing/subscriptions/${user.subscription.paypalSubscriptionId}/activate`,
+        `https://api-m.sandbox.paypal.com/v1/billing/subscriptions/${business.subscription.paypalSubscriptionId}/activate`,
         {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            Authorization: `Bearer ${accessToken}`,
+            Authorization: `Bearer ${token}`,
           },
           body: JSON.stringify({ reason: "User requested reactivation" }),
         }
       );
     }
 
-    await User.findByIdAndUpdate(user._id, {
-      "subscription.status": "active",
-      "subscription.endDate": null,
-    });
+    business.subscription.status = "active";
+    business.subscription.endDate = null;
+    await business.save();
 
     res.json({
       success: true,
@@ -419,22 +485,25 @@ const reactivateSubscription = async (req, res) => {
     });
   } catch (error) {
     console.error("Reactivate Error:", error);
-    res
-      .status(500)
-      .json({ success: false, message: "Failed to reactivate subscription" });
+    res.status(500).json({ success: false, message: "Failed to reactivate" });
   }
 };
 
-// ADMIN: Get All Subscriptions
-const getAllSubscriptions = async (req, res) => {
+// ADMIN: Get All Active Subscriptions
+const getAllBusinessSubscriptions = async (req, res) => {
   try {
-    const users = await User.find({
-      "subscription.status": { $in: ["active", "pending", "canceled"] },
+    const businesses = await Business.find({
+      "subscription.status": { $in: ["active", "pending"] },
     })
-      .select("full_name email subscription")
-      .populate("subscription.package", "name priceINR");
+      .select("businessName subscription userId createdAt")
+      .populate("subscription.packageId", "name priceINR")
+      .populate("userId", "full_name email mobile");
 
-    res.json({ success: true, subscriptions: users });
+    res.json({
+      success: true,
+      total: businesses.length,
+      subscriptions: businesses,
+    });
   } catch (error) {
     console.error("Admin Subscriptions Error:", error);
     res.status(500).json({ success: false, message: "Server error" });
@@ -446,8 +515,8 @@ module.exports = {
   handlePayPalWebhook,
   createRazorpaySubscription,
   verifyRazorpayWebhook,
-  getMySubscription,
-  cancelSubscription,
-  reactivateSubscription,
-  getAllSubscriptions,
+  getBusinessSubscription,
+  cancelBusinessSubscription,
+  reactivateBusinessSubscription,
+  getAllBusinessSubscriptions,
 };

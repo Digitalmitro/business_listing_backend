@@ -1,18 +1,19 @@
-const mongoose = require('mongoose');
+const mongoose = require("mongoose");
 const Schema = mongoose.Schema;
 
 // SubCategory Schema
 const SubCategorySchema = new Schema({
   id: {
-    type: Number
+    type: Number,
   },
   name: {
     type: String,
-    required: true
+    required: true,
   },
   iconUrl: {
     type: String,
-    required: true
+    required: true,
+    default: "https://img.icons8.com/fluency/512/business.png",
   },
   slug: {
     type: String,
@@ -22,21 +23,21 @@ const SubCategorySchema = new Schema({
   },
   bgImage: {
     type: String,
-    required: false
+    required: false,
   },
   category: {
     type: Schema.Types.ObjectId,
-    ref: 'Category',
-    required: true
+    ref: "Category",
+    required: true,
   },
   createdAt: {
     type: Date,
-    default: Date.now
+    default: Date.now,
   },
   updatedAt: {
     type: Date,
-    default: Date.now
-  }
+    default: Date.now,
+  },
 });
 
-module.exports = mongoose.model('SubCategory', SubCategorySchema);
+module.exports = mongoose.model("SubCategory", SubCategorySchema);

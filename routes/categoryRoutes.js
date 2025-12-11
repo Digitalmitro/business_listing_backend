@@ -1,3 +1,4 @@
+// routes/categoryRoutes.js
 const express = require("express");
 const {
   createCategory,
@@ -6,11 +7,24 @@ const {
   deleteCategory,
   getCategoryById,
   updateCategory,
+  importCategoriesFromCSV,
+  downloadSampleCategoryCSV,
+  getAllCategoriesPaginated,
 } = require("../controllers/categoryController");
-const { upload } = require("../config/Cloudinary");
-// const upload = require('../middlewares/uploadMiddleware')
+const { upload } = require("../config/multerConfig");
 
 const router = express.Router();
+
+// ==================== STATIC ROUTES FIRST ====================
+// These must come BEFORE any dynamic :id or :categoryId routes
+
+router.get("/sample-csv", downloadSampleCategoryCSV); // ← Sample CSV download
+router.post("/import-csv", upload.single("csvFile"), importCategoriesFromCSV); // ← Bulk import
+
+router.get("/category-with-top", getCategorywithTop); // ← Get all + top categories
+router.get("/categories", getAllCategories); // ← List all categories
+router.get("/categories-paginated", getAllCategoriesPaginated);
+// ==================== DYNAMIC ROUTES LAST ====================
 
 router.post(
   "/categories",
@@ -20,10 +34,8 @@ router.post(
   ]),
   createCategory
 );
-router.get("/categories", getAllCategories);
-router.get("/category-with-top", getCategorywithTop);
-router.delete("/:id", deleteCategory);
-router.get("/:categoryId", getCategoryById);
+
+router.get("/:categoryId", getCategoryById); // ← Get single by ID
 router.put(
   "/:categoryId",
   upload.fields([
@@ -32,5 +44,7 @@ router.put(
   ]),
   updateCategory
 );
+
+router.delete("/:id", deleteCategory); // ← Delete by ID
 
 module.exports = router;

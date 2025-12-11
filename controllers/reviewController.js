@@ -107,3 +107,21 @@ exports.getReviews = async (req, res) => {
     res.status(500).json({ error: "Failed to fetch reviews." });
   }
 };
+
+exports.getAllBusinessReviews = async (req, res) => {
+  try {
+    const { businessIds } = req.body;
+    if (!businessIds || !Array.isArray(businessIds)) {
+      return res.status(400).json({ message: "businessIds array required" });
+    }
+
+    const reviews = await Review.find({ businessId: { $in: businessIds } })
+      .populate("userId", "full_name userImage")
+      .sort({ createdAt: -1 })
+      .limit(50);
+
+    res.json({ success: true, reviews });
+  } catch (error) {
+    res.status(500).json({ message: "Failed to fetch reviews" });
+  }
+};

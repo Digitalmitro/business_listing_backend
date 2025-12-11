@@ -1,5 +1,6 @@
 // backend/middlewares/authMiddleware.js
 const jwt = require("jsonwebtoken");
+const Admin = require("../models/Admin");
 const User = require("../models/User");
 
 const authMiddleware = async (req, res, next) => {
@@ -14,12 +15,14 @@ const authMiddleware = async (req, res, next) => {
     
     // YE LINE ADD KAR DE — FULL USER FETCH KAREGA DB SE
     const user = await User.findById(decoded.id).select("-password");
+    const admin = await Admin.findById(decoded.id).select("-password");
     
-    if (!user) {
+    if (!user && !admin) {
       return res.status(401).json({ success: false, message: "User not found" });
     }
 
-    req.user = user; // ← AB FULL USER AAYEGA (full_name, email sab)
+
+    req.user = user || admin; // ← AB FULL USER AAYEGA (full_name, email sab)
     next();
   } catch (error) {
     console.error("Auth Middleware Error:", error);

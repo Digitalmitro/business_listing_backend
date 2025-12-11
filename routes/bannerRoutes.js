@@ -1,14 +1,39 @@
-const express = require('express');
-const { createBanner, getAllBanners } = require('../controllers/bannerController');
-// const { upload } = require('../config/multerConfig');
-const upload = require('../middlewares/uploadMiddleware')
-
+// routes/bannerRoutes.js
+const express = require("express");
 const router = express.Router();
+const {
+  createBanner,
+  getBanners,
+  updateBanner,
+  deleteBanner,
+} = require("../controllers/bannerController");
+const { authMiddleware } = require("../middlewares/authMiddleware");
+const { upload } = require("../config/multerConfig"); // ← TERA MULTER!
 
-// Route to create a new banner
-router.post('/banners', upload.fields([{ name: 'image', maxCount: 1 }]), createBanner);
+// PUBLIC
+router.get("/banners", getBanners);
 
-// Route to get all banners
-router.get('/banners', getAllBanners);
+// ADMIN ONLY
+router.post(
+  "/banners",
+  authMiddleware,
+  upload.fields([
+    { name: "image", maxCount: 1 }, // Main banner
+    { name: "bgImage", maxCount: 1 }, // Optional background
+  ]),
+  createBanner
+);
+
+router.put(
+  "/banners/:id",
+  authMiddleware,
+  upload.fields([
+    { name: "image", maxCount: 1 },
+    { name: "bgImage", maxCount: 1 },
+  ]),
+  updateBanner
+);
+
+router.delete("/banners/:id", authMiddleware, deleteBanner);
 
 module.exports = router;

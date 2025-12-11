@@ -7,10 +7,10 @@ const {
   handlePayPalWebhook,
   createRazorpaySubscription,
   verifyRazorpayWebhook,
-  getMySubscription,
-  cancelSubscription,
-  reactivateSubscription,
-  getAllSubscriptions,
+  getBusinessSubscription,
+  cancelBusinessSubscription,
+  reactivateBusinessSubscription,
+  getAllBusinessSubscriptions, // Admin
 } = require("../controllers/subscriptionController");
 
 // PAYPAL ROUTES
@@ -37,12 +37,16 @@ router.post(
   verifyRazorpayWebhook
 );
 
-// USER ROUTES
-router.get("/my-subscription", authMiddleware, getMySubscription);
-router.post("/cancel", authMiddleware, cancelSubscription);
-router.post("/reactivate", authMiddleware, reactivateSubscription);
+// BUSINESS-SPECIFIC ROUTES
+router.get("/business/:businessId", authMiddleware, getBusinessSubscription);
+router.post("/cancel/:businessId", authMiddleware, cancelBusinessSubscription);
+router.post(
+  "/reactivate/:businessId",
+  authMiddleware,
+  reactivateBusinessSubscription
+);
 
 // ADMIN ROUTES
-router.get("/all", authMiddleware, getAllSubscriptions);
+router.get("/admin/all", authMiddleware, getAllBusinessSubscriptions);
 
 module.exports = router;

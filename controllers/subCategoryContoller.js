@@ -1,13 +1,17 @@
-const SubCategory = require('../models/SubCategory');  
-const Category = require('../models/Category');  
+const SubCategory = require("../models/SubCategory");
+const Category = require("../models/Category");
 const { uploadToCloudinary } = require("../config/Cloudinary");
+const csv = require("csv-parser");
+const fs = require("fs");
 
 exports.createSubCategory = async (req, res) => {
   try {
     const { name, description, category } = req.body;
 
     if (!name || !category || !req.file) {
-      return res.status(400).json({ message: "Name, category, and icon image are required" });
+      return res
+        .status(400)
+        .json({ message: "Name, category, and icon image are required" });
     }
 
     const existingCategory = await Category.findById(category);
@@ -15,61 +19,72 @@ exports.createSubCategory = async (req, res) => {
       return res.status(404).json({ message: "Category not found" });
     }
 
-    const iconUrl = await uploadToCloudinary(req.file.buffer, "subCategoryIcons");
+    const iconUrl = await uploadToCloudinary(
+      req.file.buffer,
+      "subCategoryIcons"
+    );
 
     let id = 1;
 
-    const findLatestSubcategory = SubCategory.find({}).sort({createdAt: -1}).limit(1);
-    if(findLatestSubcategory.id){
-      id = findLatestSubcategory.id
+    const findLatestSubcategory = SubCategory.find({})
+      .sort({ createdAt: -1 })
+      .limit(1);
+    if (findLatestSubcategory.id) {
+      id = findLatestSubcategory.id;
     }
 
-    const slug = name.toLowerCase().split(' ').join('-')
+    const slug = name.toLowerCase().split(" ").join("-");
     const subCategory = new SubCategory({
       id,
       name,
       slug,
       category,
       description,
-      iconUrl
+      iconUrl,
     });
 
     await subCategory.save();
 
-    res.status(201).json({ message: "SubCategory created successfully", subCategory });
-
+    res
+      .status(201)
+      .json({ message: "SubCategory created successfully", subCategory });
   } catch (error) {
-    res.status(500).json({ message: "Error creating subcategory", error: error.message });
+    res
+      .status(500)
+      .json({ message: "Error creating subcategory", error: error.message });
   }
 };
 
-
 exports.getSubCategories = async (req, res) => {
-    try {
-      const { categoryId } = req.params;
+  try {
+    const { categoryId } = req.params;
     if (!categoryId) {
-        return res.status(400).json({ message: "Category ID is required" });
-      }
-      const subCategories = await SubCategory.find({ category: categoryId })
-        .populate('category', 'name iconUrl bgImage -_id') // Populate specific fields
-        .select("-__v -createdAt -updatedAt");
-      if (subCategories.length === 0) {
-        return res.status(404).json({ message: "No subcategories found for this category" });
-      }
-      const { category } = subCategories[0];
-      return res.status(200).json({
-        category,
-        subCategories: subCategories.map(subCategory => ({
-          _id: subCategory._id,
-          id: subCategory.id,
-          name: subCategory.name,
-          slug: subCategory.slug,
-          iconUrl:subCategory.iconUrl
-        }))
-      });
-    } catch (error) {
-      res.status(500).json({ message: "Error fetching subcategories", error: error.message });
+      return res.status(400).json({ message: "Category ID is required" });
     }
+    const subCategories = await SubCategory.find({ category: categoryId })
+      .populate("category", "name iconUrl bgImage -_id") // Populate specific fields
+      .select("-__v -createdAt -updatedAt");
+    if (subCategories.length === 0) {
+      return res
+        .status(404)
+        .json({ message: "No subcategories found for this category" });
+    }
+    const { category } = subCategories[0];
+    return res.status(200).json({
+      category,
+      subCategories: subCategories.map((subCategory) => ({
+        _id: subCategory._id,
+        id: subCategory.id,
+        name: subCategory.name,
+        slug: subCategory.slug,
+        iconUrl: subCategory.iconUrl,
+      })),
+    });
+  } catch (error) {
+    res
+      .status(500)
+      .json({ message: "Error fetching subcategories", error: error.message });
+  }
 };
 
 exports.getSubCategoriesByCategoryIds = async (req, res) => {
@@ -95,7 +110,9 @@ exports.getSubCategoriesByCategoryIds = async (req, res) => {
       .select("-__v -createdAt -updatedAt");
 
     if (!subCategories || subCategories.length === 0) {
-      return res.status(404).json({ message: "No subcategories found for given categories" });
+      return res
+        .status(404)
+        .json({ message: "No subcategories found for given categories" });
     }
 
     // Optional: Group by category
@@ -119,46 +136,80 @@ exports.getSubCategoriesByCategoryIds = async (req, res) => {
 
     res.status(200).json({ data: grouped });
   } catch (error) {
-    res.status(500).json({ message: "Error fetching subcategories", error: error.message });
+    res
+      .status(500)
+      .json({ message: "Error fetching subcategories", error: error.message });
   }
 };
 
-
 //this use for admin
-exports.getAllsubcategory = async (req,res) =>{
+exports.getAllsubcategory = async (req, res) => {
   try {
-    const subCategories = await SubCategory.find().populate('category')
+    const subCategories = await SubCategory.find().populate("category");
 
-    return res.status(200).json(subCategories)
+    return res.status(200).json(subCategories);
   } catch (error) {
-    res.status(500).json({ message: "Error fetching subcategories", error: error.message });
+    res
+      .status(500)
+      .json({ message: "Error fetching subcategories", error: error.message });
   }
-}
+};
+
+exports.getAllSubcategoryPaginated = async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const skip = (page - 1) * limit;
+
+    const total = await SubCategory.countDocuments();
+    const subCategories = await SubCategory.find()
+      .populate("category", "name")
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit);
+
+    res.status(200).json({
+      subCategories,
+      pagination: {
+        currentPage: page,
+        totalPages: Math.ceil(total / limit),
+        total,
+      },
+    });
+  } catch (error) {
+    res
+      .status(500)
+      .json({ message: "Error fetching subcategories", error: error.message });
+  }
+};
 
 // delete api
 exports.deleteSubCategory = async (req, res) => {
   try {
-      const { subCategoryId } = req.params;
+    const { subCategoryId } = req.params;
 
-      // Check if subCategoryId is provided
-      if (!subCategoryId) {
-          return res.status(400).json({ message: "Subcategory ID is required" });
-      }
+    // Check if subCategoryId is provided
+    if (!subCategoryId) {
+      return res.status(400).json({ message: "Subcategory ID is required" });
+    }
 
-      // Find and delete the subcategory
-      const deletedSubCategory = await SubCategory.findByIdAndDelete(subCategoryId);
+    // Find and delete the subcategory
+    const deletedSubCategory = await SubCategory.findByIdAndDelete(
+      subCategoryId
+    );
 
-      // If subcategory is not found
-      if (!deletedSubCategory) {
-          return res.status(404).json({ message: "Subcategory not found" });
-      }
+    // If subcategory is not found
+    if (!deletedSubCategory) {
+      return res.status(404).json({ message: "Subcategory not found" });
+    }
 
-      res.status(200).json({ message: "Subcategory deleted successfully" });
+    res.status(200).json({ message: "Subcategory deleted successfully" });
   } catch (error) {
-      res.status(500).json({ message: "Error deleting subcategory", error: error.message });
+    res
+      .status(500)
+      .json({ message: "Error deleting subcategory", error: error.message });
   }
 };
-
 
 // update api
 exports.updateSubCategory = async (req, res) => {
@@ -182,7 +233,7 @@ exports.updateSubCategory = async (req, res) => {
       }
     }
 
-    let iconUrl = subCategory.iconUrl; 
+    let iconUrl = subCategory.iconUrl;
     if (req.file) {
       iconUrl = await uploadToCloudinary(req.file.buffer, "subCategoryIcons");
     }
@@ -195,10 +246,137 @@ exports.updateSubCategory = async (req, res) => {
 
     await subCategory.save();
 
-    res.status(200).json({ message: "Subcategory updated successfully", subCategory });
+    res
+      .status(200)
+      .json({ message: "Subcategory updated successfully", subCategory });
   } catch (error) {
-    res.status(500).json({ message: "Error updating subcategory", error: error.message });
+    res
+      .status(500)
+      .json({ message: "Error updating subcategory", error: error.message });
   }
 };
 
+exports.getPopularSearches = async (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit) || 30;
+    const popular = await SubCategory.find()
+      .sort({ searchCount: -1, name: 1 })
+      .limit(limit)
+      .select("name _id slug category");
 
+    res.json({ success: true, popularSearches: popular });
+  } catch (err) {
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+
+exports.importSubCategoriesFromCSV = async (req, res) => {
+  if (!req.file) return res.status(400).json({ message: "CSV file required" });
+
+  const filePath = req.file.path;
+  const results = [];
+  const errors = [];
+
+  fs.createReadStream(filePath)
+    .pipe(csv())
+    .on("data", (data) => results.push(data))
+    .on("end", async () => {
+      try {
+        let created = 0;
+        let skipped = 0;
+
+        for (const row of results) {
+          const name = row["name"]?.trim();
+          const categoryName = row["category"]?.trim();
+          const description = row["description"]?.trim() || "";
+
+          if (!name || !categoryName) {
+            errors.push(`Missing name or category: ${JSON.stringify(row)}`);
+            skipped++;
+            continue;
+          }
+
+          // Find parent category
+          const category = await Category.findOne({
+            name: { $regex: new RegExp(`^${categoryName}$`, "i") },
+          });
+
+          if (!category) {
+            errors.push(`Category not found: ${categoryName}`);
+            skipped++;
+            continue;
+          }
+
+          // Check duplicate
+          const exists = await SubCategory.findOne({
+            name: { $regex: new RegExp(`^${name}$`, "i") },
+            category: category._id,
+          });
+
+          if (exists) {
+            errors.push(`Already exists: ${name} in ${categoryName}`);
+            skipped++;
+            continue;
+          }
+
+          const slug = name
+            .toLowerCase()
+            .replace(/[^a-z0-9\s-]/g, "")
+            .replace(/\s+/g, "-")
+            .replace(/-+/g, "-");
+
+          const subCat = new SubCategory({
+            name,
+            slug,
+            category: category._id,
+            description,
+            iconUrl: "https://img.icons8.com/fluency/512/business.png", // default
+          });
+
+          await subCat.save();
+          created++;
+        }
+
+        fs.unlinkSync(filePath);
+
+        res.json({
+          message: "Subcategory import completed",
+          created,
+          skipped,
+          errors,
+        });
+      } catch (err) {
+        res.status(500).json({ message: "Import failed", error: err.message });
+      }
+    });
+};
+
+// SAMPLE CSV DOWNLOAD
+exports.downloadSampleSubCategoryCSV = (req, res) => {
+  const sample = [
+    {
+      name: "Residential Moving",
+      category: "Packers and Movers",
+      description: "Home relocation services",
+    },
+    {
+      name: "AC Installation",
+      category: "AC Repair",
+      description: "New AC installation",
+    },
+    {
+      name: "Bridal Makeup",
+      category: "Beauty Salon",
+      description: "Wedding makeup services",
+    },
+  ];
+
+  const csv = [
+    "name,category,description",
+    ...sample.map((r) => `"${r.name}","${r.category}","${r.description}"`),
+  ].join("\n");
+
+  res.header("Content-Type", "text/csv");
+  res.attachment("sample-subcategories.csv");
+  res.send(csv);
+};

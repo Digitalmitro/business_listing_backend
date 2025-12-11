@@ -92,7 +92,20 @@ const BusinessSchema = new Schema(
     businessSummary: { type: String },
     createdAt: { type: Date, default: Date.now },
     updatedAt: { type: Date, default: Date.now },
-    subscriptionActive: { type: Boolean, default: false },
+    subscription: {
+      packageId: { type: Schema.Types.ObjectId, ref: "PricingPackage", default: null },
+      packageName: { type: String, default: "Free" },
+      subscriptionId: { type: String, default: null }, // Razorpay/PayPal subscription ID
+      orderId: { type: String, default: null },       // For one-time payments
+      startDate: { type: Date },
+      endDate: { type: Date },
+      status: {
+        type: String,
+        enum: ["active", "inactive", "canceled", "pending"],
+        default: "inactive"
+      },
+      paymentGateway: { type: String, enum: ["razorpay", "paypal"], default: null },
+    },
     kyc: {
       country: { type: String, enum: ["USA", "Europe", "India"] },
       documents: { type: Map, of: String, default: {} },

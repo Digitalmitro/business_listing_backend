@@ -1,14 +1,37 @@
-const express = require('express');
-const { createTopBannerCategory, getAllTopBannerCategories } = require('../controllers/topBannerCategoryController');
-// const { upload } = require('../config/multerConfig');
-const { upload }=require("../config/Cloudinary")
-
+// routes/topBannerRoutes.js
+const express = require("express");
 const router = express.Router();
+const {
+  createTopBannerCategory,
+  getAllTopBannerCategories,
+  updateTopBannerCategory,
+  deleteTopBannerCategory,
+} = require("../controllers/topBannerCategoryController");
+const { authMiddleware } = require("../middlewares/authMiddleware");
+const { upload } = require("../config/multerConfig"); 
 
-// Route to create a new top banner category
-router.post('/top-banner-category', upload.single('image'), createTopBannerCategory);
+// PUBLIC - Get all active top banner categories
+router.get("/top-banner-category", getAllTopBannerCategories);
 
-// Route to get all top banner categories
-router.get('/top-banner-category', getAllTopBannerCategories);
+// ADMIN ONLY
+router.post(
+  "/top-banner-category",
+  authMiddleware,
+  upload.single("image"),
+  createTopBannerCategory
+);
+
+router.put(
+  "/top-banner-category/:id",
+  authMiddleware,
+  upload.single("image"), // Optional image update
+  updateTopBannerCategory
+);
+
+router.delete(
+  "/top-banner-category/:id",
+  authMiddleware,
+  deleteTopBannerCategory
+);
 
 module.exports = router;
