@@ -1582,7 +1582,7 @@ exports.getAllBusiness = async (req, res) => {
       { $skip: skip },
       { $limit: Number(limit) },
 
-      // === POPULATE CATEGORY NAMES ===
+      // === POPULATE CATEGORY NAMES (FIXED) ===
       {
         $lookup: {
           from: "categories",
@@ -1596,6 +1596,7 @@ exports.getAllBusiness = async (req, res) => {
           category: {
             $map: {
               input: "$category",
+              as: "catId",
               in: {
                 $let: {
                   vars: {
@@ -1604,7 +1605,7 @@ exports.getAllBusiness = async (req, res) => {
                         {
                           $filter: {
                             input: "$categoryDetails",
-                            cond: { $eq: ["$$this._id", "$$this"] },
+                            cond: { $eq: ["$$this._id", "$$catId"] },
                           },
                         },
                         0,
@@ -1612,8 +1613,8 @@ exports.getAllBusiness = async (req, res) => {
                     },
                   },
                   in: {
-                    _id: "$$this",
-                    name: "$$catDetail.name",
+                    _id: "$$catId",
+                    name: { $ifNull: ["$$catDetail.name", "Unknown Category"] },
                   },
                 },
               },
@@ -1623,7 +1624,7 @@ exports.getAllBusiness = async (req, res) => {
       },
       { $unset: "categoryDetails" },
 
-      // === POPULATE SUBCATEGORY NAMES ===
+      // === POPULATE SUBCATEGORY NAMES (FIXED) ===
       {
         $lookup: {
           from: "subcategories",
@@ -1637,6 +1638,7 @@ exports.getAllBusiness = async (req, res) => {
           subCategory: {
             $map: {
               input: "$subCategory",
+              as: "subId",
               in: {
                 $let: {
                   vars: {
@@ -1645,7 +1647,7 @@ exports.getAllBusiness = async (req, res) => {
                         {
                           $filter: {
                             input: "$subCategoryDetails",
-                            cond: { $eq: ["$$this._id", "$$this"] },
+                            cond: { $eq: ["$$this._id", "$$subId"] },
                           },
                         },
                         0,
@@ -1653,8 +1655,10 @@ exports.getAllBusiness = async (req, res) => {
                     },
                   },
                   in: {
-                    _id: "$$this",
-                    name: "$$subDetail.name",
+                    _id: "$$subId",
+                    name: {
+                      $ifNull: ["$$subDetail.name", "Unknown Subcategory"],
+                    },
                   },
                 },
               },
