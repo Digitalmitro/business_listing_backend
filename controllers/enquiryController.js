@@ -1,12 +1,12 @@
 // controllers/enquiryController.js
+
 const Enquiry = require("../models/Enquiry");
 
-// CREATE ENQUIRY — FROM TOPLIST SIDEBAR (Now accepts location + businessId)
+// CREATE ENQUIRY — Already perfect
 exports.createEnquiry = async (req, res) => {
   try {
     const { name, phone, interest, location, businessId } = req.body;
 
-    // Validation
     if (
       !name ||
       !phone ||
@@ -20,7 +20,6 @@ exports.createEnquiry = async (req, res) => {
       });
     }
 
-    // Clean & validate phone
     const cleanPhone = phone.toString().replace(/\D/g, "").slice(-10);
     if (cleanPhone.length !== 10) {
       return res.status(400).json({
@@ -29,19 +28,16 @@ exports.createEnquiry = async (req, res) => {
       });
     }
 
-    // Clean interests
     const cleanedInterests = interest
       .map((i) => i.toString().trim())
       .filter(Boolean);
 
-    // Create enquiry with location and businessId
     const newEnquiry = new Enquiry({
       name: name.trim(),
       phone: cleanPhone,
       interest: cleanedInterests,
       location: location?.trim() || "Unknown",
-      businessId: businessId || null, // ← Now handles businessId (can be null if not provided)
-      categoryId: null,
+      businessId: businessId || null,
       source: businessId
         ? "Business Profile Enquiry"
         : "TopList - Get Free List Form",
@@ -61,12 +57,12 @@ exports.createEnquiry = async (req, res) => {
     console.error("Create Enquiry Error:", error);
     return res.status(500).json({
       success: false,
-      message: "Server error. Please try again later.",
+      message: "Server error",
     });
   }
 };
 
-// GET ALL ENQUIRIES — FOR ADMIN PANEL (Now includes location, status, businessId)
+// GET ALL ENQUIRIES — Admin Only
 exports.getAllEnquiry = async (req, res) => {
   try {
     const enquiries = await Enquiry.find({})
@@ -94,19 +90,15 @@ exports.getAllEnquiry = async (req, res) => {
 exports.resolveEnquiry = async (req, res) => {
   try {
     const enquiry = await Enquiry.findById(req.params.id);
-
-    if (!enquiry) {
-      return res.status(404).json({
-        success: false,
-        message: "Enquiry not found",
-      });
-    }
+    if (!enquiry)
+      return res
+        .status(404)
+        .json({ success: false, message: "Enquiry not found" });
 
     if (enquiry.status === "resolved") {
-      return res.status(400).json({
-        success: false,
-        message: "Enquiry already resolved",
-      });
+      return res
+        .status(400)
+        .json({ success: false, message: "Already resolved" });
     }
 
     enquiry.status = "resolved";
@@ -115,39 +107,53 @@ exports.resolveEnquiry = async (req, res) => {
 
     return res.status(200).json({
       success: true,
-      message: "Enquiry marked as resolved",
+      message: "Enquiry resolved",
       enquiry,
     });
   } catch (error) {
-    console.error("Resolve Enquiry Error:", error);
-    return res.status(500).json({
-      success: false,
-      message: "Server error",
-    });
+    return res.status(500).json({ success: false, message: "Server error" });
   }
 };
 
-// DELETE ENQUIRY — FOR ADMIN
+// DELETE ENQUIRY — Admin
 exports.deleteEnquiry = async (req, res) => {
   try {
     const enquiry = await Enquiry.findByIdAndDelete(req.params.id);
+    if (!enquiry)
+      return res.status(404).json({ success: false, message: "Not found" });
 
-    if (!enquiry) {
-      return res.status(404).json({
+    return res.status(200).json({ success: true, message: "Deleted" });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+
+// NEW API — Get Enquiries for a Specific Business (Owner View)
+exports.getEnquiriesByBusinessId = async (req, res) => {
+  try {
+    const { businessId } = req.params;
+
+    if (!businessId) {
+      return res.status(400).json({
         success: false,
-        message: "Enquiry not found",
+        message: "businessId is required",
       });
     }
 
+    const enquiries = await Enquiry.find({ businessId })
+      .sort({ createdAt: -1 })
+      .select("name phone email message location interest status createdAt");
+
     return res.status(200).json({
       success: true,
-      message: "Enquiry deleted successfully",
+      count: enquiries.length,
+      enquiries,
     });
   } catch (error) {
-    console.error("Delete Enquiry Error:", error);
+    console.error("Get Business Enquiries Error:", error);
     return res.status(500).json({
       success: false,
-      message: "Server error",
+      message: "Failed to fetch business enquiries",
     });
   }
 };
