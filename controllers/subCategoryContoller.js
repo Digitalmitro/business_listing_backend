@@ -271,7 +271,9 @@ exports.getPopularSearches = async (req, res) => {
 };
 
 exports.importSubCategoriesFromCSV = async (req, res) => {
-  if (!req.file) return res.status(400).json({ message: "CSV file required" });
+  if (!req.file) {
+    return res.status(400).json({ message: "CSV file required" });
+  }
 
   const filePath = req.file.path;
   const results = [];
@@ -282,6 +284,12 @@ exports.importSubCategoriesFromCSV = async (req, res) => {
     .on("data", (data) => results.push(data))
     .on("end", async () => {
       try {
+        // GET HIGHEST CURRENT ID
+        const latestSubCat = await SubCategory.findOne()
+          .sort({ id: -1 })
+          .select("id");
+        let nextId = latestSubCat && latestSubCat.id ? latestSubCat.id + 1 : 1;
+
         let created = 0;
         let skipped = 0;
 
@@ -323,9 +331,11 @@ exports.importSubCategoriesFromCSV = async (req, res) => {
             .toLowerCase()
             .replace(/[^a-z0-9\s-]/g, "")
             .replace(/\s+/g, "-")
-            .replace(/-+/g, "-");
+            .replace(/-+/g, "-")
+            .trim();
 
           const subCat = new SubCategory({
+            id: nextId++, // AUTO INCREMENT ID
             name,
             slug,
             category: category._id,
@@ -337,16 +347,24 @@ exports.importSubCategoriesFromCSV = async (req, res) => {
           created++;
         }
 
+        // Delete uploaded file
         fs.unlinkSync(filePath);
 
         res.json({
+          success: true,
           message: "Subcategory import completed",
           created,
           skipped,
-          errors,
+          totalImported: created,
+          errors: errors.length > 0 ? errors : null,
         });
       } catch (err) {
-        res.status(500).json({ message: "Import failed", error: err.message });
+        console.error("Import Error:", err);
+        res.status(500).json({
+          success: false,
+          message: "Import failed",
+          error: err.message,
+        });
       }
     });
 };

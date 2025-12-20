@@ -92,9 +92,9 @@ exports.forgotPassword = async (req, res) => {
     const { email, otp, password } = req.body;
 
     if (!email || !otp || !password) {
-      return res
-        .status(400)
-        .json({ message: "Please provide email, OTP, and new password" });
+      return res.status(400).json({ 
+        message: "Please provide email, OTP, and new password" 
+      });
     }
 
     const user = await User.findOne({ email });
@@ -103,23 +103,40 @@ exports.forgotPassword = async (req, res) => {
       return res.status(404).json({ message: "Email does not exist" });
     }
 
-    if (user.otp === otp && moment().isBefore(moment(user.otpExpiration))) {
-      // Hash the new password
-      const hashedPassword = await bcrypt.hash(password, 10);
-
-      // Update password
-      user.password = hashedPassword;
-      user.otp = undefined;
-      user.otpExpiration = undefined;
-
-      await user.save();
-
-      res.status(200).json({ message: "Password updated successfully" });
-    } else {
-      res.status(400).json({ message: "Invalid or expired OTP" });
+    // OTP Validation
+    if (String(user.otp) !== String(otp)) {
+      return res.status(400).json({ message: "Invalid OTP" });
     }
+
+    if (!user.otpExpiration || moment().isAfter(moment(user.otpExpiration))) {
+      return res.status(400).json({ message: "OTP has expired" });
+    }
+
+    // CRITICAL FIX: Use updateOne to bypass pre-save hook
+    const hashedPassword = await bcrypt.hash(password, 12); // Match model rounds
+
+    await User.updateOne(
+      { _id: user._id },
+      {
+        $set: {
+          password: hashedPassword,
+        },
+        $unset: {
+          otp: "",
+          otpExpiration: "",
+        },
+      }
+    );
+
+    return res.status(200).json({ 
+      success: true,
+      message: "Password reset successfully! You can now login." 
+    });
   } catch (error) {
-    res.status(500).json({ message: "Internal server error" });
+    console.error("Forgot Password Error:", error);
+    return res.status(500).json({ 
+      message: "Server error. Please try again." 
+    });
   }
 };
 
