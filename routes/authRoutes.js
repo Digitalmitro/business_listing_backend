@@ -2,7 +2,7 @@
 const express = require("express");
 const router = express.Router();
 const { authMiddleware } = require("../middlewares/authMiddleware.js");
-const upload = require("../middlewares/uploadMiddleware");
+const { upload } = require("../config/multerConfig");
 const {
   register,
   login,

@@ -24,7 +24,7 @@ const userSchema = new mongoose.Schema(
     ],
     phone: { type: String, trim: true },
     dob: { type: Date },
-    maritalStatus: { type: String, enum: ["Single", "Married"] },
+    maritalStatus: { type: String, enum: ["single", "married", "divorced"] },
     city: { type: String },
     area: { type: String },
     pincode: { type: String },

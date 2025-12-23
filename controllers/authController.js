@@ -234,10 +234,9 @@ exports.updateUserProfile = async (req, res) => {
   try {
     const updates = req.body;
 
-    if (req.files.image) {
-      // iconUrl = `${req.protocol}://${req.get('host')}/uploads/${req.file.filename}`;
+    if (req.files && req.files.image) {
       const iconUpload = req.files.image[0];
-      updates.userImage = iconUpload.location;
+      updates.userImage = iconUpload.filename;
     }
     const updatedUser = await User.findByIdAndUpdate(userId, updates, {
       new: true,
