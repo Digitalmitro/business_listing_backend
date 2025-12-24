@@ -482,7 +482,8 @@ exports.getBusinessById = async (req, res) => {
     // Fetch business with populated fields
     const business = await Business.findById(id)
       .populate("category")
-      .populate("subCategory");
+      .populate("subCategory")
+      .lean();
 
     if (!business) {
       return res.status(404).json({
@@ -624,7 +625,7 @@ exports.getBusinessById = async (req, res) => {
       success: true,
       message: "Business fetched successfully",
       business: {
-        ...updatedBusiness.toObject(),
+        ...updatedBusiness.toObject({ flattenMaps: true }),
         offerCount: offersWithService.length,
         offers: offersWithService, // ← Full offer details for frontend
       },
