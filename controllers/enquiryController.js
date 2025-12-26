@@ -1,11 +1,11 @@
-// controllers/enquiryController.js
-
 const Enquiry = require("../models/Enquiry");
+const Business = require("../models/Business");
+const { notifyAdmins, createNotification } = require("../helpers/notificationHelper");
 
-// CREATE ENQUIRY — Already perfect
+// CREATE ENQUIRY
 exports.createEnquiry = async (req, res) => {
   try {
-    const { name, phone, interest, location, businessId } = req.body;
+    const { name, phone, interest, location, businessId, userId: providedUserId } = req.body;
 
     if (
       !name ||
@@ -38,6 +38,7 @@ exports.createEnquiry = async (req, res) => {
       interest: cleanedInterests,
       location: location?.trim() || "Unknown",
       businessId: businessId || null,
+      userId: providedUserId || null,
       source: businessId
         ? "Business Profile Enquiry"
         : "TopList - Get Free List Form",
@@ -45,6 +46,27 @@ exports.createEnquiry = async (req, res) => {
     });
 
     await newEnquiry.save();
+
+    // 1. Notify Admins
+    await notifyAdmins({
+      title: "New Enquiry Received",
+      description: `${name} has submitted a new enquiry regarding ${cleanedInterests.join(", ")}.`,
+      link: "/enquiry", // Assuming admin dashboard path
+    });
+
+    // 2. Notify Business Owner (if applicable)
+    if (businessId) {
+      const business = await Business.findById(businessId);
+      if (business && business.userId) {
+        await createNotification({
+          recipientId: business.userId,
+          recipientType: "User",
+          title: "New Enquiry for Your Business",
+          description: `You have received a new enquiry from ${name} for ${business.businessName}.`,
+          link: `/business-enquiries/${businessId}`, // Assuming dashboard path
+        });
+      }
+    }
 
     return res.status(201).json({
       success: true,
@@ -69,7 +91,7 @@ exports.getAllEnquiry = async (req, res) => {
       .sort({ createdAt: -1 })
       .limit(500)
       .select(
-        "name phone interest location businessId source status createdAt resolvedAt"
+        "name phone interest location businessId source status createdAt resolvedAt userId"
       );
 
     return res.status(200).json({
@@ -104,6 +126,17 @@ exports.resolveEnquiry = async (req, res) => {
     enquiry.status = "resolved";
     enquiry.resolvedAt = new Date();
     await enquiry.save();
+
+    // 3. Notify User who submitted the enquiry (if they are registered)
+    if (enquiry.userId) {
+      await createNotification({
+        recipientId: enquiry.userId,
+        recipientType: "User",
+        title: "Enquiry Resolved",
+        description: `Your enquiry regarding ${enquiry.interest.join(", ")} has been marked as resolved.`,
+        link: "/user/enquiries", // Assuming user dashboard path
+      });
+    }
 
     return res.status(200).json({
       success: true,

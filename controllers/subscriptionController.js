@@ -3,6 +3,7 @@ const PricingPackage = require("../models/PricingPackage");
 const paypal = require("@paypal/checkout-server-sdk");
 const crypto = require("crypto");
 const fetch = require("node-fetch");
+const { notifyAdmins } = require("../helpers/notificationHelper");
 
 // PayPal Environment
 const environment =
@@ -223,6 +224,13 @@ const handlePayPalWebhook = async (req, res) => {
           ?.next_billing_time
           ? new Date(payload.resource.billing_info.next_billing_time)
           : null;
+
+        // Notify Admins
+        await notifyAdmins({
+          title: "New Package Purchased (PayPal)",
+          description: `${business.businessName} has purchased the ${business.subscription.packageName} package.`,
+          link: "/admin/subscriptions",
+        });
         break;
       case "BILLING.SUBSCRIPTION.CANCELLED":
       case "BILLING.SUBSCRIPTION.EXPIRED":
@@ -335,15 +343,23 @@ const verifyRazorpayWebhook = async (req, res) => {
     event.event === "subscription.charged" ||
     event.event === "subscription.activated"
   ) {
-    await Business.updateOne(
-      { "subscription.razorpaySubscriptionId": subId },
-      {
-        "subscription.status": "active",
-        "subscription.nextBillingDate": new Date(
-          Date.now() + 30 * 24 * 60 * 60 * 1000
-        ),
-      }
-    );
+    const business = await Business.findOne({
+      "subscription.razorpaySubscriptionId": subId,
+    });
+    if (business) {
+      business.subscription.status = "active";
+      business.subscription.nextBillingDate = new Date(
+        Date.now() + 30 * 24 * 60 * 60 * 1000
+      );
+      await business.save();
+
+      // Notify Admins
+      await notifyAdmins({
+        title: "New Package Purchased (Razorpay)",
+        description: `${business.businessName} has purchased the ${business.subscription.packageName} package.`,
+        link: "/admin/subscriptions",
+      });
+    }
   }
 
   if (["subscription.cancelled", "subscription.halted"].includes(event.event)) {

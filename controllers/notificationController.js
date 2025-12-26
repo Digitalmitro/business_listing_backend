@@ -3,7 +3,7 @@ const User = require('../models/User');
 
 exports.createGlobalNotification = async (req, res) => {
   try {
-    const { title, description } = req.body;
+    const { title, description, link, image } = req.body;
     if (!title || !description) {
       return res.status(400).json({ message: "Title and description are required" });
     }
@@ -13,21 +13,16 @@ exports.createGlobalNotification = async (req, res) => {
       return res.status(404).json({ message: "No users found" });
     }
     const notifications = userIds.map((userId) => ({
-      updateOne: {
-        filter: { userId, title, description },
-        update: {
-          $setOnInsert: {
-            userId,
-            title,
-            description,
-            read: false,
-            createdAt: new Date(),
-          },
-        },
-        upsert: true,
-      },
+      recipientId: userId,
+      recipientModel: 'User',
+      title,
+      description,
+      link: link || "",
+      image: image || "https://via.placeholder.com/50",
+      read: false,
+      createdAt: new Date(),
     }));
-    await Notification.bulkWrite(notifications);
+    await Notification.insertMany(notifications);
     res.status(200).json({ message: "Notifications sent to all users" });
   } catch (error) {
     console.error("Error creating global notification:", error);
@@ -37,15 +32,43 @@ exports.createGlobalNotification = async (req, res) => {
 
 exports.getNotifications = async (req, res) => {
   try {
-    const userId = req.user.id;
-    const notifications = await Notification.find({ userId })
+    const recipientId = req.user.id;
+    const notifications = await Notification.find({ recipientId })
       .sort({ createdAt: -1 }); 
-    if (!notifications.length) {
-      return res.status(404).json({ message: 'No notifications found.' });
-    }
+    
     res.status(200).json(notifications);
   } catch (error) {
     console.error('Error fetching notifications:', error);
     res.status(500).json({ message: 'Internal server error' });
+  }
+};
+
+exports.markAsRead = async (req, res) => {
+  try {
+    const { notificationId } = req.params;
+    await Notification.findByIdAndUpdate(notificationId, { read: true });
+    res.status(200).json({ success: true, message: "Notification marked as read" });
+  } catch (error) {
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+
+exports.markAllAsRead = async (req, res) => {
+  try {
+    const recipientId = req.user.id;
+    await Notification.updateMany({ recipientId, read: false }, { read: true });
+    res.status(200).json({ success: true, message: "All notifications marked as read" });
+  } catch (error) {
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+
+exports.deleteNotification = async (req, res) => {
+  try {
+    const { notificationId } = req.params;
+    await Notification.findByIdAndDelete(notificationId);
+    res.status(200).json({ success: true, message: "Notification deleted" });
+  } catch (error) {
+    res.status(500).json({ success: false, message: "Server error" });
   }
 };

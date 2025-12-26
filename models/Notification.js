@@ -1,10 +1,16 @@
 const mongoose = require('mongoose');
 
 const NotificationSchema = new mongoose.Schema({
-  userId: {
+  recipientId: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'User', 
-    required: true
+    required: true,
+    refPath: 'recipientModel'
+  },
+  recipientModel: {
+    type: String,
+    required: true,
+    enum: ['User', 'Admin'],
+    default: 'User'
   },
   image: {
     type: String, 
@@ -17,6 +23,10 @@ const NotificationSchema = new mongoose.Schema({
   description: {
     type: String, 
     required: true
+  },
+  link: {
+    type: String,
+    default: ""
   },
   read: {
     type: Boolean, 

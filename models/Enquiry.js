@@ -15,6 +15,12 @@ const EnquirySchema = new mongoose.Schema({
     ref: "Category",
     required: false,
   },
+  
+  userId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "User",
+    required: false,
+  },
 
   interest: {
     type: [String],
