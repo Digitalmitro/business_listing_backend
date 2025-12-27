@@ -4,10 +4,17 @@ const jwt = require('jsonwebtoken');
 
 // Admin Schema
 const AdminSchema = new mongoose.Schema({
+  name: {
+    type: String,
+    required: true,
+    trim: true,
+  },
   email: {
     type: String,
     required: true,
     unique: true,
+    lowercase: true,
+    trim: true,
   },
   password: {
     type: String,
@@ -19,13 +26,15 @@ const AdminSchema = new mongoose.Schema({
     default: 'admin',
     required: true
   },
+  permissions: {
+    type: [String], // Array of module keys they can access
+    default: []
+  },
   otp:{
     type: String,
-  
   },
   otpExpiration:{
     type: Date,
-   
   }
 }, { timestamps: true });
 
