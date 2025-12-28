@@ -12,21 +12,47 @@ const redisConnection = new Redis({
 const emailQueue = new Queue('email-campaigns', {
   connection: redisConnection,
   defaultJobOptions: {
-    attempts: 3, // Retry failed jobs up to 3 times
-    backoff: { type: 'exponential', delay: 1000 }, // Exponential backoff
+    attempts: 3,
+    backoff: { type: 'exponential', delay: 1000 },
   },
 });
 
+const welcomeQueue = new Queue('welcome-email', {
+  connection: redisConnection,
+  defaultJobOptions: {
+    attempts: 3,
+    backoff: { type: 'exponential', delay: 1000 },
+  },
+});
+
+const purchaseQueue = new Queue('purchase-email', {
+  connection: redisConnection,
+  defaultJobOptions: {
+    attempts: 3,
+    backoff: { type: 'exponential', delay: 1000 },
+  },
+});
+
+const queues = {
+  'email-campaigns': emailQueue,
+  'welcome-email': welcomeQueue,
+  'purchase-email': purchaseQueue,
+};
+
 /**
- * Adds a job to the BullMQ queue.
- * @param {string} queueName - Name of the queue (e.g., 'email-campaigns').
- * @param {object} jobData - Data for the job (e.g., campaignId, userIds, senderEmailId).
- * @param {object} options - Job options (e.g., delay, jobId).
+ * Adds a job to the specified BullMQ queue.
+ * @param {string} queueName - Name of the queue.
+ * @param {object} jobData - Data for the job.
+ * @param {object} options - Job options.
  * @returns {Promise<object>} - Promise resolving to the added job.
  */
 async function addJob(queueName, jobData, options = {}) {
   try {
-    const job = await emailQueue.add(queueName, jobData, {
+    const queue = queues[queueName];
+    if (!queue) {
+      throw new Error(`Queue ${queueName} not found`);
+    }
+    const job = await queue.add(queueName, jobData, {
       ...options,
       jobId: options.jobId || `${queueName}-${Date.now()}-${Math.random().toString(36).substring(2)}`,
     });
@@ -38,4 +64,4 @@ async function addJob(queueName, jobData, options = {}) {
   }
 }
 
-module.exports = { emailQueue, redisConnection, addJob };
+module.exports = { emailQueue, welcomeQueue, purchaseQueue, redisConnection, addJob };

@@ -10,6 +10,7 @@ const momentTz = require("moment-timezone");
 const { default: mongoose } = require("mongoose");
 const ExcelJS = require("exceljs");
 const Business = require("../models/Business");
+const { addJob } = require("../utils/queue");
 
 function generateOTPWithExpiration() {
   const otp = Math.floor(100000 + Math.random() * 900000).toString();
@@ -51,6 +52,10 @@ exports.register = async (req, res) => {
       country: country || "Unknown",
     });
     await user.save();
+
+    // Add welcome email job to queue
+    await addJob("welcome-email", { userId: user._id });
+
     res.status(201).json({ message: "User registered successfully" });
   } catch (error) {
     if (error.name === "ValidationError") {
@@ -194,6 +199,9 @@ exports.googleLogin = async (req, res) => {
         userImage: picture,
       });
       await user.save();
+
+      // Add welcome email job to queue for new SSO users
+      await addJob("welcome-email", { userId: user._id });
     }
 
     // Generate JWT token

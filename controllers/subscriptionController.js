@@ -4,6 +4,7 @@ const paypal = require("@paypal/checkout-server-sdk");
 const crypto = require("crypto");
 const fetch = require("node-fetch");
 const { notifyAdmins } = require("../helpers/notificationHelper");
+const { addJob } = require("../utils/queue");
 
 // PayPal Environment
 const environment =
@@ -231,6 +232,14 @@ const handlePayPalWebhook = async (req, res) => {
           description: `${business.businessName} has purchased the ${business.subscription.packageName} package.`,
           link: "/admin/subscriptions",
         });
+
+        // Add purchase email job to queue
+        await addJob("purchase-email", {
+          businessId: business._id,
+          packageDetails: {
+            packageName: business.subscription.packageName,
+          },
+        });
         break;
       case "BILLING.SUBSCRIPTION.CANCELLED":
       case "BILLING.SUBSCRIPTION.EXPIRED":
@@ -358,6 +367,14 @@ const verifyRazorpayWebhook = async (req, res) => {
         title: "New Package Purchased (Razorpay)",
         description: `${business.businessName} has purchased the ${business.subscription.packageName} package.`,
         link: "/admin/subscriptions",
+      });
+
+      // Add purchase email job to queue
+      await addJob("purchase-email", {
+        businessId: business._id,
+        packageDetails: {
+          packageName: business.subscription.packageName,
+        },
       });
     }
   }

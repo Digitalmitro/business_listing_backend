@@ -1,6 +1,8 @@
 require('dotenv').config();
 const mongoose = require('mongoose');
 const emailWorker = require('./workers/emailWorker');
+const welcomeWorker = require('./workers/welcomeWorker');
+const purchaseWorker = require('./workers/purchaseWorker');
 
 async function startWorker() {
   try {
@@ -10,23 +12,27 @@ async function startWorker() {
     });
     console.log('Connected to MongoDB');
 
-    // Initialize the email worker (BullMQ starts processing jobs automatically)
-    console.log('Email worker started');
+    // Initialize the workers (BullMQ starts processing jobs automatically)
+    console.log('Email workers started: email-campaigns, welcome-email, purchase-email');
 
     // Keep the process alive to handle BullMQ jobs
     process.on('SIGINT', async () => {
-      console.log('Shutting down email worker...');
+      console.log('Shutting down email workers...');
       await emailWorker.close();
+      await welcomeWorker.close();
+      await purchaseWorker.close();
       await mongoose.connection.close();
-      console.log('Worker and MongoDB connection closed');
+      console.log('Workers and MongoDB connection closed');
       process.exit(0);
     });
 
     process.on('SIGTERM', async () => {
-      console.log('Shutting down email worker...');
+      console.log('Shutting down email workers...');
       await emailWorker.close();
+      await welcomeWorker.close();
+      await purchaseWorker.close();
       await mongoose.connection.close();
-      console.log('Worker and MongoDB connection closed');
+      console.log('Workers and MongoDB connection closed');
       process.exit(0);
     });
   } catch (error) {
