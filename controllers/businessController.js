@@ -10,6 +10,7 @@ const Offer = require("../models/Offer");
 const toObjectIdArray = require("../helpers/convertToObjectId");
 const csv = require("csv-parser");
 const fs = require("fs");
+const { addJob } = require("../utils/queue");
 
 ///this api use combine for admin and users
 exports.createBusiness = async (req, res) => {
@@ -996,6 +997,20 @@ exports.updateBusiness = async (req, res) => {
         runValidators: true,
       }
     );
+
+    // Send KYC notification if status changed and is not pending
+    if (
+      updates.kyc &&
+      updates.kyc.status &&
+      updates.kyc.status !== "pending" &&
+      updates.kyc.status !== business.kyc?.status
+    ) {
+      await addJob("kyc-email", {
+        businessId: updatedBusiness._id,
+        status: updates.kyc.status,
+        rejectionReason: updates.kyc.rejectionReason,
+      });
+    }
 
     return res.status(200).json({
       message: "Business updated successfully",

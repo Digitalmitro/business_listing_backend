@@ -33,10 +33,28 @@ const purchaseQueue = new Queue('purchase-email', {
   },
 });
 
+const claimQueue = new Queue('claim-email', {
+  connection: redisConnection,
+  defaultJobOptions: {
+    attempts: 3,
+    backoff: { type: 'exponential', delay: 1000 },
+  },
+});
+
+const kycQueue = new Queue('kyc-email', {
+  connection: redisConnection,
+  defaultJobOptions: {
+    attempts: 3,
+    backoff: { type: 'exponential', delay: 1000 },
+  },
+});
+
 const queues = {
   'email-campaigns': emailQueue,
   'welcome-email': welcomeQueue,
   'purchase-email': purchaseQueue,
+  'claim-email': claimQueue,
+  'kyc-email': kycQueue,
 };
 
 /**
@@ -64,4 +82,4 @@ async function addJob(queueName, jobData, options = {}) {
   }
 }
 
-module.exports = { emailQueue, welcomeQueue, purchaseQueue, redisConnection, addJob };
+module.exports = { emailQueue, welcomeQueue, purchaseQueue, claimQueue, kycQueue, redisConnection, addJob };

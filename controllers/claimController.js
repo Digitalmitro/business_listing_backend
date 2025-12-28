@@ -2,7 +2,8 @@ const Claim = require("../models/Claim");
 const Business = require("../models/Business");
 const fs = require("fs").promises;
 const path = require("path");
-const mongoose = require("mongoose")
+const mongoose = require("mongoose");
+const { addJob } = require("../utils/queue");
 
 const submitClaim = async (req, res) => {
   try {
@@ -140,6 +141,12 @@ const updateClaimStatus = async (req, res) => {
     claim.status = status;
     claim.updatedAt = Date.now();
     await claim.save();
+
+    // Add claim email job to queue
+    await addJob("claim-email", {
+      claimId: claim._id,
+      status: claim.status,
+    });
 
     if (status === "approved") {
       const { _id, ...claimData } = claim.toObject(); // exclude _id
