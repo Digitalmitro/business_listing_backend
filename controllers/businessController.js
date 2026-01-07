@@ -236,8 +236,9 @@ exports.importBusinessFromCSV = async (req, res) => {
               continue;
             }
 
-            const latitude = parseFloat(latStr);
-            const longitude = parseFloat(lonStr);
+            const latitude = latStr ? parseFloat(latStr) : 0;
+            const longitude = lonStr ? parseFloat(lonStr) : 0;
+            const needsGeocoding = !latStr || !lonStr;
             const rating = parseFloat(ratingStr) || 0;
             const totalReviews = parseInt(reviewsStr) || 0;
 
@@ -349,9 +350,15 @@ exports.importBusinessFromCSV = async (req, res) => {
                 claimed: false,
                 isBlocked: false,
                 profileCompletionScore: 70,
+                needsGeocoding: needsGeocoding,
               });
 
               await business.save();
+
+              if (needsGeocoding) {
+                await addJob("geocoding-batch", { businessId: business._id });
+              }
+
               created++;
             }
           } catch (err) {

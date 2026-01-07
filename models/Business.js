@@ -154,6 +154,14 @@ const BusinessSchema = new Schema(
       min: 0,
       max: 100,
     },
+    needsGeocoding: {
+      type: Boolean,
+      default: false,
+    },
+    geocodingError: {
+      type: String,
+      default: null,
+    },
   },
   { timestamps: true }
 );
