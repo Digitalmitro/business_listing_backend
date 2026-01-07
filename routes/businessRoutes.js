@@ -18,6 +18,7 @@ const {
   calculateProfileCompletionScore,
   updateBusinessStatus,
   importBusinessFromCSV,
+  downloadSampleCSV,
 } = require("../controllers/businessController");
 const {
   getOffers,
@@ -99,5 +100,7 @@ router.post(
   upload.single("csvFile"),
   importBusinessFromCSV
 );
+
+router.get("/download-sample-csv", downloadSampleCSV);
 
 module.exports = router;

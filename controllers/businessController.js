@@ -372,6 +372,23 @@ exports.importBusinessFromCSV = async (req, res) => {
     });
 };
 
+exports.downloadSampleCSV = async (req, res) => {
+  try {
+    const csvContent = [
+      "Business Name,address,Website,Email,Phone,Rating,Reviews,Latitude,Longitude,Category",
+      'DigitalMitro,"123 Tech St;Salt Lake;Kolkata;West Bengal;700091",https://digitalmitro.com,info@digitalmitro.com,9876543210,4.5,120,22.5726,88.3639,Marketing Agency',
+      'Urban Citations,"45 High St;Central;London;Greater London;WC1 1AA",https://urbancitations.com,contact@urbancitations.com,+44207123456,4.8,350,51.5074,-0.1278,Business Service'
+    ].join("\n");
+
+    res.setHeader("Content-Type", "text/csv");
+    res.setHeader("Content-Disposition", "attachment; filename=sample_business_import.csv");
+    res.status(200).send(csvContent);
+  } catch (error) {
+    console.error("Error generating sample CSV:", error);
+    res.status(500).json({ message: "Failed to generate sample CSV" });
+  }
+};
+
 ///this api use combnie for admin and users
 exports.getBusiness = async (req, res) => {
   try {
