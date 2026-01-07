@@ -225,6 +225,7 @@ exports.importBusinessFromCSV = async (req, res) => {
               Latitude: latStr,
               Longitude: lonStr,
               Category: rawCategory,
+              Subcategory: rawSubCategory,
             } = row;
 
             if (!businessName || !address || !latStr || !lonStr) {
@@ -252,8 +253,8 @@ exports.importBusinessFromCSV = async (req, res) => {
             const cleanedPhone = phone?.replace(/\D/g, "");
             const mobile = cleanedPhone ? [cleanedPhone] : [];
 
-            // Find or create Category/Subcategory
-            const categoryText = rawCategory.replace("· ", "").trim();
+            // Find or create Category
+            const categoryText = rawCategory ? rawCategory.replace("· ", "").trim() : "Uncategorized";
             let categoryObj = await Category.findOne({
               name: { $regex: new RegExp(`^${categoryText}$`, "i") },
             });
@@ -262,21 +263,29 @@ exports.importBusinessFromCSV = async (req, res) => {
               categoryObj = await Category.create({ name: categoryText });
             }
 
-            // Subcategory = same as category text (as per your requirement)
+            // Find or create SubCategory
+            const subCategoryText = rawSubCategory ? rawSubCategory.trim() : categoryText;
             let subCategoryObj = await SubCategory.findOne({
-              name: categoryText,
+              name: { $regex: new RegExp(`^${subCategoryText}$`, "i") },
+              category: categoryObj._id
             });
+
             if (!subCategoryObj) {
               subCategoryObj = await SubCategory.create({
-                name: categoryText,
+                name: subCategoryText,
                 category: categoryObj._id,
               });
             }
 
-            // Check if business already exists (by name + city)
+            // Check if business already exists (by name + exact location)
+            const streetName = addressParts[0]?.trim() || "";
+            const pincode = addressParts[addressParts.length - 1]?.trim() || "";
+            
             let business = await Business.findOne({
               businessName: { $regex: new RegExp(`^${businessName}$`, "i") },
               "address.city": city,
+              "address.streetName": streetName,
+              "address.pincode": pincode
             });
 
             if (business) {
@@ -375,9 +384,9 @@ exports.importBusinessFromCSV = async (req, res) => {
 exports.downloadSampleCSV = async (req, res) => {
   try {
     const csvContent = [
-      "Business Name,address,Website,Email,Phone,Rating,Reviews,Latitude,Longitude,Category",
-      'DigitalMitro,"123 Tech St;Salt Lake;Kolkata;West Bengal;700091",https://digitalmitro.com,info@digitalmitro.com,9876543210,4.5,120,22.5726,88.3639,Marketing Agency',
-      'Urban Citations,"45 High St;Central;London;Greater London;WC1 1AA",https://urbancitations.com,contact@urbancitations.com,+44207123456,4.8,350,51.5074,-0.1278,Business Service'
+      "Business Name,address,Website,Email,Phone,Rating,Reviews,Latitude,Longitude,Category,Subcategory",
+      'DigitalMitro,"123 Tech St;Salt Lake;Kolkata;West Bengal;700091",https://digitalmitro.com,info@digitalmitro.com,9876543210,4.5,120,22.5726,88.3639,Marketing Agency,Digital Marketing',
+      'Urban Citations,"45 High St;Central;London;Greater London;WC1 1AA",https://urbancitations.com,contact@urbancitations.com,+44207123456,4.8,350,51.5074,-0.1278,Business Service,Local Listing'
     ].join("\n");
 
     res.setHeader("Content-Type", "text/csv");

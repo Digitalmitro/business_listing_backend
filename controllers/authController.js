@@ -11,6 +11,7 @@ const { default: mongoose } = require("mongoose");
 const ExcelJS = require("exceljs");
 const Business = require("../models/Business");
 const { addJob } = require("../utils/queue");
+const geocodingService = require("../services/geocodingService");
 
 function generateOTPWithExpiration() {
   const otp = Math.floor(100000 + Math.random() * 900000).toString();
@@ -376,21 +377,10 @@ exports.fetchUserLocation = async (req, res) => {
   }
 
   try {
-    const response = await axios.get(
-      "https://us1.locationiq.com/v1/reverse",
-      {
-        params: {
-          key: process.env.LOCATIONIQ_API_KEY,
-          lat,
-          lon,
-          format: "json"
-        }
-      }
-    );
-
-    return res.status(200).json(response.data);
+    const data = await geocodingService.reverseGeocode(lat, lon);
+    return res.status(200).json(data);
   } catch (error) {
-    console.error("Reverse geocoding error:", error.response?.data || error.message);
+    console.error("Reverse geocoding error:", error.message);
     res.status(500).json({ error: "Failed to reverse geocode" });
   }
 };
@@ -404,24 +394,13 @@ exports.fetchCoordinates = async (req, res) => {
       return res.status(400).json({ message: "Address is required" });
     }
 
-    const response = await axios.get(
-      "https://us1.locationiq.com/v1/search",
-      {
-        params: {
-          key: process.env.LOCATIONIQ_API_KEY,
-          q: address,
-          format: "json",
-          limit: 1,
-          addressdetails: 1
-        }
-      }
-    );
+    const results = await geocodingService.forwardGeocode(address);
 
-    if (!response.data.length) {
+    if (!results || !results.length) {
       return res.status(404).json({ message: "Address not found" });
     }
 
-    const result = response.data[0];
+    const result = results[0];
     const { lat, lon, display_name, address: addressDetails } = result;
 
     return res.json({
@@ -432,7 +411,7 @@ exports.fetchCoordinates = async (req, res) => {
     });
 
   } catch (error) {
-    console.error("Geocoding error:", error.response?.data || error.message);
+    console.error("Geocoding error:", error.message);
     res.status(500).json({ message: "Geocoding service unavailable" });
   }
 };
