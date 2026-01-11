@@ -8,6 +8,19 @@ const emailTemplateSchema = new mongoose.Schema({
     unique: true,
     trim: true,
   },
+  triggerType: {
+    type: String,
+    enum: [
+      "welcome",
+      "purchase",
+      "claim_approved",
+      "claim_rejected",
+      "kyc_approved",
+      "kyc_rejected",
+      "campaign",
+    ],
+    default: "campaign",
+  },
   subject: {
     type: String,
     required: true,

@@ -117,6 +117,28 @@ const deleteTemplate = async (req, res) => {
   }
 };
 
+// Upload an image for templates
+const uploadTemplateImage = async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ message: "Please upload an image." });
+    }
+
+    const host = req.get("host");
+    const protocol = req.protocol;
+    const imageUrl = `${protocol}://${host}/uploads/${req.file.filename}`;
+
+    res.status(200).json({
+      url: imageUrl,
+    });
+  } catch (error) {
+    console.error("Error uploading template image:", error);
+    res
+      .status(500)
+      .json({ message: "Failed to upload image", error: error.message });
+  }
+};
+
 // Add a new sender email
 const addSenderEmail = async (req, res) => {
   try {
@@ -705,6 +727,7 @@ module.exports = {
   getTemplateById,
   updateTemplate,
   deleteTemplate,
+  uploadTemplateImage,
   addSenderEmail,
   getSenderEmails,
   markSenderEmailAsSpam,

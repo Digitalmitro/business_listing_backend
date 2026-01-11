@@ -7,6 +7,7 @@ const {
   getTemplateById,
   updateTemplate,
   deleteTemplate,
+  uploadTemplateImage,
   addSenderEmail,
   getSenderEmails,
   markSenderEmailAsSpam,
@@ -21,9 +22,16 @@ const {
   unsubscribe,
   toggleSenderEmailStatus,
 } = require("../controllers/emailCampaignController");
+const { upload } = require("../config/multerConfig");
 
 // Email Template Routes
 router.post("/templates", authMiddleware, createTemplate);
+router.post(
+  "/templates/upload-image",
+  authMiddleware,
+  upload.single("image"),
+  uploadTemplateImage
+);
 router.get("/templates", authMiddleware, getTemplates);
 router.get("/templates/:id", authMiddleware, getTemplateById);
 router.put("/templates/:id", authMiddleware, updateTemplate);
