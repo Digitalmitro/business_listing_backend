@@ -21,6 +21,7 @@ const CategorySchema = new Schema({
   bgImage: {
     type: String,
     required: false,
+    default: "https://images.unsplash.com/photo-1557683311-eac922347aa1?q=80&w=1000&auto=format&fit=crop"
   },
   createdAt: {
     type: Date,

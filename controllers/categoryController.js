@@ -8,7 +8,7 @@ const csv = require("csv-parser");
 exports.createCategory = async (req, res) => {
   try {
     const { name, description } = req.body;
-    if (!name || !req.files.icon) {
+    if (!name || !req.files || !req.files.icon || !req.files.icon.length) {
       return res
         .status(400)
         .json({ message: "Name and icon image are required" });
@@ -23,24 +23,16 @@ exports.createCategory = async (req, res) => {
     //   bgImageUrl = bgImageUpload.location;
     // }
 
-    const iconUrl = await uploadToCloudinary(
-      req.files.icon[0].buffer,
-      "categoryIcon"
-    );
-    let bgImageUrl = null;
-    if (req.files.bgImage) {
-      bgImageUrl = await uploadToCloudinary(
-        req.files.bgImage[0].buffer,
-        "categoryBackgrounds"
-      );
-    }
+    const iconFile = req.files.icon[0];
+    const iconUrl = `${req.protocol}://${req.get("host")}/uploads/${iconFile.filename}`;
+
     const slug = name.toLowerCase().split(" ").join("-");
     const category = new Category({
       name,
-      description,
+      description: description ? description : " ", // Use space if empty
       iconUrl,
       slug,
-      bgImage: bgImageUrl,
+      // bgImage removed
     });
     await category.save();
 
@@ -71,8 +63,9 @@ exports.updateCategory = async (req, res) => {
       category.name = name;
     }
 
-    if (description) {
-      category.description = description;
+    // Update description if provided, or if explicitly sent as empty string (though UI removes it)
+    if (description !== undefined) {
+      category.description = description || " ";
     }
 
     if (slug) {
@@ -81,21 +74,11 @@ exports.updateCategory = async (req, res) => {
 
     // Update icon if provided
     if (req.files && req.files.icon) {
-      const iconUrl = await uploadToCloudinary(
-        req.files.icon[0].buffer,
-        "categoryIcon"
-      );
-      category.iconUrl = iconUrl;
+      const iconFile = req.files.icon[0];
+      category.iconUrl = `${req.protocol}://${req.get("host")}/uploads/${iconFile.filename}`;
     }
 
-    // Update background image if provided
-    if (req.files && req.files.bgImage) {
-      const bgImageUrl = await uploadToCloudinary(
-        req.files.bgImage[0].buffer,
-        "categoryBackgrounds"
-      );
-      category.bgImage = bgImageUrl;
-    }
+    // bgImage update login removed
 
     // Save the updated category
     await category.save();

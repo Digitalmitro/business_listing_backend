@@ -45,17 +45,25 @@ exports.createBusiness = async (req, res) => {
         .json({ message: "Latitude and longitude are required." });
     }
 
-    // Validate and convert categories and subCategories to ObjectId
-    const validCategories = businessData.category // Changed from businessData.categories
-      ? businessData.category
-          .filter((id) => mongoose.Types.ObjectId.isValid(id))
-          .map((id) => new mongoose.Types.ObjectId(id))
-      : [];
-    const validSubCategories = businessData.subCategory // Changed from businessData.subCategories
-      ? businessData.subCategory
-          .filter((id) => mongoose.Types.ObjectId.isValid(id))
-          .map((id) => new mongoose.Types.ObjectId(id))
-      : [];
+    // Normalize categories (handle 'categories' vs 'category' and object vs ID string)
+    let rawCategories = businessData.categories || businessData.category || [];
+    // If it's not an array, make it one (though it should be)
+    if (!Array.isArray(rawCategories)) rawCategories = [rawCategories];
+
+    const validCategories = rawCategories
+      .map((item) => (typeof item === "object" && item._id ? item._id : item))
+      .filter((id) => mongoose.Types.ObjectId.isValid(id))
+      .map((id) => new mongoose.Types.ObjectId(id));
+
+    // Normalize subCategories
+    let rawSubCategories =
+      businessData.subCategories || businessData.subCategory || [];
+    if (!Array.isArray(rawSubCategories)) rawSubCategories = [rawSubCategories];
+
+    const validSubCategories = rawSubCategories
+      .map((item) => (typeof item === "object" && item._id ? item._id : item))
+      .filter((id) => mongoose.Types.ObjectId.isValid(id))
+      .map((id) => new mongoose.Types.ObjectId(id));
 
     // Verify categories exist (since category is required)
     if (validCategories.length === 0) {
@@ -228,7 +236,7 @@ exports.importBusinessFromCSV = async (req, res) => {
               Subcategory: rawSubCategory,
             } = row;
 
-            if (!businessName || !address || !latStr || !lonStr) {
+            if (!businessName || !address) {
               errors.push(
                 `Missing required fields: ${businessName || "Unknown"}`
               );
@@ -391,9 +399,9 @@ exports.importBusinessFromCSV = async (req, res) => {
 exports.downloadSampleCSV = async (req, res) => {
   try {
     const csvContent = [
-      "Business Name,address,Website,Email,Phone,Rating,Reviews,Latitude,Longitude,Category,Subcategory",
-      'DigitalMitro,"123 Tech St;Salt Lake;Kolkata;West Bengal;700091",https://digitalmitro.com,info@digitalmitro.com,9876543210,4.5,120,22.5726,88.3639,Marketing Agency,Digital Marketing',
-      'Urban Citations,"45 High St;Central;London;Greater London;WC1 1AA",https://urbancitations.com,contact@urbancitations.com,+44207123456,4.8,350,51.5074,-0.1278,Business Service,Local Listing'
+      "Business Name,address,Website,Email,Phone,Category,Subcategory",
+      'DigitalMitro,"123 Tech St;Salt Lake;Kolkata;West Bengal;700091",https://digitalmitro.com,info@digitalmitro.com,9876543210,Marketing Agency,Digital Marketing',
+      'Urban Citations,"45 High St;Central;London;Greater London;WC1 1AA",https://urbancitations.com,contact@urbancitations.com,+44207123456,Business Service,Local Listing'
     ].join("\n");
 
     res.setHeader("Content-Type", "text/csv");

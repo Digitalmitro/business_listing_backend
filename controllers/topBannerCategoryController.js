@@ -8,13 +8,6 @@ exports.createTopBannerCategory = async (req, res) => {
     const { title, paragraph, bgColor, priority = 0, categoryId } = req.body;
 
     // Validation
-    if (!title?.trim() || !paragraph?.trim()) {
-      return res.status(400).json({
-        success: false,
-        message: "Title and paragraph are required",
-      });
-    }
-
     if (!categoryId || !mongoose.Types.ObjectId.isValid(categoryId)) {
       return res.status(400).json({
         success: false,
@@ -34,8 +27,8 @@ exports.createTopBannerCategory = async (req, res) => {
     }`;
 
     const newItem = new TopBannerCategory({
-      title: title.trim(),
-      paragraph: paragraph.trim(),
+      title: title ? title.trim() : undefined,
+      paragraph: paragraph ? paragraph.trim() : undefined,
       imageUrl,
       bgColor: bgColor || "#FF5733",
       priority: Number(priority),

@@ -1,11 +1,12 @@
 const Business = require("../models/Business");
 const TopBannerCategory = require("../models/TopBannerCategory");
+const PopularSearch = require("../models/PopularSearch");
 
 
 exports.getPopularSearches = async (req, res) => {
   try {
-    const services = await TopBannerCategory.find({ isActive: true })
-      .select("title paragraph imageUrl slug categoryId")
+    const services = await PopularSearch.find({ isActive: true })
+      .select("title imageUrl categoryId")
       .populate("categoryId", "name slug")
       .sort({ priority: -1 })
       .limit(8)

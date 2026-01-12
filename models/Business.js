@@ -8,7 +8,10 @@ const BusinessSchema = new Schema(
     description: { type: String },
     isBlocked: { type: Boolean, default: false },
     isAdmin: { type: Boolean, default: false },
-    businessLogo: { type: String },
+    businessLogo: { 
+      type: String, 
+      default: "https://img.icons8.com/fluency/100/000000/organization.png" 
+    },
     address: {
       blockName: { type: String },
       streetName: { type: String },
@@ -78,7 +81,10 @@ const BusinessSchema = new Schema(
         ref: "SubCategory",
       },
     ],
-    photos: [{ type: String }],
+    photos: {
+      type: [String],
+      default: ["https://images.unsplash.com/photo-1486406146926-c627a92ad1ab?q=80&w=1000&auto=format&fit=crop"]
+    },
     rating: { type: Number, default: 0 },
     totalReviews: { type: Number, default: 0 },
     verified: { type: Boolean, default: false },

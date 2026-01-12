@@ -17,6 +17,7 @@ const emailTemplateSchema = new mongoose.Schema({
       "claim_rejected",
       "kyc_approved",
       "kyc_rejected",
+      "enquiry_received",
       "campaign",
     ],
     default: "campaign",

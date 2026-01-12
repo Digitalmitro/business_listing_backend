@@ -1,6 +1,6 @@
-// routes/pricing.js
 const express = require("express");
 const router = express.Router();
+const { upload } = require("../config/multerConfig");
 const {
   getAllPackages,
   getPackageById,
@@ -8,6 +8,7 @@ const {
   updatePackage,
   deletePackage,
   togglePackageActive,
+  uploadFeatureIcon,
 } = require("../controllers/pricingController");
 const { authMiddleware } = require("../middlewares/authMiddleware"); // Assuming you have auth
 
@@ -20,5 +21,6 @@ router.post("/", authMiddleware, createPackage);
 router.put("/:id", authMiddleware, updatePackage);
 router.delete("/:id", authMiddleware, deletePackage);
 router.patch("/:id/toggle", authMiddleware, togglePackageActive);
+router.post("/upload-feature-icon", authMiddleware, upload.single("icon"), uploadFeatureIcon);
 
 module.exports = router;

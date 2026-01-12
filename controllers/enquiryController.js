@@ -1,6 +1,7 @@
 const Enquiry = require("../models/Enquiry");
 const Business = require("../models/Business");
 const { notifyAdmins, createNotification } = require("../helpers/notificationHelper");
+const { addJob } = require("../utils/queue");
 
 // CREATE ENQUIRY
 exports.createEnquiry = async (req, res) => {
@@ -64,6 +65,17 @@ exports.createEnquiry = async (req, res) => {
           title: "New Enquiry for Your Business",
           description: `You have received a new enquiry from ${name} for ${business.businessName}.`,
           link: `/business-enquiries/${businessId}`, // Assuming dashboard path
+        });
+
+        // 3. Queue Email to Business Owner
+        await addJob("enquiry-email", {
+          enquiry: {
+            name: newEnquiry.name,
+            phone: newEnquiry.phone,
+            interest: newEnquiry.interest,
+            location: newEnquiry.location,
+          },
+          businessId: business._id,
         });
       }
     }

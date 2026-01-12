@@ -48,6 +48,11 @@ const PricingPackageSchema = new Schema({
     },
     default: {}
   },
+  featureIcons: {
+    type: Map,
+    of: String,
+    default: {}
+  },
   isActive: {
     type: Boolean,
     default: true

@@ -19,10 +19,9 @@ exports.createSubCategory = async (req, res) => {
       return res.status(404).json({ message: "Category not found" });
     }
 
-    const iconUrl = await uploadToCloudinary(
-      req.file.buffer,
-      "subCategoryIcons"
-    );
+    const iconUrl = `${req.protocol}://${req.get("host")}/uploads/${
+      req.file.filename
+    }`;
 
     let id = 1;
 
@@ -235,7 +234,9 @@ exports.updateSubCategory = async (req, res) => {
 
     let iconUrl = subCategory.iconUrl;
     if (req.file) {
-      iconUrl = await uploadToCloudinary(req.file.buffer, "subCategoryIcons");
+      iconUrl = `${req.protocol}://${req.get("host")}/uploads/${
+        req.file.filename
+      }`;
     }
 
     subCategory.name = name || subCategory.name;

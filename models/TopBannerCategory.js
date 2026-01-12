@@ -5,7 +5,6 @@ const TopBannerCategorySchema = new mongoose.Schema(
   {
     title: {
       type: String,
-      required: true,
       trim: true,
     },
     paragraph: {
@@ -47,7 +46,7 @@ const TopBannerCategorySchema = new mongoose.Schema(
 
 // Auto-generate slug from title
 TopBannerCategorySchema.pre("save", function (next) {
-  if (this.isModified("title") || !this.slug) {
+  if (this.title && (this.isModified("title") || !this.slug)) {
     this.slug = this.title
       .toLowerCase()
       .trim()

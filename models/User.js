@@ -13,7 +13,10 @@ const userSchema = new mongoose.Schema(
       trim: true,
     },
     password: { type: String },
-    userImage: { type: String },
+    userImage: { 
+      type: String, 
+      default: "https://img.icons8.com/bubbles/100/000000/user.png" 
+    },
     isAgree: { type: Boolean, default: true },
     isSeller: { type: Boolean, default: false },
     businesses: [

@@ -26,6 +26,7 @@ const pricingRoutes = require("./routes/pricingRoutes");
 const subscriptionRoutes = require("./routes/subscriptionRoutes");
 const homeRoutes = require("./routes/homeRoutes");
 const blogRoutes = require("./routes/blogRoutes");
+const popularSearchRoutes = require("./routes/popularSearchRoutes");
 const fs = require("fs");
 const path = require("path");
 
@@ -81,6 +82,7 @@ app.use("/api/verticals", verticalRoutes);
 app.use("/api/subscription", subscriptionRoutes);
 app.use("/api/home", homeRoutes);
 app.use("/api/blog", blogRoutes);
+app.use("/api/popular-search", popularSearchRoutes);
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, (err) => {

@@ -35,7 +35,7 @@ const getPackageById = async (req, res) => {
 // @access  Private/Admin
 const createPackage = async (req, res) => {
   try {
-    const { name, priceINR, priceUSD, priceGBP, features } = req.body;
+    const { name, priceINR, priceUSD, priceGBP, features, featureIcons } = req.body;
 
     if (!name || !['Silver', 'Gold', 'Platinum', 'Diamond'].includes(name)) {
       return res.status(400).json({ message: "Valid package name required" });
@@ -51,7 +51,8 @@ const createPackage = async (req, res) => {
       priceINR: priceINR || 0,
       priceUSD: priceUSD || 0,
       priceGBP: priceGBP || 0,
-      features: features || {}
+      features: features || {},
+      featureIcons: featureIcons || {}
     });
 
     res.status(201).json({
@@ -69,7 +70,7 @@ const createPackage = async (req, res) => {
 // @access  Private/Admin
 const updatePackage = async (req, res) => {
   try {
-    const { name, priceINR, priceUSD, priceGBP, features, isActive } = req.body;
+    const { name, priceINR, priceUSD, priceGBP, features, featureIcons, isActive } = req.body;
 
     const package = await PricingPackage.findById(req.params.id);
     if (!package) {
@@ -89,6 +90,7 @@ const updatePackage = async (req, res) => {
     package.priceUSD = priceUSD !== undefined ? priceUSD : package.priceUSD;
     package.priceGBP = priceGBP !== undefined ? priceGBP : package.priceGBP;
     package.features = features || package.features;
+    package.featureIcons = featureIcons || package.featureIcons;
     package.isActive = isActive !== undefined ? isActive : package.isActive;
 
     const updatedPackage = await package.save();
@@ -144,6 +146,24 @@ const togglePackageActive = async (req, res) => {
   }
 };
 
+// @desc    Upload feature icon
+// @route   POST /api/pricing/upload-feature-icon
+// @access  Private/Admin
+const uploadFeatureIcon = async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ message: "No file uploaded" });
+    }
+    res.json({
+      message: "Icon uploaded successfully",
+      url: req.file.filename,
+    });
+  } catch (error) {
+    console.error("UPLOAD ICON ERROR:", error);
+    res.status(500).json({ message: "Server error" });
+  }
+};
+
 module.exports = {
   getAllPackages,
   getPackageById,
@@ -151,4 +171,5 @@ module.exports = {
   updatePackage,
   deletePackage,
   togglePackageActive,
+  uploadFeatureIcon,
 };
