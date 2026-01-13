@@ -420,9 +420,10 @@ exports.importBusinessFromCSV = async (req, res) => {
 exports.downloadSampleCSV = async (req, res) => {
   try {
     const csvContent = [
-      "Business Name,address,Website,Email,Phone,Category,Subcategory",
-      'DigitalMitro,"123 Tech St;Salt Lake;Kolkata;West Bengal;700091",https://digitalmitro.com,info@digitalmitro.com,9876543210,Marketing Agency,Digital Marketing',
-      'Urban Citations,"45 High St;Central;London;Greater London;WC1 1AA",https://urbancitations.com,contact@urbancitations.com,+44207123456,Business Service,Local Listing'
+      "Business Name,address,Website,Email,Phone,Category,Subcategory,Country",
+      'DigitalMitro,"123 Tech St; Salt Lake; Kolkata; West Bengal; 700091; India",https://digitalmitro.com,info@digitalmitro.com,9876543210,Marketing Agency,Digital Marketing,India',
+      'Urban Citations,"45 High St; Central; London; Greater London; WC1 1AA; United Kingdom",https://urbancitations.com,contact@urbancitations.com,+44207123456,Business Service,Local Listing,United Kingdom',
+      'Example Business,"789 Broadway; Manhattan; New York; NY; 10003; USA",https://example.com,hello@example.com,12125550199,Retail,Clothing,USA'
     ].join("\n");
 
     res.setHeader("Content-Type", "text/csv");
