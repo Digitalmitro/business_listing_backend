@@ -57,6 +57,14 @@ const geocodingQueue = new Queue('geocoding-batch', {
   },
 });
 
+const enquiryQueue = new Queue('enquiry-email', {
+  connection: redisConnection,
+  defaultJobOptions: {
+    attempts: 3,
+    backoff: { type: 'exponential', delay: 1000 },
+  },
+});
+
 const queues = {
   'email-campaigns': emailQueue,
   'welcome-email': welcomeQueue,
@@ -64,6 +72,7 @@ const queues = {
   'claim-email': claimQueue,
   'kyc-email': kycQueue,
   'geocoding-batch': geocodingQueue,
+  'enquiry-email': enquiryQueue,
 };
 
 /**
@@ -91,4 +100,4 @@ async function addJob(queueName, jobData, options = {}) {
   }
 }
 
-module.exports = { emailQueue, welcomeQueue, purchaseQueue, claimQueue, kycQueue, geocodingQueue, redisConnection, addJob };
+module.exports = { emailQueue, welcomeQueue, purchaseQueue, claimQueue, kycQueue, geocodingQueue, enquiryQueue, redisConnection, addJob };
