@@ -1,5 +1,6 @@
 const Notification = require('../models/Notification');
 const User = require('../models/User'); 
+const mongoose = require('mongoose');
 
 exports.createGlobalNotification = async (req, res) => {
   try {
@@ -81,7 +82,7 @@ exports.getNotificationCounts = async (req, res) => {
     const counts = await Notification.aggregate([
       { 
         $match: { 
-          recipientId: new require('mongoose').Types.ObjectId(recipientId), 
+          recipientId: new mongoose.Types.ObjectId(recipientId), 
           read: false 
         } 
       },
