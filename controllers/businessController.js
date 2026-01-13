@@ -11,6 +11,7 @@ const toObjectIdArray = require("../helpers/convertToObjectId");
 const csv = require("csv-parser");
 const fs = require("fs");
 const { addJob } = require("../utils/queue");
+const { notifyAdmins } = require("../helpers/notificationHelper");
 
 ///this api use combine for admin and users
 exports.createBusiness = async (req, res) => {
@@ -186,6 +187,14 @@ exports.createBusiness = async (req, res) => {
       user.isSeller = true;
       await user.save();
     }
+
+    // Notify Admins about new business
+    await notifyAdmins({
+      title: "New Business Listed",
+      description: `${savedBusiness.businessName} has been listed on the platform.`,
+      link: `/view-business/${savedBusiness._id}`,
+      category: "business",
+    });
 
     res.status(201).json({
       success: true,
@@ -1427,6 +1436,14 @@ exports.updateKYC = async (req, res) => {
       updates,
       { new: true }
     );
+
+    // Notify Admins about KYC submission
+    await notifyAdmins({
+      title: "KYC Submitted",
+      description: `New KYC documents submitted for ${updatedBusiness.businessName}.`,
+      link: `/view-business/${updatedBusiness._id}`,
+      category: "kyc",
+    });
 
     return res.status(200).json({
       message: "KYC documents updated successfully",

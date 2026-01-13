@@ -7,10 +7,12 @@ const {
   markAsRead,
   markAllAsRead,
   deleteNotification,
+  getNotificationCounts,
 } = require("../controllers/notificationController");
 
 // Route to get notifications for a user/admin
 router.get("/notifications", authMiddleware, getNotifications);
+router.get("/notification-counts", authMiddleware, getNotificationCounts);
 router.post("/create-notification", createGlobalNotification);
 router.put("/notifications/mark-read/:notificationId", authMiddleware, markAsRead);
 router.put("/notifications/mark-all-read", authMiddleware, markAllAsRead);

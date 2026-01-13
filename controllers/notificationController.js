@@ -72,3 +72,43 @@ exports.deleteNotification = async (req, res) => {
     res.status(500).json({ success: false, message: "Server error" });
   }
 };
+
+exports.getNotificationCounts = async (req, res) => {
+  try {
+    const recipientId = req.user.id;
+    
+    // Get unread counts grouped by category
+    const counts = await Notification.aggregate([
+      { 
+        $match: { 
+          recipientId: new require('mongoose').Types.ObjectId(recipientId), 
+          read: false 
+        } 
+      },
+      {
+        $group: {
+          _id: "$category",
+          count: { $sum: 1 }
+        }
+      }
+    ]);
+
+    // Convert to object format
+    const countsByCategory = counts.reduce((acc, item) => {
+      acc[item._id] = item.count;
+      return acc;
+    }, {});
+
+    // Calculate total
+    const total = counts.reduce((sum, item) => sum + item.count, 0);
+
+    res.status(200).json({ 
+      success: true, 
+      total,
+      counts: countsByCategory 
+    });
+  } catch (error) {
+    console.error('Error fetching notification counts:', error);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+};

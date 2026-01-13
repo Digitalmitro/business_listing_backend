@@ -4,6 +4,7 @@ const fs = require("fs").promises;
 const path = require("path");
 const mongoose = require("mongoose");
 const { addJob } = require("../utils/queue");
+const { notifyAdmins } = require("../helpers/notificationHelper");
 
 const submitClaim = async (req, res) => {
   try {
@@ -86,6 +87,14 @@ const submitClaim = async (req, res) => {
     });
 
     await claim.save();
+
+    // Notify Admins about business claim
+    await notifyAdmins({
+      title: "Business Claim Submitted",
+      description: `A new claim has been submitted for ${businessName} by ${req.user.full_name || "a user"}.`,
+      link: `/view-claim/${claim._id}`,
+      category: "claims",
+    });
 
     res.status(201).json({
       message: "Claim submitted successfully. Awaiting admin approval.",

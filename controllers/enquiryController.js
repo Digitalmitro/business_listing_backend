@@ -52,7 +52,8 @@ exports.createEnquiry = async (req, res) => {
     await notifyAdmins({
       title: "New Enquiry Received",
       description: `${name} has submitted a new enquiry regarding ${cleanedInterests.join(", ")}.`,
-      link: "/enquiry", // Assuming admin dashboard path
+      link: "/enquiry",
+      category: "enquiry",
     });
 
     // 2. Notify Business Owner (if applicable)

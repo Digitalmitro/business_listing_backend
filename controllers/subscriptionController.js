@@ -230,7 +230,8 @@ const handlePayPalWebhook = async (req, res) => {
         await notifyAdmins({
           title: "New Package Purchased (PayPal)",
           description: `${business.businessName} has purchased the ${business.subscription.packageName} package.`,
-          link: "/admin/subscriptions",
+          link: "/all-business",
+          category: "subscription",
         });
 
         // Add purchase email job to queue
@@ -366,7 +367,8 @@ const verifyRazorpayWebhook = async (req, res) => {
       await notifyAdmins({
         title: "New Package Purchased (Razorpay)",
         description: `${business.businessName} has purchased the ${business.subscription.packageName} package.`,
-        link: "/admin/subscriptions",
+        link: "/all-business",
+        category: "subscription",
       });
 
       // Add purchase email job to queue

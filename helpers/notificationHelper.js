@@ -8,6 +8,7 @@ const createNotification = async ({
   description,
   image = "",
   link = "",
+  category = "general",
 }) => {
   try {
     const notification = new Notification({
@@ -17,6 +18,7 @@ const createNotification = async ({
       description,
       image: image || "https://urbancitations.com/logo.png", // Fallback logo
       link,
+      category,
     });
     await notification.save();
     return notification;
@@ -25,7 +27,7 @@ const createNotification = async ({
   }
 };
 
-const notifyAdmins = async ({ title, description, link = "", image = "" }) => {
+const notifyAdmins = async ({ title, description, link = "", image = "", category = "general" }) => {
   try {
     const admins = await Admin.find({}, "_id");
     const notifications = admins.map((admin) => ({
@@ -35,6 +37,7 @@ const notifyAdmins = async ({ title, description, link = "", image = "" }) => {
       description,
       link,
       image: image || "https://urbancitations.com/logo.png",
+      category,
     }));
 
     if (notifications.length > 0) {
