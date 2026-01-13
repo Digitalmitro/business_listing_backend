@@ -234,6 +234,7 @@ exports.importBusinessFromCSV = async (req, res) => {
               Longitude: lonStr,
               Category: rawCategory,
               Subcategory: rawSubCategory,
+              Country: rowCountry // Check for explicit Country column
             } = row;
 
             if (!businessName || !address) {
@@ -250,13 +251,35 @@ exports.importBusinessFromCSV = async (req, res) => {
             const rating = parseFloat(ratingStr) || 0;
             const totalReviews = parseInt(reviewsStr) || 0;
 
-            // Extract city, state from address (basic parsing)
-            const addressParts = address.split(";");
-            const city =
-              addressParts[addressParts.length - 3]?.trim() || "Unknown City";
-            const state =
-              addressParts[addressParts.length - 2]?.trim() || "Unknown State";
-            const country = "United Kingdom"; // From your data
+            // Extract parts from address
+            // Format: Street; Area; City; State; Pincode; [Country]
+            const addressParts = address.split(";").map(p => p.trim());
+            const len = addressParts.length;
+
+            let streetName = addressParts[0] || "";
+            let area = len > 4 ? addressParts[1] : "";
+            let city = "Unknown City";
+            let state = "Unknown State";
+            let pincode = "000000";
+            let country = rowCountry || "Unknown Country";
+
+            if (len === 5) {
+              // Street; Area; City; State; Pincode
+              city = addressParts[2] || city;
+              state = addressParts[3] || state;
+              pincode = addressParts[4] || pincode;
+            } else if (len >= 6) {
+              // Street; Area; City; State; Pincode; Country
+              city = addressParts[2] || city;
+              state = addressParts[3] || state;
+              pincode = addressParts[4] || pincode;
+              country = rowCountry || addressParts[5] || country;
+            } else if (len === 3) {
+              // City; State; Country (Minimum fallback)
+              city = addressParts[0];
+              state = addressParts[1];
+              country = rowCountry || addressParts[2];
+            }
 
             // Clean phone
             const cleanedPhone = phone?.replace(/\D/g, "");
@@ -286,9 +309,7 @@ exports.importBusinessFromCSV = async (req, res) => {
               });
             }
 
-            // Check if business already exists (by name + exact location)
-            const streetName = addressParts[0]?.trim() || "";
-            const pincode = addressParts[addressParts.length - 1]?.trim() || "";
+            // Business already exists check
             
             let business = await Business.findOne({
               businessName: { $regex: new RegExp(`^${businessName}$`, "i") },
@@ -329,9 +350,9 @@ exports.importBusinessFromCSV = async (req, res) => {
                   city,
                   state,
                   country,
-                  area: addressParts[addressParts.length - 4]?.trim() || "",
-                  pincode: addressParts[addressParts.length - 1]?.trim() || "",
-                  streetName: addressParts[0]?.trim() || "",
+                  area,
+                  pincode,
+                  streetName,
                 },
                 location: {
                   type: "Point",
