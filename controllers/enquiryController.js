@@ -103,6 +103,7 @@ exports.getAllEnquiry = async (req, res) => {
     const enquiries = await Enquiry.find({})
       .sort({ createdAt: -1 })
       .limit(500)
+      .populate("businessId", "businessName")
       .select(
         "name phone interest location businessId source status createdAt resolvedAt userId"
       );

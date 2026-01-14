@@ -6,10 +6,14 @@ const {
   GetAppointment,
   CancelAppointment,
   RescheduleAppointment,
+  getAllAppointments,
+  getAppointmentsByBusinessId,
 } = require("../controllers/appointmentController");
 
 router.post("/appointment", authMiddleware, CreateAppointment);
 router.get("/appointment", authMiddleware, GetAppointment);
+router.get("/business/:businessId", authMiddleware, getAppointmentsByBusinessId);
+router.get("/all-appointments", authMiddleware, getAllAppointments);
 router.put(
   "/appointment/:appointmentId",
   authMiddleware,

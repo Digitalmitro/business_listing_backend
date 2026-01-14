@@ -1,7 +1,9 @@
 const moment = require("moment");
 const Appointment = require("../models/Appointment");
 const Business = require("../models/Business");
-const sendMail = require("../services/sendMail");
+const User = require("../models/User");
+const { notifyAdmins, createNotification } = require("../helpers/notificationHelper");
+const { addJob } = require("../utils/queue");
 
 exports.CreateAppointment = async (req, res) => {
   try {
@@ -47,82 +49,63 @@ exports.CreateAppointment = async (req, res) => {
 
     // Fetch business details
     const business = await Business.findById(businessId).select(
-      "businessName contact subscriptionActive"
+      "businessName contact subscriptionActive userId"
     );
     if (!business) {
       return res.status(404).json({ message: "Business not found." });
     }
 
+    // Fetch user details
+    const user = await User.findById(userId).select("full_name email");
+
     const formattedDate = moment(normalizedDate).format("dddd, MMMM Do YYYY");
-    const appointmentDetails = `
-      New Appointment Booked!
-      
-      Business: ${business.businessName}
-      Service: ${serviceName || "Not specified"}
-      Date: ${formattedDate}
-      Time: ${timeSlot}
-      Customer ID: ${userId}
-      Appointment ID: ${appointment._id}
-    `;
+    const replacements = {
+      "{{customer_name}}": user?.full_name || "Customer",
+      "{{business_name}}": business.businessName,
+      "{{service_name}}": serviceName || "Requested Service",
+      "{{appointment_date}}": formattedDate,
+      "{{appointment_time}}": timeSlot,
+      "{{appointment_id}}": appointment._id.toString(),
+    };
 
-    // Email Logic
+    // 1. Notify Admins
+    await notifyAdmins({
+      title: "New Booking Received",
+      description: `${user?.full_name || "A user"} has booked ${serviceName || "a service"} at ${business.businessName}.`,
+      link: "/bookings",
+      category: "booking",
+    });
+
+    // 2. Notify Business Owner
+    if (business.userId) {
+      await createNotification({
+        recipientId: business.userId,
+        recipientType: "User",
+        title: "New Appointment Booked",
+        description: `New booking for ${serviceName || "your service"} on ${formattedDate} at ${timeSlot}.`,
+        link: `/business-bookings/${businessId}`,
+        category: "booking",
+      });
+    }
+
+    // 3. Notify User
+    await createNotification({
+      recipientId: userId,
+      recipientType: "User",
+      title: "Booking Confirmed",
+      description: `Your booking at ${business.businessName} for ${serviceName || "service"} is confirmed.`,
+      link: `/bookinghistory`,
+      category: "booking",
+    });
+
+    // Queue Email Job
     if (business.subscriptionActive) {
-      // Premium Business - Full details to owner
-      await sendMail(
-        business.contact?.email?.[0],
-        "New Appointment Booked!",
-        `
-        Dear ${business.contact?.customerName || "Owner"},
-        
-        Great news! A customer has booked an appointment:
-        
-        ${appointmentDetails}
-        
-        Login to your dashboard to manage bookings.
-        
-        Regards,
-        Team DigitalMitro
-        `
-      );
-
-      // Admin notification
-      await sendMail(
-        "soumen.digitalmitro@gmail.com",
-        `[NEW BOOKING] ${business.businessName}`,
-        `New appointment created:\n\n${appointmentDetails}\n\nBusiness has active subscription.`
-      );
-    } else {
-      // Free Business - Hide customer details
-      await sendMail(
-        business.contact?.email?.[0],
-        "Customer Wants to Book – Upgrade Required!",
-        `
-        Dear ${business.contact?.customerName || "Owner"},
-        
-        A customer tried to book an appointment but your subscription is inactive.
-        
-        To receive bookings and grow your business, please upgrade your plan now!
-        
-        Click here to upgrade: https://yourapp.com/pricing
-        
-        Regards,
-        Team DigitalMitro
-        `
-      );
-
-      await sendMail(
-        "soumen.digitalmitro@gmail.com",
-        `[BLOCKED] Booking Attempt - Inactive Subscription`,
-        `
-        A customer tried to book but business has no active subscription.
-        
-        Business: ${business.businessName}
-        Date: ${formattedDate}
-        Time: ${timeSlot}
-        Service: ${serviceName || "N/A"}
-        Action Required: Follow up with business owner.
-        `
-      );
+      await addJob("booking-email", {
+        triggerType: "booking_confirmed",
+        userId,
+        businessId,
+        replacements,
+      });
     }
 
     return res.status(201).json({
@@ -153,6 +136,24 @@ exports.GetAppointment = async (req, res) => {
   }
 };
 
+exports.getAllAppointments = async (req, res) => {
+  try {
+    const appointments = await Appointment.find({})
+      .populate("businessId", "businessName contact")
+      .populate("userId", "full_name email phone")
+      .sort({ createdAt: -1 });
+
+    return res.status(200).json({
+      success: true,
+      count: appointments.length,
+      appointments,
+    });
+  } catch (error) {
+    console.error("Get All Appointments Error:", error);
+    return res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+
 exports.CancelAppointment = async (req, res) => {
   try {
     const { appointmentId } = req.params;
@@ -162,7 +163,7 @@ exports.CancelAppointment = async (req, res) => {
       { _id: appointmentId, userId },
       { status: "Canceled", updatedAt: Date.now() },
       { new: true }
-    ).populate("businessId", "businessName contact");
+    ).populate("businessId", "businessName contact userId");
 
     if (!appointment) {
       return res
@@ -172,25 +173,40 @@ exports.CancelAppointment = async (req, res) => {
 
     // Notify business owner
     const business = appointment.businessId;
-    if (business?.contact?.email?.[0]) {
-      await sendMail(
-        business.contact.email[0],
-        "Appointment Canceled",
-        `
-        Dear ${business.contact?.customerName || "Owner"},
-        
-        A customer has canceled their appointment:
-        
-        Service: ${appointment.serviceName}
-        Was scheduled for: ${moment(appointment.appointmentDate).format(
-          "dddd, MMMM Do YYYY"
-        )} at ${appointment.timeSlot}
-        
-        Regards,
-        Team DigitalMitro
-        `
-      );
+    if (business?.userId) {
+       await createNotification({
+        recipientId: business.userId,
+        recipientType: "User",
+        title: "Appointment Canceled",
+        description: `Booking for ${appointment.serviceName} was canceled by the customer.`,
+        link: `/business-bookings/${business._id}`,
+        category: "booking",
+      });
     }
+
+    // 2. Notify User
+    await createNotification({
+      recipientId: userId,
+      recipientType: "User",
+      title: "Booking Canceled",
+      description: `Your booking for ${appointment.serviceName} at ${business.businessName} has been canceled.`,
+      link: `/bookinghistory`,
+      category: "booking",
+    });
+
+    // 3. Queue Cancel Email
+    await addJob("booking-email", {
+      triggerType: "booking_canceled",
+      userId,
+      businessId: business._id,
+      replacements: {
+        "{{customer_name}}": appointment.userId?.full_name || "Customer",
+        "{{business_name}}": business.businessName,
+        "{{service_name}}": appointment.serviceName,
+        "{{appointment_date}}": moment(appointment.appointmentDate).format("dddd, MMMM Do YYYY"),
+        "{{appointment_time}}": appointment.timeSlot,
+      }
+    });
 
     return res.status(200).json({
       success: true,
@@ -217,7 +233,8 @@ exports.RescheduleAppointment = async (req, res) => {
     const oldAppointment = await Appointment.findOne({
       _id: appointmentId,
       userId,
-    });
+    }).populate("businessId");
+    
     if (!oldAppointment) {
       return res.status(404).json({ message: "Appointment not found" });
     }
@@ -234,7 +251,7 @@ exports.RescheduleAppointment = async (req, res) => {
 
     // Check if new slot is already taken
     const slotTaken = await Appointment.findOne({
-      businessId: oldAppointment.businessId,
+      businessId: oldAppointment.businessId._id,
       appointmentDate: normalizedNewDate,
       timeSlot,
       status: { $ne: "Canceled" },
@@ -267,29 +284,50 @@ exports.RescheduleAppointment = async (req, res) => {
     await newAppointment.save();
 
     // Notify business
-    const business = await Business.findById(oldAppointment.businessId);
-    if (business?.contact?.email?.[0]) {
-      await sendMail(
-        business.contact.email[0],
-        "Appointment Rescheduled",
-        `
-        Dear ${business.contact?.customerName || "Owner"},
-        
-        A customer has rescheduled their appointment:
-        
-        Service: ${newAppointment.serviceName}
-        New Date & Time: ${moment(normalizedNewDate).format(
-          "dddd, MMMM Do YYYY"
-        )} at ${timeSlot}
-        Old Slot: ${moment(oldAppointment.appointmentDate).format(
-          "dddd, MMMM Do YYYY"
-        )} at ${oldAppointment.timeSlot}
-        
-        Regards,
-        Team DigitalMitro
-        `
-      );
+    const business = oldAppointment.businessId;
+    const user = await User.findById(userId);
+
+    const formattedDate = moment(normalizedNewDate).format("dddd, MMMM Do YYYY");
+    const oldFormattedDate = moment(oldAppointment.appointmentDate).format("dddd, MMMM Do YYYY");
+
+    const replacements = {
+      "{{customer_name}}": user?.full_name || "Customer",
+      "{{business_name}}": business.businessName,
+      "{{service_name}}": newAppointment.serviceName,
+      "{{appointment_date}}": formattedDate,
+      "{{appointment_time}}": timeSlot,
+      "{{old_date}}": oldFormattedDate,
+      "{{old_time}}": oldAppointment.timeSlot,
+    };
+
+    if (business.userId) {
+      await createNotification({
+        recipientId: business.userId,
+        recipientType: "User",
+        title: "Appointment Rescheduled",
+        description: `Booking for ${newAppointment.serviceName} rescheduled to ${formattedDate} at ${timeSlot}.`,
+        link: `/business-bookings/${business._id}`,
+        category: "booking",
+      });
     }
+
+    // Notify User
+    await createNotification({
+      recipientId: userId,
+      recipientType: "User",
+      title: "Booking Rescheduled",
+      description: `Your booking at ${business.businessName} has been rescheduled to ${formattedDate}.`,
+      link: `/bookinghistory`,
+      category: "booking",
+    });
+
+    // Queue Reschedule Email
+    await addJob("booking-email", {
+      triggerType: "booking_rescheduled",
+      userId,
+      businessId: business._id,
+      replacements
+    });
 
     return res.status(200).json({
       success: true,
@@ -299,5 +337,28 @@ exports.RescheduleAppointment = async (req, res) => {
   } catch (error) {
     console.error("Reschedule Error:", error);
     return res.status(500).json({ message: "Server error during reschedule" });
+  }
+};
+
+exports.getAppointmentsByBusinessId = async (req, res) => {
+  try {
+    const { businessId } = req.params;
+    const userId = req.user.id;
+
+    // Verify ownership
+    const business = await Business.findOne({ _id: businessId, userId });
+    if (!business) {
+      return res.status(403).json({ message: "Unauthorized access to this business" });
+    }
+
+    const appointments = await Appointment.find({ businessId })
+      .populate("userId", "full_name email phone")
+      .sort({ appointmentDate: -1, createdAt: -1 })
+      .lean();
+
+    return res.status(200).json(appointments);
+  } catch (error) {
+    console.error("Get Business Appointments Error:", error);
+    return res.status(500).json({ message: "Failed to fetch business appointments" });
   }
 };

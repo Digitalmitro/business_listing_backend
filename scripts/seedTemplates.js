@@ -150,6 +150,120 @@ const templates = [
       </div>
     `,
   },
+  {
+    name: "Booking Confirmed (User)",
+    triggerType: "booking_confirmed_user",
+    subject: "Booking Confirmed - {{business_name}}",
+    body: `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: auto; padding: 20px; border: 1px solid #ddd; border-radius: 10px;">
+        <h2 style="color: #4CAF50;">Booking Confirmed!</h2>
+        <p>Hi {{recipient_name}},</p>
+        <p>Your booking for <strong>{{service_name}}</strong> at <strong>{{business_name}}</strong> has been confirmed.</p>
+        <div style="background-color: #f9f9f9; padding: 15px; border-radius: 5px; margin: 20px 0;">
+          <p style="margin: 5px 0;"><strong>Date:</strong> {{appointment_date}}</p>
+          <p style="margin: 5px 0;"><strong>Time:</strong> {{appointment_time}}</p>
+        </div>
+        <p>We look forward to seeing you!</p>
+        <br>
+        <p>Best Regards,<br>The {{business_name}} Team</p>
+      </div>
+    `,
+  },
+  {
+    name: "Booking Confirmed (Owner)",
+    triggerType: "booking_confirmed_owner",
+    subject: "New Appointment Booked - {{service_name}}",
+    body: `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: auto; padding: 20px; border: 1px solid #ddd; border-radius: 10px;">
+        <h2 style="color: #2196F3;">New Booking Received</h2>
+        <p>Hi {{recipient_name}},</p>
+        <p>A new appointment has been scheduled for your business <strong>{{business_name}}</strong>.</p>
+        <div style="background-color: #f9f9f9; padding: 15px; border-radius: 5px; margin: 20px 0;">
+          <p style="margin: 5px 0;"><strong>Customer:</strong> {{customer_name}}</p>
+          <p style="margin: 5px 0;"><strong>Service:</strong> {{service_name}}</p>
+          <p style="margin: 5px 0;"><strong>Date:</strong> {{appointment_date}}</p>
+          <p style="margin: 5px 0;"><strong>Time:</strong> {{appointment_time}}</p>
+        </div>
+        <div style="text-align: center; margin: 30px 0;">
+          <a href="{{frontend_url}}/dashboard" style="background-color: #2196F3; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; font-weight: bold;">View in Dashboard</a>
+        </div>
+        <p>Best Regards,<br>The UrbanCitations Team</p>
+      </div>
+    `,
+  },
+  {
+    name: "Booking Rescheduled (User)",
+    triggerType: "booking_rescheduled_user",
+    subject: "Booking Rescheduled - {{business_name}}",
+    body: `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: auto; padding: 20px; border: 1px solid #ddd; border-radius: 10px;">
+        <h2 style="color: #FF9800;">Booking Rescheduled</h2>
+        <p>Hi {{recipient_name}},</p>
+        <p>Your booking at <strong>{{business_name}}</strong> has been rescheduled.</p>
+        <div style="background-color: #f9f9f9; padding: 15px; border-radius: 5px; margin: 20px 0;">
+          <p style="margin: 5px 0;"><strong>New Date:</strong> {{appointment_date}}</p>
+          <p style="margin: 5px 0;"><strong>New Time:</strong> {{appointment_time}}</p>
+          <p style="margin: 5px 0; color: #666; font-size: 12px;">(Previously: {{old_date}} at {{old_time}})</p>
+        </div>
+        <p>If this time doesn't work for you, please contact the business directly.</p>
+        <br>
+        <p>Best Regards,<br>The {{business_name}} Team</p>
+      </div>
+    `,
+  },
+  {
+    name: "Booking Rescheduled (Owner)",
+    triggerType: "booking_rescheduled_owner",
+    subject: "Appointment Rescheduled - {{customer_name}}",
+    body: `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: auto; padding: 20px; border: 1px solid #ddd; border-radius: 10px;">
+        <h2 style="color: #FF9800;">Appointment Rescheduled</h2>
+        <p>Hi {{recipient_name}},</p>
+        <p>The appointment for <strong>{{customer_name}}</strong> has been rescheduled.</p>
+        <div style="background-color: #f9f9f9; padding: 15px; border-radius: 5px; margin: 20px 0;">
+          <p style="margin: 5px 0;"><strong>New Date:</strong> {{appointment_date}}</p>
+          <p style="margin: 5px 0;"><strong>New Time:</strong> {{appointment_time}}</p>
+        </div>
+        <p>Best Regards,<br>The UrbanCitations Team</p>
+      </div>
+    `,
+  },
+  {
+    name: "Booking Canceled (User)",
+    triggerType: "booking_canceled_user",
+    subject: "Booking Canceled - {{business_name}}",
+    body: `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: auto; padding: 20px; border: 1px solid #ddd; border-radius: 10px;">
+        <h2 style="color: #F44336;">Booking Canceled</h2>
+        <p>Hi {{recipient_name}},</p>
+        <p>Your booking at <strong>{{business_name}}</strong> for <strong>{{service_name}}</strong> has been canceled.</p>
+        <div style="background-color: #f9f9f9; padding: 15px; border-radius: 5px; margin: 20px 0;">
+          <p style="margin: 5px 0;"><strong>Date:</strong> {{appointment_date}}</p>
+          <p style="margin: 5px 0;"><strong>Time:</strong> {{appointment_time}}</p>
+        </div>
+        <p>If you'd like to book again, please visit our platform.</p>
+        <br>
+        <p>Best Regards,<br>The UrbanCitations Team</p>
+      </div>
+    `,
+  },
+  {
+    name: "Booking Canceled (Owner)",
+    triggerType: "booking_canceled_owner",
+    subject: "Appointment Canceled - {{customer_name}}",
+    body: `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: auto; padding: 20px; border: 1px solid #ddd; border-radius: 10px;">
+        <h2 style="color: #F44336;">Appointment Canceled</h2>
+        <p>Hi {{recipient_name}},</p>
+        <p>The appointment for <strong>{{customer_name}}</strong> at your business <strong>{{business_name}}</strong> has been canceled.</p>
+        <div style="background-color: #f9f9f9; padding: 15px; border-radius: 5px; margin: 20px 0;">
+          <p style="margin: 5px 0;"><strong>Date:</strong> {{appointment_date}}</p>
+          <p style="margin: 5px 0;"><strong>Time:</strong> {{appointment_time}}</p>
+        </div>
+        <p>Best Regards,<br>The UrbanCitations Team</p>
+      </div>
+    `,
+  },
 ];
 
 const seedTemplates = async () => {

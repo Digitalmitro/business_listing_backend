@@ -7,6 +7,7 @@ const claimWorker = require('./workers/claimWorker');
 const kycWorker = require('./workers/kycWorker');
 const geocodingWorker = require('./workers/geocodingWorker');
 const enquiryWorker = require('./workers/enquiryWorker');
+const bookingWorker = require('./workers/bookingWorker');
 
 async function startWorker() {
   try {
@@ -17,7 +18,7 @@ async function startWorker() {
     console.log('Connected to MongoDB');
 
     // Initialize the workers (BullMQ starts processing jobs automatically)
-    console.log('Email workers started: email-campaigns, welcome-email, purchase-email, claim-email, kyc-email, geocoding-batch, enquiry-email');
+    console.log('Email workers started: email-campaigns, welcome-email, purchase-email, claim-email, kyc-email, geocoding-batch, enquiry-email, booking-email');
 
     // Keep the process alive to handle BullMQ jobs
     process.on('SIGINT', async () => {
@@ -29,6 +30,7 @@ async function startWorker() {
       await kycWorker.close();
       await geocodingWorker.close();
       await enquiryWorker.close();
+      await bookingWorker.close();
       await mongoose.connection.close();
       console.log('Workers and MongoDB connection closed');
       process.exit(0);
@@ -43,6 +45,7 @@ async function startWorker() {
       await kycWorker.close();
       await geocodingWorker.close();
       await enquiryWorker.close();
+      await bookingWorker.close();
       await mongoose.connection.close();
       console.log('Workers and MongoDB connection closed');
       process.exit(0);
