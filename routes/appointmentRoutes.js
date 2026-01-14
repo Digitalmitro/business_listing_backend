@@ -12,7 +12,7 @@ const {
 
 router.post("/appointment", authMiddleware, CreateAppointment);
 router.get("/appointment", authMiddleware, GetAppointment);
-router.get("/business/:businessId", authMiddleware, getAppointmentsByBusinessId);
+router.get("/appointment/business/:businessId", authMiddleware, getAppointmentsByBusinessId);
 router.get("/all-appointments", authMiddleware, getAllAppointments);
 router.put(
   "/appointment/:appointmentId",

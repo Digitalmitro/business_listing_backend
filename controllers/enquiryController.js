@@ -21,11 +21,11 @@ exports.createEnquiry = async (req, res) => {
       });
     }
 
-    const cleanPhone = phone.toString().replace(/\D/g, "").slice(-10);
-    if (cleanPhone.length !== 10) {
+    const cleanPhone = phone.toString().replace(/\D/g, "");
+    if (cleanPhone.length < 7 || cleanPhone.length > 15) {
       return res.status(400).json({
         success: false,
-        message: "Please enter a valid 10-digit Indian mobile number.",
+        message: "Please enter a valid phone number.",
       });
     }
 
@@ -104,6 +104,7 @@ exports.getAllEnquiry = async (req, res) => {
       .sort({ createdAt: -1 })
       .limit(500)
       .populate("businessId", "businessName")
+      .populate("userId", "country")
       .select(
         "name phone interest location businessId source status createdAt resolvedAt userId"
       );
@@ -189,7 +190,8 @@ exports.getEnquiriesByBusinessId = async (req, res) => {
 
     const enquiries = await Enquiry.find({ businessId })
       .sort({ createdAt: -1 })
-      .select("name phone email message location interest status createdAt");
+      .populate("userId", "country")
+      .select("name phone email message location interest status createdAt userId");
 
     return res.status(200).json({
       success: true,

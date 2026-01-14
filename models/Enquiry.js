@@ -42,7 +42,7 @@ const EnquirySchema = new mongoose.Schema({
     type: String,
     required: true,
     trim: true,
-    match: [/^\d{10}$/, "Please enter a valid 10-digit phone number"],
+    // match: [/^\d{10,15}$/, "Please enter a valid phone number"], // Relaxed for global use
   },
 
   location: {

@@ -140,7 +140,7 @@ exports.getAllAppointments = async (req, res) => {
   try {
     const appointments = await Appointment.find({})
       .populate("businessId", "businessName contact")
-      .populate("userId", "full_name email phone")
+      .populate("userId", "full_name email phone country")
       .sort({ createdAt: -1 });
 
     return res.status(200).json({
@@ -352,7 +352,7 @@ exports.getAppointmentsByBusinessId = async (req, res) => {
     }
 
     const appointments = await Appointment.find({ businessId })
-      .populate("userId", "full_name email phone")
+      .populate("userId", "full_name email phone country")
       .sort({ appointmentDate: -1, createdAt: -1 })
       .lean();
 
