@@ -372,11 +372,27 @@ exports.deleteById = async (req, res) => {
 exports.fetchUserLocation = async (req, res) => {
   const { lat, lon } = req.query;
 
-  if (!lat || !lon) {
-    return res.status(400).json({ error: "lat and lon are required" });
-  }
-
   try {
+    if (!lat || !lon) {
+      // Fallback to IP-based detection if GPS coordinates are missing
+      const ip = req.headers["x-forwarded-for"] || req.socket.remoteAddress || "";
+      const ipClean = ip.split(",")[0].trim();
+      
+      const ipResponse = await axios.get(`http://ip-api.com/json/${ipClean}`);
+      if (ipResponse.data && ipResponse.data.status === "success") {
+        return res.status(200).json({
+          address: {
+            country: ipResponse.data.country,
+            country_code: ipResponse.data.countryCode,
+            state: ipResponse.data.regionName,
+            city: ipResponse.data.city,
+            postcode: ipResponse.data.zip
+          }
+        });
+      }
+      return res.status(400).json({ error: "Location coordinates or valid IP required" });
+    }
+
     const data = await geocodingService.reverseGeocode(lat, lon);
     return res.status(200).json(data);
   } catch (error) {

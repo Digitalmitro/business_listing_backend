@@ -19,9 +19,11 @@ const getStaticPageByKey = async (req, res) => {
   try {
     const seo = await PageSEO.findOne({ pageKey: req.params.pageKey });
     if (!seo) {
-      return res.status(404).json({
-        message: "Page not found",
-        fallback: getFallbackSEO(req.params.pageKey),
+      // Return 200 with fallback instead of 404 to avoid frontend errors
+      return res.status(200).json({
+        pageKey: req.params.pageKey,
+        ...getFallbackSEO(req.params.pageKey),
+        isFallback: true
       });
     }
     res.json(seo);
@@ -32,9 +34,27 @@ const getStaticPageByKey = async (req, res) => {
 
 const updateStaticPageSEO = async (req, res) => {
   try {
+    const updates = { ...req.body };
+
+    if (req.files && req.files.bannerImage) {
+      updates.bannerImage = req.files.bannerImage[0].filename;
+    }
+
+    // Handle keywords if they come as a JSON string from FormData
+    if (typeof updates.keywords === "string") {
+      try {
+        updates.keywords = JSON.parse(updates.keywords);
+      } catch (e) {
+        updates.keywords = updates.keywords
+          .split(",")
+          .map((k) => k.trim())
+          .filter(Boolean);
+      }
+    }
+
     const updated = await PageSEO.findOneAndUpdate(
       { pageKey: req.params.pageKey },
-      req.body,
+      updates,
       { new: true, upsert: true }
     );
     res.json(updated);
@@ -130,7 +150,23 @@ const getBusinessSEO = async (req, res) => {
 
 const updateBusinessSEO = async (req, res) => {
   try {
-    const { title, description, keywords, ogImage, robots } = req.body.seo;
+    let seoPayload = req.body.seo;
+    if (typeof seoPayload === "string") {
+      seoPayload = JSON.parse(seoPayload);
+    }
+    const { title, description, keywords, ogImage, robots } = seoPayload;
+    
+    let finalKeywords = keywords;
+    if (typeof keywords === "string") {
+      try {
+        finalKeywords = JSON.parse(keywords);
+      } catch (e) {
+        finalKeywords = keywords
+          .split(",")
+          .map((k) => k.trim())
+          .filter(Boolean);
+      }
+    }
 
     const updated = await Business.findByIdAndUpdate(
       req.params.id,
@@ -138,7 +174,7 @@ const updateBusinessSEO = async (req, res) => {
         seo: {
           title,
           description,
-          keywords,
+          keywords: finalKeywords,
           ogImage,
           robots: robots || "index, follow",
         },
@@ -191,6 +227,12 @@ const getFallbackSEO = (pageKey) => {
     privacy: {
       title: "Privacy Policy",
       description: "We respect your privacy",
+    },
+    pricing: {
+      title: "Pricing Plans | UrbanCitations - Grow Your Business",
+      description: "Choose the perfect plan to boost your business visibility and connect with more customers.",
+      bannerTitle: "Choose Your <span>Growth Plan</span>",
+      bannerSubtitle: "Join <strong>5.9 Lakh+ businesses</strong> getting 10X more customers daily",
     },
   };
   return fallbacks[pageKey] || { title: "UrbanCitations", description: "" };

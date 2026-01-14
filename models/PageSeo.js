@@ -18,6 +18,7 @@ const PageSEOSchema = new mongoose.Schema({
       'contact',
       'explore',
       'more-categories',
+      'pricing',
       // add more as needed
     ]
   },
@@ -27,6 +28,10 @@ const PageSEOSchema = new mongoose.Schema({
   ogImage: { type: String },
   canonicalUrl: { type: String },
   robots: { type: String, default: 'index, follow' },
+  // CMS Content (Banner)
+  bannerTitle: { type: String },
+  bannerSubtitle: { type: String },
+  bannerImage: { type: String },
   isActive: { type: Boolean, default: true }
 }, { timestamps: true });
 

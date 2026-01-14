@@ -10,6 +10,7 @@ const {
   getBusinessSEO,
 } = require("../controllers/seoController");
 const { authMiddleware } = require("../middlewares/authMiddleware");
+const { upload } = require("../config/multerConfig");
 
 // ========================
 // STATIC PAGES SEO
@@ -22,7 +23,12 @@ router.get("/static", authMiddleware, getAllStaticPages);
 router.get("/static/:pageKey", getStaticPageByKey);
 
 // PUT /api/seo/static/home     → Update SEO for "home" (Admin only)
-router.put("/static/:pageKey", authMiddleware, updateStaticPageSEO);
+router.put(
+  "/static/:pageKey",
+  authMiddleware,
+  upload.fields([{ name: "bannerImage", maxCount: 1 }]),
+  updateStaticPageSEO
+);
 
 // ========================
 // BUSINESS SEO

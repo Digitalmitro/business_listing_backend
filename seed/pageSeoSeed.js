@@ -53,10 +53,11 @@ const seedPageSEO = async () => {
         description: "Find salons, spas, doctors, restaurants, gyms, and more in your city.",
       },
       {
-        pageKey: "business-profile",
-        title: "{businessName} - Best {category} in {area}, {city}",
-        description: "Book appointment at {businessName}. {address}. Rated {rating}/5 from {reviews} reviews.",
-        // Note: This is a template — frontend will replace {businessName}, etc.
+        pageKey: "pricing",
+        title: "Pricing Plans | UrbanCitations - Grow Your Business",
+        description: "Choose the perfect plan to boost your business visibility and connect with more customers.",
+        bannerTitle: "Choose Your <span>Growth Plan</span>",
+        bannerSubtitle: "Join <strong>5.9 Lakh+ businesses</strong> getting 10X more customers daily",
       },
     ];
 
