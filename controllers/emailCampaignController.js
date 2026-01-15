@@ -24,55 +24,81 @@ const processCampaignExcel = async (req, res) => {
 
     const workbook = new ExcelJS.Workbook();
     await workbook.xlsx.readFile(req.file.path);
-    const worksheet = workbook.getWorksheet(1);
     
+    // Attempt to get the first sheet reliably
+    const worksheet = workbook.getWorksheet(1) || workbook.worksheets[0];
+    
+    if (!worksheet) {
+      console.error("No worksheet found in file!");
+      return res.status(400).json({ message: "No worksheet found in Excel file" });
+    }
+
+    console.log(`Worksheet: "${worksheet.name}", Row Count: ${worksheet.actualRowCount}`);
+
+    const extractText = (val) => {
+      if (!val) return "";
+      if (typeof val === 'string') return val;
+      if (typeof val === 'object') {
+        // Handle Hyperlink object: { text: ..., hyperlink: ... }
+        if (val.text) return extractText(val.text);
+        // Handle RichText object: { richText: [...] }
+        if (val.richText && Array.isArray(val.richText)) {
+          return val.richText.map(rt => rt.text || "").join("");
+        }
+        return val.toString();
+      }
+      return String(val);
+    };
+
     const emails = [];
     worksheet.eachRow((row, rowNumber) => {
-      if (rowNumber === 1) return; // Skip header
-      
       const cell = row.getCell(1);
-      let emailValue = "";
+      const rawValue = cell.value;
+      console.log(`Row ${rowNumber} Raw Value:`, JSON.stringify(rawValue));
 
-      if (cell.value && typeof cell.value === 'object') {
-        if (cell.value.text) {
-          // Hyperlink object: { text: '...', hyperlink: '...' }
-          emailValue = typeof cell.value.text === 'string' ? cell.value.text : cell.value.text.toString();
-        } else if (cell.value.richText) {
-          // RichText object
-          emailValue = cell.value.richText.map(rt => rt.text || "").join("");
-        } else if (cell.value.result !== undefined) {
-          // Formula result
-          emailValue = cell.value.result.toString();
+      const emailValue = extractText(rawValue).trim().toLowerCase();
+      console.log(`Row ${rowNumber} Extracted: "${emailValue}" (Valid: ${validateEmail(emailValue)})`);
+
+      if (rowNumber === 1) {
+        if (validateEmail(emailValue)) {
+           console.log("Row 1 is a valid email, including it.");
+           emails.push(emailValue);
         } else {
-          // Generic object fallback
-          emailValue = cell.value.toString();
+           console.log("Row 1 skipped (treated as header).");
         }
-      } else if (cell.value !== null && cell.value !== undefined) {
-        emailValue = cell.value.toString();
-      }
-
-      const trimmedEmail = emailValue.trim().toLowerCase();
-      if (validateEmail(trimmedEmail)) {
-        emails.push(trimmedEmail);
+      } else {
+        if (validateEmail(emailValue)) {
+          emails.push(emailValue);
+        }
       }
     });
 
     const uniqueEmails = [...new Set(emails)];
+    console.log("Emails extracted from Excel:", uniqueEmails);
     
     // Cross-reference with Business model
-    const matches = await Business.find({
+    const query = {
       $or: [
         { "contact.email": { $in: uniqueEmails } },
         { "contact.contactDetails.emails": { $in: uniqueEmails } }
       ]
-    }).select("businessName contact.email contact.contactDetails.emails");
+    };
+    console.log("Database Query:", JSON.stringify(query, null, 2));
+
+    const matches = await Business.find(query).select("businessName contact.email contact.contactDetails.emails");
+    console.log(`Found ${matches.length} businesses matching these emails.`);
 
     const emailToBusinessName = {};
     matches.forEach(biz => {
-      const bizEmails = [
-        ...(biz.contact?.email || []),
-        ...(biz.contact?.contactDetails?.flatMap(cd => cd.emails) || [])
-      ].map(e => e.toLowerCase());
+      // Ensure email is treated as an array even if stored as string in legacy data
+      const primaryEmails = Array.isArray(biz.contact?.email) 
+        ? biz.contact.email 
+        : (biz.contact?.email ? [biz.contact.email] : []);
+
+      const contactEmails = biz.contact?.contactDetails?.flatMap(cd => cd.emails || []) || [];
+      
+      const bizEmails = [...primaryEmails, ...contactEmails].map(e => e.toLowerCase().trim());
+      console.log(`Mapping emails for "${biz.businessName}":`, bizEmails);
 
       uniqueEmails.forEach(e => {
         if (bizEmails.includes(e)) {
@@ -87,6 +113,7 @@ const processCampaignExcel = async (req, res) => {
     }));
 
     const matchCount = result.filter(r => r.businessName).length;
+    console.log("Final Mapping Result (Matches):", matchCount);
 
     res.status(200).json({
       totalEmails: uniqueEmails.length,
