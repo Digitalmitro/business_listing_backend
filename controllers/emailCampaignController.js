@@ -29,15 +29,31 @@ const processCampaignExcel = async (req, res) => {
     const emails = [];
     worksheet.eachRow((row, rowNumber) => {
       if (rowNumber === 1) return; // Skip header
-      const email = row.getCell(1).value;
-      if (email && typeof email === 'string' && validateEmail(email.trim())) {
-        emails.push(email.trim().toLowerCase());
-      } else if (email && typeof email === 'object' && email.text) {
-        // Handle cases where Excel might have a hyperlink object
-        const linkEmail = email.text.trim().toLowerCase();
-        if (validateEmail(linkEmail)) {
-          emails.push(linkEmail);
+      
+      const cell = row.getCell(1);
+      let emailValue = "";
+
+      if (cell.value && typeof cell.value === 'object') {
+        if (cell.value.text) {
+          // Hyperlink object: { text: '...', hyperlink: '...' }
+          emailValue = typeof cell.value.text === 'string' ? cell.value.text : cell.value.text.toString();
+        } else if (cell.value.richText) {
+          // RichText object
+          emailValue = cell.value.richText.map(rt => rt.text || "").join("");
+        } else if (cell.value.result !== undefined) {
+          // Formula result
+          emailValue = cell.value.result.toString();
+        } else {
+          // Generic object fallback
+          emailValue = cell.value.toString();
         }
+      } else if (cell.value !== null && cell.value !== undefined) {
+        emailValue = cell.value.toString();
+      }
+
+      const trimmedEmail = emailValue.trim().toLowerCase();
+      if (validateEmail(trimmedEmail)) {
+        emails.push(trimmedEmail);
       }
     });
 
