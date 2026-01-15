@@ -65,9 +65,24 @@ const emailWorker = new Worker(
         }))
       );
       for (const user of users) {
+        // Find associated business name if exists for registered user
+        let bizName = "User";
+        const associatedBiz = await Business.findOne({
+          $or: [
+            { "contact.email": user.email },
+            { "contact.contactDetails.emails": user.email }
+          ]
+        }).select("businessName");
+        
+        if (associatedBiz) {
+          bizName = associatedBiz.businessName;
+        }
+
         const html = templateDoc.body
-          .replace("{{full_name}}", user.full_name || "User")
-          .replace("{{email}}", user.email);
+          .replace(/{{full_name}}/g, user.full_name || "User")
+          .replace(/{{email}}/g, user.email)
+          .replace(/{{business_name}}/g, bizName);
+        
         const unsubscribeLink = `${process.env.FRONTEND_URL}/unsubscribe?userId=${user._id}&campaignId=${campaign._id}`;
         const result = await sendMail(
           fromEmail,
@@ -90,10 +105,15 @@ const emailWorker = new Worker(
       }
 
       // Send emails to customEmails
-      for (const email of campaign.recipients.customEmails || []) {
+      for (const item of campaign.recipients.customEmails || []) {
+        const email = typeof item === 'string' ? item : item.email;
+        const bizName = typeof item === 'string' ? "User" : (item.businessName || "User");
+
         const html = templateDoc.body
-          .replace("{{full_name}}", "User")
-          .replace("{{email}}", email);
+          .replace(/{{full_name}}/g, "User")
+          .replace(/{{email}}/g, email)
+          .replace(/{{business_name}}/g, bizName);
+        
         const unsubscribeLink = `${
           process.env.FRONTEND_URL
         }/unsubscribe?email=${encodeURIComponent(email)}&campaignId=${

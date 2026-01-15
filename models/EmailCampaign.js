@@ -12,7 +12,12 @@ const emailCampaignSchema = new mongoose.Schema({
   },
   recipients: {
     users: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
-    customEmails: [{ type: String }],
+    customEmails: [
+      {
+        email: { type: String, required: true },
+        businessName: { type: String },
+      },
+    ],
   },
   fromEmail: {
     type: String,

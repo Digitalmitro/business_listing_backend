@@ -1,14 +1,121 @@
 const mongoose = require("mongoose");
 const moment = require("moment-timezone");
+const ExcelJS = require("exceljs");
 const EmailTemplate = require("../models/EmailTemplate");
 const EmailCampaign = require("../models/EmailCampaign");
 const SenderEmail = require("../models/SenderEmail");
 const User = require("../models/User");
+const Business = require("../models/Business");
 const { sendMail } = require("../utils/nodemailer");
 const { emailQueue, addJob } = require("../utils/queue");
 
 // Validate email format
 const validateEmail = (email) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+
+/**
+ * Process uploaded Excel for campaign recipients
+ * Cross-references emails with Business model to find business names
+ */
+const processCampaignExcel = async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ message: "No file uploaded" });
+    }
+
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.readFile(req.file.path);
+    const worksheet = workbook.getWorksheet(1);
+    
+    const emails = [];
+    worksheet.eachRow((row, rowNumber) => {
+      if (rowNumber === 1) return; // Skip header
+      const email = row.getCell(1).value;
+      if (email && typeof email === 'string' && validateEmail(email.trim())) {
+        emails.push(email.trim().toLowerCase());
+      } else if (email && typeof email === 'object' && email.text) {
+        // Handle cases where Excel might have a hyperlink object
+        const linkEmail = email.text.trim().toLowerCase();
+        if (validateEmail(linkEmail)) {
+          emails.push(linkEmail);
+        }
+      }
+    });
+
+    const uniqueEmails = [...new Set(emails)];
+    
+    // Cross-reference with Business model
+    const matches = await Business.find({
+      $or: [
+        { "contact.email": { $in: uniqueEmails } },
+        { "contact.contactDetails.emails": { $in: uniqueEmails } }
+      ]
+    }).select("businessName contact.email contact.contactDetails.emails");
+
+    const emailToBusinessName = {};
+    matches.forEach(biz => {
+      const bizEmails = [
+        ...(biz.contact?.email || []),
+        ...(biz.contact?.contactDetails?.flatMap(cd => cd.emails) || [])
+      ].map(e => e.toLowerCase());
+
+      uniqueEmails.forEach(e => {
+        if (bizEmails.includes(e)) {
+          emailToBusinessName[e] = biz.businessName;
+        }
+      });
+    });
+
+    const result = uniqueEmails.map(email => ({
+      email,
+      businessName: emailToBusinessName[email] || ""
+    }));
+
+    const matchCount = result.filter(r => r.businessName).length;
+
+    res.status(200).json({
+      totalEmails: uniqueEmails.length,
+      matchCount,
+      recipients: result
+    });
+  } catch (error) {
+    console.error("Error processing campaign excel:", error);
+    res.status(500).json({ message: "Error processing file", error: error.message });
+  }
+};
+
+/**
+ * Download sample Excel for campaign upload
+ */
+const downloadCampaignSampleExcel = async (req, res) => {
+  try {
+    const workbook = new ExcelJS.Workbook();
+    const worksheet = workbook.addWorksheet("Recipients");
+
+    worksheet.columns = [
+      { header: "Email Address", key: "email", width: 30 },
+    ];
+
+    worksheet.addRows([
+      { email: "business@example.com" },
+      { email: "contact@company.com" },
+    ]);
+
+    res.setHeader(
+      "Content-Type",
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    );
+    res.setHeader(
+      "Content-Disposition",
+      "attachment; filename=" + "campaign_recipients_sample.xlsx"
+    );
+
+    await workbook.xlsx.write(res);
+    res.end();
+  } catch (error) {
+    console.error("Error generating sample excel:", error);
+    res.status(500).json({ message: "Error generating sample file" });
+  }
+};
 
 // Create a new email template
 const createTemplate = async (req, res) => {
@@ -241,7 +348,8 @@ const createCampaign = async (req, res) => {
       return res.status(400).json({ message: "No valid users selected" });
     }
 
-    for (const email of recipients.customEmails || []) {
+    for (const item of recipients.customEmails || []) {
+      const email = typeof item === 'string' ? item : item.email;
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
         return res
           .status(400)
@@ -394,7 +502,8 @@ const updateCampaign = async (req, res) => {
         campaign.recipients.users = recipients.users;
       }
       if (recipients.customEmails) {
-        for (const email of recipients.customEmails) {
+        for (const item of recipients.customEmails) {
+          const email = typeof item === 'string' ? item : item.email;
           if (!validateEmail(email)) {
             return res
               .status(400)
@@ -531,26 +640,19 @@ const sendCampaign = async (req, res) => {
       _id: req.params.id,
       createdBy: req.user.id,
     })
-      .populate("templateId")
-      .populate("userIds", "email subscribedToEmails");
+      .populate("template")
+      .populate("recipients.users", "email subscribedToEmails full_name");
+
     if (!campaign) {
       return res
         .status(404)
         .json({ message: "Campaign not found or unauthorized" });
     }
-    if (campaign.status === "sent" || campaign.status === "completed") {
+    if (campaign.status === "sent") {
       return res.status(400).json({ message: "Campaign already sent" });
     }
-    if (
-      campaign.status === "scheduled" &&
-      new Date(campaign.scheduleTime) > new Date()
-    ) {
-      return res
-        .status(400)
-        .json({ message: "Campaign is scheduled for future sending" });
-    }
 
-    const sender = await SenderEmail.findById(campaign.senderEmailId);
+    const sender = await SenderEmail.findOne({ email: campaign.fromEmail });
     if (!sender || !sender.isActive) {
       return res
         .status(400)
@@ -566,30 +668,63 @@ const sendCampaign = async (req, res) => {
     }
 
     try {
-      for (const recipient of recipients) {
-        const html = campaign.templateId.body
-          .replace(
-            "{{full_name}}",
-            (await User.findOne({ email: recipient })).full_name || "User"
-          )
-          .replace("{{email}}", recipient);
-        const unsubscribeLink = `${
-          process.env.FRONTEND_URL
-        }/unsubscribe?userId=${
-          (await User.findOne({ email: recipient }))._id
-        }&campaignId=${campaign._id}`;
+      // Send to registered users
+      for (const user of campaign.recipients.users || []) {
+        const fullUser = await User.findById(user);
+        if (!fullUser || !fullUser.subscribedToEmails) continue;
+
+        let bizName = "User";
+        const associatedBiz = await Business.findOne({
+          $or: [
+            { "contact.email": fullUser.email },
+            { "contact.contactDetails.emails": fullUser.email }
+          ]
+        }).select("businessName");
+        
+        if (associatedBiz) {
+          bizName = associatedBiz.businessName;
+        }
+
+        const html = campaign.template.body
+          .replace(/{{full_name}}/g, fullUser.full_name || "User")
+          .replace(/{{email}}/g, fullUser.email)
+          .replace(/{{business_name}}/g, bizName);
+
+        const unsubscribeLink = `${process.env.FRONTEND_URL}/unsubscribe?userId=${fullUser._id}&campaignId=${campaign._id}`;
+        
         const result = await sendMail(
-          campaign.senderEmailId,
-          recipient,
-          campaign.templateId.subject,
+          campaign.fromEmail,
+          fullUser.email,
+          campaign.template.subject,
           html,
           unsubscribeLink
         );
-        if (!result.success) {
-          throw result.error;
-        }
+        if (!result.success) throw result.error;
       }
-      campaign.status = "completed";
+
+      // Send to custom emails
+      for (const item of campaign.recipients.customEmails || []) {
+        const email = typeof item === 'string' ? item : item.email;
+        const bizName = typeof item === 'string' ? "User" : (item.businessName || "User");
+
+        const html = campaign.template.body
+          .replace(/{{full_name}}/g, "User")
+          .replace(/{{email}}/g, email)
+          .replace(/{{business_name}}/g, bizName);
+
+        const unsubscribeLink = `${process.env.FRONTEND_URL}/unsubscribe?email=${encodeURIComponent(email)}&campaignId=${campaign._id}`;
+        
+        const result = await sendMail(
+          campaign.fromEmail,
+          email,
+          campaign.template.subject,
+          html,
+          unsubscribeLink
+        );
+        if (!result.success) throw result.error;
+      }
+
+      campaign.status = "sent";
       campaign.sentAt = new Date();
       await campaign.save();
       res.status(200).json({ message: "Campaign sent successfully" });
@@ -741,4 +876,6 @@ module.exports = {
   getUsers,
   unsubscribe,
   toggleSenderEmailStatus,
+  processCampaignExcel,
+  downloadCampaignSampleExcel,
 };

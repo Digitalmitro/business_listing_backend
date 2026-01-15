@@ -21,6 +21,8 @@ const {
   getUsers,
   unsubscribe,
   toggleSenderEmailStatus,
+  processCampaignExcel,
+  downloadCampaignSampleExcel,
 } = require("../controllers/emailCampaignController");
 const { upload } = require("../config/multerConfig");
 
@@ -49,6 +51,13 @@ router.patch("/sender-emails/:id", authMiddleware, markSenderEmailAsSpam); // Up
 
 // Email Campaign Routes
 router.post("/campaigns", authMiddleware, createCampaign);
+router.post(
+  "/campaigns/process-excel",
+  authMiddleware,
+  upload.single("file"),
+  processCampaignExcel
+);
+router.get("/campaigns/sample-excel", authMiddleware, downloadCampaignSampleExcel);
 router.get("/campaigns", authMiddleware, getCampaigns);
 router.get("/campaigns/:id", authMiddleware, getCampaignById);
 router.put("/campaigns/:id", authMiddleware, updateCampaign);

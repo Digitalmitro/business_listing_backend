@@ -862,6 +862,19 @@ exports.searchServices = async (req, res) => {
           businessSummary: 1,
           createdAt: 1,
           updatedAt: 1,
+          isPremium: {
+            $cond: {
+              if: { $eq: ["$subscription.status", "active"] },
+              then: 1,
+              else: 0,
+            },
+          },
+        },
+      },
+      {
+        $sort: {
+          isPremium: -1,
+          createdAt: -1,
         },
       },
     ]);
@@ -1627,6 +1640,19 @@ exports.getAllBusiness = async (req, res) => {
       },
       { $match: postGeoFilters },
 
+      // Add isPremium field based on active subscription
+      {
+        $addFields: {
+          isPremium: {
+            $cond: {
+              if: { $eq: ["$subscription.status", "active"] },
+              then: 1,
+              else: 0,
+            },
+          },
+        },
+      },
+
       // Count Active Offers
       {
         $lookup: {
@@ -1667,9 +1693,10 @@ exports.getAllBusiness = async (req, res) => {
         },
       },
 
-      // Final Sort: Distance first, then user choice
+      // Final Sort: Premium first, then Distance, then user choice
       {
         $sort: {
+          isPremium: -1,
           distance: 1,
           ...userSort,
         },
