@@ -101,6 +101,30 @@ router.post(
   importBusinessFromCSV
 );
 
+router.post("/sync-geocoding", authMiddleware, async (req, res) => {
+  try {
+    const Business = require("../models/Business");
+    const { addJob } = require("../utils/queue");
+    
+    const pending = await Business.find({ 
+      $or: [
+        { "location.coordinates": [0, 0] },
+        { needsGeocoding: true }
+      ]
+    });
+
+    let queued = 0;
+    for (const biz of pending) {
+      await addJob("geocoding-batch", { businessId: biz._id });
+      queued++;
+    }
+
+    res.json({ message: `Queued ${queued} businesses for geocoding`, counts: queued });
+  } catch (err) {
+    res.status(500).json({ message: "Sync failed", error: err.message });
+  }
+});
+
 router.get("/download-sample-csv", downloadSampleCSV);
 
 module.exports = router;

@@ -158,10 +158,16 @@ exports.getAllSubcategoryPaginated = async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 10;
+    const search = req.query.search || "";
     const skip = (page - 1) * limit;
 
-    const total = await SubCategory.countDocuments();
-    const subCategories = await SubCategory.find()
+    const query = {};
+    if (search) {
+      query.name = { $regex: search, $options: "i" };
+    }
+
+    const total = await SubCategory.countDocuments(query);
+    const subCategories = await SubCategory.find(query)
       .populate("category", "name")
       .sort({ createdAt: -1 })
       .skip(skip)

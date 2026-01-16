@@ -38,9 +38,23 @@ const normalizeMapboxAddress = (feature) => {
 
   // Handle the main feature text
   const [featureType] = feature.id.split(".");
-  if (featureType === "address") {
-    address.road = feature.text;
-    address.house_number = feature.address;
+  switch (featureType) {
+    case "address":
+      address.road = feature.text;
+      address.house_number = feature.address;
+      break;
+    case "region":
+      address.state = feature.text;
+      break;
+    case "place":
+      address.city = feature.text;
+      break;
+    case "locality":
+      address.suburb = feature.text;
+      break;
+    case "postcode":
+      address.postcode = feature.text;
+      break;
   }
 
   return address;

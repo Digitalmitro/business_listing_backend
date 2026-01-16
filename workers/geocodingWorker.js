@@ -18,6 +18,7 @@ const geocodingWorker = new Worker(
       const { streetName, area, city, state, country, pincode } = business.address;
       const addressString = [streetName, area, city, state, country, pincode]
         .filter(Boolean)
+        .filter(part => !["000000", "UNKNOWN CITY", "UNKNOWN STATE", "UNKNOWN COUNTRY", "N/A"].includes(part?.toString().toUpperCase()))
         .join(", ");
 
       console.log(`Geocoding business: ${business.businessName} at ${addressString}`);

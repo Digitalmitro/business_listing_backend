@@ -260,35 +260,64 @@ exports.importBusinessFromCSV = async (req, res) => {
             const rating = parseFloat(ratingStr) || 0;
             const totalReviews = parseInt(reviewsStr) || 0;
 
+            // Robust Country Normalization
+            const normalizeCountry = (c) => {
+              if (!c) return "Unknown Country";
+              const upper = c.trim().toUpperCase();
+              const map = {
+                "USA": "United States",
+                "US": "United States",
+                "UNITED STATES": "United States",
+                "UK": "United Kingdom",
+                "U.K.": "United Kingdom",
+                "UNITED KINGDOM": "United Kingdom",
+                "INDIA": "India",
+                "AU": "Australia",
+                "AUSTRALIA": "Australia",
+                "CA": "Canada",
+                "CANADA": "Canada"
+              };
+              return map[upper] || c.trim();
+            };
+
             // Extract parts from address
             // Format: Street; Area; City; State; Pincode; [Country]
             const addressParts = address.split(";").map(p => p.trim());
             const len = addressParts.length;
 
             let streetName = addressParts[0] || "";
-            let area = len > 4 ? addressParts[1] : "";
+            let area = ""; 
             let city = "Unknown City";
             let state = "Unknown State";
             let pincode = "000000";
             let country = rowCountry || "Unknown Country";
 
-            if (len === 5) {
-              // Street; Area; City; State; Pincode
-              city = addressParts[2] || city;
-              state = addressParts[3] || state;
-              pincode = addressParts[4] || pincode;
-            } else if (len >= 6) {
+            if (len >= 6) {
               // Street; Area; City; State; Pincode; Country
-              city = addressParts[2] || city;
-              state = addressParts[3] || state;
-              pincode = addressParts[4] || pincode;
+              area = addressParts[1];
+              city = addressParts[2];
+              state = addressParts[3];
+              pincode = addressParts[4];
               country = rowCountry || addressParts[5] || country;
+            } else if (len === 5) {
+              // Street; Area; City; State; Pincode
+              area = addressParts[1];
+              city = addressParts[2];
+              state = addressParts[3];
+              pincode = addressParts[4];
+            } else if (len === 4) {
+              // Street; City; State (Zip); Country
+              city = addressParts[1];
+              state = addressParts[2]; // Might include Zip
+              country = rowCountry || addressParts[3] || country;
             } else if (len === 3) {
               // City; State; Country (Minimum fallback)
               city = addressParts[0];
               state = addressParts[1];
-              country = rowCountry || addressParts[2];
+              country = rowCountry || addressParts[2] || country;
             }
+
+            country = normalizeCountry(country);
 
             // Clean phone
             const cleanedPhone = phone?.replace(/\D/g, "");
@@ -350,6 +379,11 @@ exports.importBusinessFromCSV = async (req, res) => {
                 business.totalReviews = totalReviews;
 
               await business.save();
+
+              if (needsGeocoding) {
+                await addJob("geocoding-batch", { businessId: business._id });
+              }
+
               updated++;
             } else {
               // CREATE NEW
