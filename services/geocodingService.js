@@ -1,4 +1,5 @@
 const axios = require("axios");
+const GeocodeCache = require("../models/GeocodeCache");
 
 /**
  * Normalizes Mapbox features context into a LocationIQ-like address object.
@@ -64,7 +65,20 @@ const normalizeMapboxAddress = (feature) => {
  * Reverse Geocoding: Lat/Lon to Address
  */
 const reverseGeocode = async (lat, lon) => {
+  const query = `${lat},${lon}`;
+  
+  // Check cache first
+  try {
+    const cached = await GeocodeCache.findOne({ type: "reverse", query });
+    if (cached) {
+      return cached.data;
+    }
+  } catch (error) {
+    console.error("Cache lookup error:", error);
+  }
+
   const provider = process.env.GEOCODING_PROVIDER || "locationiq";
+  let result;
 
   if (provider === "mapbox") {
     const accessToken = process.env.MAPBOX_ACCESS_TOKEN;
@@ -84,32 +98,57 @@ const reverseGeocode = async (lat, lon) => {
     }
 
     const feature = response.data.features[0];
-    return {
+    result = {
       place_id: feature.id,
       display_name: feature.place_name,
       lat: String(feature.center[1]),
       lon: String(feature.center[0]),
       address: normalizeMapboxAddress(feature),
     };
+  } else {
+    // Default to LocationIQ
+    const response = await axios.get("https://us1.locationiq.com/v1/reverse", {
+      params: {
+        key: process.env.LOCATIONIQ_API_KEY,
+        lat,
+        lon,
+        format: "json",
+      },
+    });
+    result = response.data;
   }
 
-  // Default to LocationIQ
-  const response = await axios.get("https://us1.locationiq.com/v1/reverse", {
-    params: {
-      key: process.env.LOCATIONIQ_API_KEY,
-      lat,
-      lon,
-      format: "json",
-    },
-  });
-  return response.data;
+  // Save to cache
+  if (result) {
+    try {
+      await GeocodeCache.create({ type: "reverse", query, data: result });
+    } catch (error) {
+      console.error("Cache save error:", error);
+    }
+  }
+
+  return result;
 };
 
 /**
  * Forward Geocoding: Address to Lat/Lon
  */
 const forwardGeocode = async (address) => {
+  if (!address) return [];
+  const query = address.toLowerCase().trim();
+
+  // Check cache first
+  try {
+    const cached = await GeocodeCache.findOne({ type: "forward", query });
+    if (cached) {
+      return cached.data;
+    }
+  } catch (error) {
+    console.error("Cache lookup error:", error);
+  }
+
   const provider = process.env.GEOCODING_PROVIDER || "locationiq";
+  let result;
 
   if (provider === "mapbox") {
     const accessToken = process.env.MAPBOX_ACCESS_TOKEN;
@@ -128,7 +167,7 @@ const forwardGeocode = async (address) => {
     }
 
     const feature = response.data.features[0];
-    return [
+    result = [
       {
         place_id: feature.id,
         display_name: feature.place_name,
@@ -137,19 +176,30 @@ const forwardGeocode = async (address) => {
         address: normalizeMapboxAddress(feature),
       },
     ];
+  } else {
+    // Default to LocationIQ
+    const response = await axios.get("https://us1.locationiq.com/v1/search", {
+      params: {
+        key: process.env.LOCATIONIQ_API_KEY,
+        q: address,
+        format: "json",
+        limit: 1,
+        addressdetails: 1,
+      },
+    });
+    result = response.data;
   }
 
-  // Default to LocationIQ
-  const response = await axios.get("https://us1.locationiq.com/v1/search", {
-    params: {
-      key: process.env.LOCATIONIQ_API_KEY,
-      q: address,
-      format: "json",
-      limit: 1,
-      addressdetails: 1,
-    },
-  });
-  return response.data;
+  // Save to cache
+  if (result && result.length > 0) {
+    try {
+      await GeocodeCache.create({ type: "forward", query, data: result });
+    } catch (error) {
+      console.error("Cache save error:", error);
+    }
+  }
+
+  return result;
 };
 
 module.exports = {
