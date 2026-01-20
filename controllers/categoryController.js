@@ -1,6 +1,7 @@
 const fs = require("fs");
 const path = require("path");
 const Category = require("../models/Category");
+const SubCategory = require("../models/SubCategory");
 const TopCat = require("../models/TopBannerCategory");
 const { uploadToCloudinary, cloudinary } = require("../config/Cloudinary");
 const csv = require("csv-parser");
@@ -309,4 +310,42 @@ exports.downloadSampleCategoryCSV = (req, res) => {
   res.header("Content-Type", "text/csv");
   res.attachment("sample-categories.csv");
   res.send(csvContent);
+};
+
+exports.searchCategories = async (req, res) => {
+  try {
+    const { query } = req.query;
+    if (!query) {
+      return res.status(200).json([]);
+    }
+
+    const categories = await Category.find({
+      name: { $regex: query, $options: "i" },
+    }).limit(5);
+
+    const subCategories = await SubCategory.find({
+      name: { $regex: query, $options: "i" },
+    })
+      .populate("category", "name")
+      .limit(10);
+
+    const formattedCategories = categories.map((cat) => ({
+      _id: cat._id,
+      name: cat.name,
+      slug: cat.slug,
+      type: "category",
+    }));
+
+    const formattedSubCategories = subCategories.map((sub) => ({
+      _id: sub._id,
+      name: sub.name,
+      slug: sub.slug,
+      type: "subcategory",
+      parentCategory: sub.category?.name,
+    }));
+
+    res.status(200).json([...formattedCategories, ...formattedSubCategories]);
+  } catch (error) {
+    res.status(500).json({ message: "Search failed", error: error.message });
+  }
 };

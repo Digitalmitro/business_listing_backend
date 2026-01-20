@@ -10,6 +10,7 @@ const {
   importCategoriesFromCSV,
   downloadSampleCategoryCSV,
   getAllCategoriesPaginated,
+  searchCategories,
 } = require("../controllers/categoryController");
 const { upload } = require("../config/multerConfig");
 
@@ -24,6 +25,7 @@ router.post("/import-csv", upload.single("csvFile"), importCategoriesFromCSV); /
 router.get("/category-with-top", getCategorywithTop); // ← Get all + top categories
 router.get("/categories", getAllCategories); // ← List all categories
 router.get("/categories-paginated", getAllCategoriesPaginated);
+router.get("/autocomplete", searchCategories);
 // ==================== DYNAMIC ROUTES LAST ====================
 
 router.post(
