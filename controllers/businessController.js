@@ -1018,6 +1018,8 @@ exports.updateBusiness = async (req, res) => {
       "trust",
       "claimed",
       "kyc", // Added to allow KYC updates
+      "category", // Added to allow category updates
+      "subCategory", // Added to allow subcategory updates
     ];
 
     const updates = {};
