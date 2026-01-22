@@ -1545,19 +1545,26 @@ exports.deleteKYCDocument = async (req, res) => {
 exports.getuserBusiness = async (req, res) => {
   try {
     const userId = req.user.id;
-    const user = await User.findById(userId).populate("businesses").exec();
+    
+    // Fetch businesses where this user is the owner
+    const businesses = await Business.find({ userId: userId }).lean();
+    
+    // Also get basic user info
+    const user = await User.findById(userId);
 
     if (!user) {
       return res.status(404).json({ message: "User not found" });
     }
+
     return res.status(200).json({
       full_name: user.full_name,
       email: user.email,
       userImage: user.userImage,
       isSeller: user.isSeller,
-      businesses: user.businesses,
+      businesses: businesses,
     });
   } catch (error) {
+    console.error("Error in getuserBusiness:", error);
     return res.status(500).json({ error: error.message });
   }
 };

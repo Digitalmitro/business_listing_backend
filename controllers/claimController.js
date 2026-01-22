@@ -1,5 +1,6 @@
 const Claim = require("../models/Claim");
 const Business = require("../models/Business");
+const User = require("../models/User");
 const fs = require("fs").promises;
 const path = require("path");
 const mongoose = require("mongoose");
@@ -158,12 +159,23 @@ const updateClaimStatus = async (req, res) => {
     });
 
     if (status === "approved") {
-      const { _id, ...claimData } = claim.toObject(); // exclude _id
+      const { _id, categories, subCategories, ...claimData } = claim.toObject();
+      
+      // Update Business with claim data
       await Business.findByIdAndUpdate(claim.businessId, {
         ...claimData,
+        category: categories, // Map to correct schema field
+        subCategory: subCategories, // Map to correct schema field
         claimed: true,
         verified: true,
+        userId: claim.userId, // Ensure owner is set
         updatedAt: Date.now(),
+      });
+
+      // Update User record to include this business
+      await User.findByIdAndUpdate(claim.userId, {
+        $addToSet: { businesses: claim.businessId },
+        $set: { isSeller: true }
       });
     }
 
@@ -194,4 +206,38 @@ const getClaimById = async (req, res) => {
 };
 
 
-module.exports = { submitClaim, getClaims, updateClaimStatus, getClaimById };
+const syncApprovedClaims = async (req, res) => {
+  try {
+    const approvedClaims = await Claim.find({ status: "approved" });
+    let updatedCount = 0;
+
+    for (const claim of approvedClaims) {
+      // 1. Update Business record
+      await Business.findByIdAndUpdate(claim.businessId, {
+        userId: claim.userId,
+        claimed: true,
+        verified: true,
+        category: claim.categories,
+        subCategory: claim.subCategories,
+      });
+
+      // 2. Update User record
+      await User.findByIdAndUpdate(claim.userId, {
+        $addToSet: { businesses: claim.businessId },
+        $set: { isSeller: true },
+      });
+
+      updatedCount++;
+    }
+
+    res.status(200).json({
+      success: true,
+      message: `Successfully synced ${updatedCount} approved claims.`,
+    });
+  } catch (error) {
+    console.error("Error syncing claims:", error);
+    res.status(500).json({ success: false, message: "Failed to sync claims", error: error.message });
+  }
+};
+
+module.exports = { submitClaim, getClaims, updateClaimStatus, getClaimById, syncApprovedClaims };
