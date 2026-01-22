@@ -159,16 +159,12 @@ const updateClaimStatus = async (req, res) => {
     });
 
     if (status === "approved") {
-      const { _id, categories, subCategories, ...claimData } = claim.toObject();
-      
-      // Update Business with claim data
+      // ONLY link the user to the business and mark it as claimed/verified
+      // DO NOT override categories, subcategories, or any other business data from the claim.
       await Business.findByIdAndUpdate(claim.businessId, {
-        ...claimData,
-        category: categories, // Map to correct schema field
-        subCategory: subCategories, // Map to correct schema field
+        userId: claim.userId, // Set the owner
         claimed: true,
         verified: true,
-        userId: claim.userId, // Ensure owner is set
         updatedAt: Date.now(),
       });
 
@@ -212,13 +208,12 @@ const syncApprovedClaims = async (req, res) => {
     let updatedCount = 0;
 
     for (const claim of approvedClaims) {
-      // 1. Update Business record
+      // 1. Update Business record (Ownership only)
       await Business.findByIdAndUpdate(claim.businessId, {
         userId: claim.userId,
         claimed: true,
         verified: true,
-        category: claim.categories,
-        subCategory: claim.subCategories,
+        updatedAt: Date.now(),
       });
 
       // 2. Update User record
