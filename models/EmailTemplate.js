@@ -24,6 +24,7 @@ const emailTemplateSchema = new mongoose.Schema({
       "booking_rescheduled_owner",
       "booking_canceled_user",
       "booking_canceled_owner",
+      "password_reset",
       "campaign",
     ],
     default: "campaign",

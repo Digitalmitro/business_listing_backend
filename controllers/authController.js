@@ -12,6 +12,7 @@ const ExcelJS = require("exceljs");
 const Business = require("../models/Business");
 const { addJob } = require("../utils/queue");
 const geocodingService = require("../services/geocodingService");
+const { getTemplate } = require("../helpers/emailHelper");
 
 function generateOTPWithExpiration() {
   const otp = Math.floor(100000 + Math.random() * 900000).toString();
@@ -160,15 +161,32 @@ exports.sendOTP = async (req, res) => {
       return res.status(400).json({ message: "OTP not expired yet" });
     }
     const { otp, expiration } = generateOTPWithExpiration();
-    const emailSubject = `Your OTP for Verification`;
-    const emailBody = `Your 6-digit OTP is: ${otp}`;
-    await sendMail(email, emailSubject, emailBody);
+    
+    // Use email template for professional OTP email
+    const { subject, html } = await getTemplate(
+      "password_reset",
+      {
+        "{{userName}}": user.full_name || "User",
+        "{{otp}}": otp,
+      },
+      {
+        subject: "Reset Your Password - Urban Citations",
+        html: `
+          <h2>Reset Your Password</h2>
+          <p>Your OTP is: <strong>${otp}</strong></p>
+          <p>This OTP will expire in 10 minutes.</p>
+        `,
+      }
+    );
+    
+    await sendMail(email, subject, html);
     user.otp = otp;
     user.otpExpiration = expiration;
     await user.save();
 
     res.status(200).json({ message: "OTP sent successfully", otp });
   } catch (error) {
+    console.error("Send OTP Error:", error);
     res.status(500).json({ message: "Internal server error" });
   }
 };
