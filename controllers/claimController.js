@@ -240,6 +240,10 @@ const getClaimById = async (req, res) => {
   try {
     const { claimId } = req.params;
 
+    if (!mongoose.Types.ObjectId.isValid(claimId)) {
+      return res.status(400).json({ message: "Invalid claim ID format" });
+    }
+
     const claim = await Claim.findById(claimId)
       .populate("userId", "name email")
       .populate("businessId", "businessName address contact categories subCategories businessLogo photos")
