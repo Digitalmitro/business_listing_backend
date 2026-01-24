@@ -73,9 +73,10 @@ const submitClaim = async (req, res) => {
         photos = req.files.photos.map((file) => file.filename);
       }
       if (req.files.kycDocuments) {
+        const { docMapping } = businessData.kyc || {};
         req.files.kycDocuments.forEach((file) => {
-          // Store by originalname map to filename (basename)
-          kycDocumentsMap.set(file.originalname, path.basename(file.filename));
+          const docName = docMapping?.[file.originalname] || file.originalname;
+          kycDocumentsMap.set(docName, path.basename(file.filename));
         });
       }
     }
@@ -152,6 +153,20 @@ const getClaims = async (req, res) => {
 };
 
 
+const getUserClaims = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const claims = await Claim.find({ userId })
+      .populate("businessId", "businessName addressString businessLogo")
+      .lean();
+
+    res.status(200).json(claims);
+  } catch (error) {
+    console.error("Error fetching user claims:", error);
+    res.status(500).json({ message: "Failed to fetch claims", error: error.message });
+  }
+};
+
 const updateClaimStatus = async (req, res) => {
   try {
     const { claimId } = req.params;
@@ -227,7 +242,8 @@ const getClaimById = async (req, res) => {
 
     const claim = await Claim.findById(claimId)
       .populate("userId", "name email")
-      .populate("businessId", "businessName address contact categories subCategories businessLogo photos");
+      .populate("businessId", "businessName address contact categories subCategories businessLogo photos")
+      .lean();
 
     if (!claim) {
       return res.status(404).json({ message: "Claim not found" });
@@ -274,4 +290,4 @@ const syncApprovedClaims = async (req, res) => {
   }
 };
 
-module.exports = { submitClaim, getClaims, updateClaimStatus, getClaimById, syncApprovedClaims };
+module.exports = { submitClaim, getClaims, updateClaimStatus, getClaimById, syncApprovedClaims, getUserClaims };
