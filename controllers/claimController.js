@@ -67,10 +67,10 @@ const submitClaim = async (req, res) => {
 
     if (req.files) {
       if (req.files.businessLogo) {
-        businessLogo = path.join("uploads", req.files.businessLogo[0].filename);
+        businessLogo = req.files.businessLogo[0].filename;
       }
       if (req.files.photos) {
-        photos = req.files.photos.map((file) => path.join("uploads", file.filename));
+        photos = req.files.photos.map((file) => file.filename);
       }
       if (req.files.kycDocuments) {
         req.files.kycDocuments.forEach((file) => {
@@ -200,6 +200,10 @@ const updateClaimStatus = async (req, res) => {
           verifiedAt: new Date(),
         };
       }
+
+      // Sync logo and photos from claim if they exist
+      if (claim.businessLogo) businessUpdates.businessLogo = claim.businessLogo;
+      if (claim.photos && claim.photos.length > 0) businessUpdates.photos = claim.photos;
 
       await Business.findByIdAndUpdate(claim.businessId, businessUpdates);
 
