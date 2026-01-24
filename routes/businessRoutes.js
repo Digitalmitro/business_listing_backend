@@ -19,6 +19,7 @@ const {
   updateBusinessStatus,
   importBusinessFromCSV,
   downloadSampleCSV,
+  searchBusinesses,
 } = require("../controllers/businessController");
 const {
   getOffers,
@@ -28,6 +29,8 @@ const {
 const { authMiddleware } = require("../middlewares/authMiddleware");
 
 const router = express.Router();
+
+router.get("/autocomplete", searchBusinesses);
 
 router.post(
   "/businesses",

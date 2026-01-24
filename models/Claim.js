@@ -49,6 +49,12 @@ const ClaimSchema = new Schema({
   subCategories: [{ type: Schema.Types.ObjectId, ref: "SubCategory" }],
   businessLogo: String,
   photos: [String],
+  kyc: {
+    country: { type: String },
+    documents: { type: Map, of: String },
+  },
+  kycVerified: { type: Boolean, default: false },
+  kycVerifiedAt: { type: Date },
   status: { type: String, enum: ["pending", "approved", "rejected"], default: "pending" },
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now },

@@ -63,6 +63,8 @@ const submitClaim = async (req, res) => {
     // ✅ Handle file uploads
     let businessLogo = existingBusiness.businessLogo;
     let photos = existingBusiness.photos || [];
+    let kycDocumentsMap = new Map();
+
     if (req.files) {
       if (req.files.businessLogo) {
         businessLogo = path.join("uploads", req.files.businessLogo[0].filename);
@@ -70,6 +72,21 @@ const submitClaim = async (req, res) => {
       if (req.files.photos) {
         photos = req.files.photos.map((file) => path.join("uploads", file.filename));
       }
+      if (req.files.kycDocuments) {
+        req.files.kycDocuments.forEach((file) => {
+          // Store by originalname map to filename (basename)
+          kycDocumentsMap.set(file.originalname, path.basename(file.filename));
+        });
+      }
+    }
+
+    // ✅ Handle KYC metadata from businessData
+    let kycData = null;
+    if (businessData.kyc) {
+      kycData = {
+        country: businessData.kyc.country,
+        documents: kycDocumentsMap
+      };
     }
 
     // ✅ Create new claim
@@ -84,6 +101,7 @@ const submitClaim = async (req, res) => {
       subCategories,
       businessLogo,
       photos,
+      kyc: kycData,
       status: "pending",
     });
 
@@ -149,6 +167,10 @@ const updateClaimStatus = async (req, res) => {
     }
 
     claim.status = status;
+    if (status === "approved") {
+      claim.kycVerified = true;
+      claim.kycVerifiedAt = new Date();
+    }
     claim.updatedAt = Date.now();
     await claim.save();
 
@@ -161,12 +183,25 @@ const updateClaimStatus = async (req, res) => {
     if (status === "approved") {
       // ONLY link the user to the business and mark it as claimed/verified
       // DO NOT override categories, subcategories, or any other business data from the claim.
-      await Business.findByIdAndUpdate(claim.businessId, {
+      
+      const businessUpdates = {
         userId: claim.userId, // Set the owner
         claimed: true,
         verified: true,
         updatedAt: Date.now(),
-      });
+      };
+
+      // If claim has KYC info, sync it to the business and mark KYC as verified
+      if (claim.kyc && claim.kyc.country) {
+        businessUpdates.kyc = {
+          country: claim.kyc.country,
+          documents: claim.kyc.documents,
+          status: "verified",
+          verifiedAt: new Date(),
+        };
+      }
+
+      await Business.findByIdAndUpdate(claim.businessId, businessUpdates);
 
       // Update User record to include this business
       await User.findByIdAndUpdate(claim.userId, {
