@@ -1869,24 +1869,28 @@ exports.getAllBusiness = async (req, res) => {
 
 exports.searchBusinesses = async (req, res) => {
   try {
-    const { query } = req.query;
+    const { query, location } = req.query;
     if (!query) {
       return res.status(200).json([]);
     }
 
-    const businesses = await Business.find({
+    const filter = {
       businessName: { $regex: query, $options: "i" },
       isBlocked: false,
-    })
-      .select("businessName _id category")
+    };
+
+    if (location) {
+      filter.addressString = { $regex: location, $options: "i" };
+    }
+
+    const businesses = await Business.find(filter)
+      .select("businessName _id category address")
       .limit(10);
 
     const formattedBusinesses = businesses.map((biz) => ({
       _id: biz._id,
       name: biz.businessName,
       type: "business",
-      // We don't have a slug field directly in Business model, 
-      // but Search.jsx generates one if missing.
     }));
 
     res.status(200).json(formattedBusinesses);
