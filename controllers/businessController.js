@@ -30,7 +30,7 @@ exports.createBusiness = async (req, res) => {
       return res.status(400).json({ message: "Add all mandatory fields." });
     }
 
-    const isAdmin = req.user?.role === "admin";
+    const isAdmin = ["admin", "super-admin"].includes(req.user?.role);
     let userId = loggedInUserId;
 
     // For admins, allow business creation without user attachment
@@ -1874,26 +1874,44 @@ exports.searchBusinesses = async (req, res) => {
       return res.status(200).json([]);
     }
 
-    const filter = {
+    // Search by name globally first (matching names should ALWAYS come)
+    const nameFilter = {
       businessName: { $regex: query, $options: "i" },
       isBlocked: false,
     };
 
+    const businesses = await Business.find(nameFilter)
+      .select("businessName _id category address addressString kyc")
+      .limit(20);
+
+    let formattedBusinesses = businesses.map((biz) => {
+      const addr = biz.address || {};
+      const displayAddress = [addr.area, addr.city, addr.state]
+        .filter(Boolean)
+        .join(", ");
+
+      return {
+        _id: biz._id,
+        name: biz.businessName,
+        type: "business",
+        addressLabel: displayAddress || biz.addressString || "Address N/A",
+        verified: biz.kyc?.status === "verified",
+      };
+    });
+
+    // If location is provided, sort local matches to the top
     if (location) {
-      filter.addressString = { $regex: location, $options: "i" };
+      const locLower = location.toLowerCase();
+      formattedBusinesses.sort((a, b) => {
+        const aMatches = a.addressLabel?.toLowerCase().includes(locLower);
+        const bMatches = b.addressLabel?.toLowerCase().includes(locLower);
+        if (aMatches && !bMatches) return -1;
+        if (!aMatches && bMatches) return 1;
+        return 0;
+      });
     }
 
-    const businesses = await Business.find(filter)
-      .select("businessName _id category address")
-      .limit(10);
-
-    const formattedBusinesses = businesses.map((biz) => ({
-      _id: biz._id,
-      name: biz.businessName,
-      type: "business",
-    }));
-
-    res.status(200).json(formattedBusinesses);
+    res.status(200).json(formattedBusinesses.slice(0, 10));
   } catch (error) {
     res.status(500).json({ message: "Search failed", error: error.message });
   }
