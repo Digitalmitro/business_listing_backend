@@ -16,34 +16,15 @@ const emailWorker = new Worker(
       userIds,
       fromEmail,
       template,
-      localScheduleTime,
       isRefTimeZone,
     } = job.data;
     try {
-      console.log("Processing job:", {
-        campaignId,
-        timeZone,
-        userIds,
-        fromEmail,
-        template,
-        localScheduleTime,
-      });
       const campaign = await EmailCampaign.findById(campaignId);
-      if (!campaign) {
-        throw new Error("Campaign not found");
-      }
-      console.log("Campaign loaded:", campaign);
-      if (campaign.status !== "scheduled" && campaign.status !== "failed") {
-        throw new Error("Campaign is not in scheduled state");
+      if (!campaign || (campaign.status !== "scheduled" && campaign.status !== "failed")) {
+        throw new Error("Campaign not found or invalid status");
       }
 
       const sender = await SenderEmail.findOne({ email: fromEmail });
-      console.log("Sender email lookup:", {
-        fromEmail,
-        sender: sender
-          ? { email: sender.email, isActive: sender.isActive }
-          : null,
-      }); // Debug log
       if (!sender || !sender.isActive) {
         throw new Error("Sender email is invalid or inactive");
       }
@@ -55,23 +36,10 @@ const emailWorker = new Worker(
 
       // Send emails to registered users
       let sentCount = 0;
-      const users = await User.find({
-        _id: { $in: userIds },
-      });
-      console.log(
-        "Users found:",
-        users.map((u) => ({
-          id: u._id.toString(),
-          email: u.email,
-          subscribed: u.subscribedToEmails,
-        }))
-      );
+      const users = await User.find({ _id: { $in: userIds } });
+
       for (const user of users) {
-        // Skip unsubscribed users
-        if (!user.subscribedToEmails) {
-          console.log(`Skipping unsubscribed user: ${user.email}`);
-          continue;
-        }
+
 
         // Find associated business name if exists for registered user
         let bizName = "User";
@@ -92,28 +60,16 @@ const emailWorker = new Worker(
           .replace(/{{business_name}}/g, bizName);
         
         const unsubscribeLink = `${process.env.FRONTEND_URL}/unsubscribe?userId=${user._id}&campaignId=${campaign._id}`;
-        const result = await sendMail(
-          fromEmail,
-          user.email,
-          templateDoc.subject,
-          html,
-          unsubscribeLink
-        );
-        console.log("Send mail result for user:", {
-          email: user.email,
-          success: result.success,
-          error: result.error?.message,
-        });
+        const result = await sendMail(fromEmail, user.email, templateDoc.subject, html, unsubscribeLink);
+        
         if (!result.success) {
-          throw new Error(
-            `Failed to send email to ${user.email}: ${result.error.message}`
-          );
+          console.error(`Failed to send email to ${user.email}: ${result.error.message}`);
+          continue; // Move to next user instead of failing the whole job
         }
         sentCount++;
       }
 
-      // Send emails to customEmails (ONLY if this is the reference timezone job to avoid duplicates)
-      const isRefTimeZone = job.data.isRefTimeZone;
+      // Send emails to customEmails
       if (isRefTimeZone) {
         for (const item of campaign.recipients.customEmails || []) {
           const email = typeof item === 'string' ? item : item.email;
@@ -124,66 +80,27 @@ const emailWorker = new Worker(
             .replace(/{{email}}/g, email)
             .replace(/{{business_name}}/g, bizName);
           
-          const unsubscribeLink = `${
-            process.env.FRONTEND_URL
-          }/unsubscribe?email=${encodeURIComponent(email)}&campaignId=${
-            campaign._id
-          }`;
-          const result = await sendMail(
-            fromEmail,
-            email,
-            templateDoc.subject,
-            html,
-            unsubscribeLink
-          );
-          console.log("Send mail result for custom email:", {
-            email,
-            success: result.success,
-            error: result.error?.message,
-          });
-          if (!result.success) {
-            console.error(`Failed to send to custom email ${email}, continuing...`);
-          } else {
-            sentCount++;
-          }
+          const unsubscribeLink = `${process.env.FRONTEND_URL}/unsubscribe?email=${encodeURIComponent(email)}&campaignId=${campaign._id}`;
+          const result = await sendMail(fromEmail, email, templateDoc.subject, html, unsubscribeLink);
+          
+          if (result.success) sentCount++;
         }
       }
 
       // Update campaign status
-      const totalRecipients =
-        campaign.recipients.users.length +
-        campaign.recipients.customEmails.length;
-      console.log("Status update:", { sentCount, totalRecipients });
-      if (totalRecipients === 0) {
-        campaign.status = "draft";
-      } else if (sentCount > 0) {
+      if (sentCount > 0) {
         campaign.status = "sent";
         campaign.sentAt = new Date();
+      } else if (campaign.recipients.users.length + campaign.recipients.customEmails.length === 0) {
+        campaign.status = "draft";
       } else {
         campaign.status = "failed";
       }
-      try {
-        await campaign.save();
-        console.log(
-          `Campaign ${campaignId} for time zone ${timeZone} saved with status: ${campaign.status}`
-        );
-      } catch (saveError) {
-        console.error("Error saving campaign:", saveError.stack);
-        throw new Error(`Failed to save campaign: ${saveError.message}`);
-      }
-      console.log(
-        `Campaign ${campaignId} for time zone ${timeZone} sent successfully`
-      );
+      await campaign.save();
+      console.log(`Campaign ${campaignId} processed (sent: ${sentCount})`);
     } catch (error) {
-      console.error(
-        `Error processing campaign ${campaignId} for time zone ${timeZone}:`,
-        error.stack
-      );
-      await EmailCampaign.findByIdAndUpdate(
-        campaignId,
-        { status: "failed" },
-        { runValidators: true }
-      );
+      console.error(`Error processing campaign ${campaignId}:`, error.message);
+      await EmailCampaign.findByIdAndUpdate(campaignId, { status: "failed" });
       throw error;
     }
   },
@@ -192,17 +109,8 @@ const emailWorker = new Worker(
   }
 );
 
-emailWorker.on("completed", (job) => {
-  console.log(`Job ${job.id} completed`);
-});
 
-emailWorker.on("failed", (job, err) => {
-  console.error(`Job ${job.id} failed:`, err.stack);
-});
 
-// Heartbeat to keep the process alive and log health
-setInterval(() => {
-  console.log(`[${new Date().toISOString()}] Email Worker heartbeat: Queue 'email-campaigns' is active`);
-}, 60000);
+
 
 module.exports = emailWorker;

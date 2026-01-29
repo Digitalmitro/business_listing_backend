@@ -450,8 +450,6 @@ const createCampaign = async (req, res) => {
 
       for (const job of jobs) {
         const delay = new Date(job.localScheduleTime) - new Date();
-        const absoluteRunAt = new Date(job.localScheduleTime).toISOString();
-        console.log(`Scheduling initial job for timezone ${job.timeZone} to run at ${absoluteRunAt} (Delay: ${delay}ms, Ref: ${job.isRefTimeZone})`);
         
         await addJob("email-campaigns", job, {
           jobId: `email-campaigns-${campaign._id}-${job.timeZone}-${Date.now()}`,
@@ -613,7 +611,6 @@ const updateCampaign = async (req, res) => {
       for (const job of existingJobs) {
         if (job.id.startsWith(`email-campaigns-${campaign._id}-`)) {
           await job.remove();
-          console.log(`Removed old job ${job.id}`);
         }
       }
 
@@ -625,7 +622,6 @@ const updateCampaign = async (req, res) => {
             message: `Scheduled time for ${job.timeZone} must be in the future`,
           });
         }
-        console.log(`Updating campaign job for timezone ${job.timeZone} to run at ${absoluteRunAt} (Delay: ${delay}ms, Ref: ${job.isRefTimeZone})`);
         await addJob("email-campaigns", job, {
           jobId: `email-campaigns-${campaign._id}-${job.timeZone}-${Date.now()}`,
           delay: Math.max(0, delay),
