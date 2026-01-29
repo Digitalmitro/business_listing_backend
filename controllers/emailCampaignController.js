@@ -559,6 +559,11 @@ const updateCampaign = async (req, res) => {
         campaign.recipients.customEmails = recipients.customEmails;
       }
     }
+
+    // Fetch users for timezone and scheduling
+    const recipientsUserIds = campaign.recipients.users || [];
+    const users = await User.find({ _id: { $in: recipientsUserIds } });
+
     const refTimeZone = req.body.timeZone || (users && users.length > 0 ? (users[0].timeZone || "Asia/Kolkata") : "Asia/Kolkata");
     campaign.timeZone = refTimeZone;
 
