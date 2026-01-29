@@ -405,14 +405,17 @@ const createCampaign = async (req, res) => {
       return res.status(400).json({ message: "Invalid template" });
     }
 
+    const refTimeZone = req.body.timeZone || (users && users.length > 0 ? (users[0].timeZone || "Asia/Kolkata") : "Asia/Kolkata");
+    
     const campaign = new EmailCampaign({
       name,
       template,
       recipients,
       fromEmail,
       createdBy: req.user.id,
+      timeZone: refTimeZone,
       scheduledAt: scheduledAt
-        ? moment(scheduledAt, "YYYY-MM-DD HH:mm").toDate()
+        ? moment.tz(scheduledAt, "YYYY-MM-DD HH:mm", refTimeZone).toDate()
         : undefined,
       status: scheduledAt ? "scheduled" : "draft",
     });
@@ -441,9 +444,10 @@ const createCampaign = async (req, res) => {
       });
 
       for (const job of jobs) {
+        const delay = new Date(job.localScheduleTime) - new Date();
         await addJob("email-campaigns", job, {
           jobId: `email-campaigns-${campaign._id}-${job.timeZone}`,
-          delay: new Date(job.localScheduleTime) - new Date(),
+          delay: Math.max(0, delay),
           attempts: 3,
           backoff: { type: "exponential", delay: 5000 },
         });
@@ -555,10 +559,10 @@ const updateCampaign = async (req, res) => {
         campaign.recipients.customEmails = recipients.customEmails;
       }
     }
+    const refTimeZone = req.body.timeZone || (users && users.length > 0 ? (users[0].timeZone || "Asia/Kolkata") : "Asia/Kolkata");
+    campaign.timeZone = refTimeZone;
+
     if (scheduledAt) {
-      const users = await User.find({
-        _id: { $in: campaign.recipients.users },
-      });
       const timeZones = [
         ...new Set(users.map((user) => user.timeZone || "UTC")),
       ];
@@ -595,19 +599,19 @@ const updateCampaign = async (req, res) => {
 
       for (const job of jobs) {
         const delay = new Date(job.localScheduleTime) - new Date();
-        if (delay <= 0) {
+        if (delay <= -60000) { // Allow 1 minute grace for immediate-ish scheduling
           return res.status(400).json({
             message: `Scheduled time for ${job.timeZone} must be in the future`,
           });
         }
         await addJob("email-campaigns", job, {
           jobId: `email-campaigns-${campaign._id}-${job.timeZone}`,
-          delay,
+          delay: Math.max(0, delay),
           attempts: 3,
           backoff: { type: "exponential", delay: 5000 },
         });
       }
-      campaign.scheduledAt = moment(scheduledAt, "YYYY-MM-DD HH:mm").toDate();
+      campaign.scheduledAt = moment.tz(scheduledAt, "YYYY-MM-DD HH:mm", refTimeZone).toDate();
       campaign.status = "scheduled";
     } else if (scheduledAt === null) {
       const existingJobs = await emailQueue.getJobs([
