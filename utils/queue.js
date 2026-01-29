@@ -104,6 +104,8 @@ async function addJob(queueName, jobData, options = {}) {
     const job = await queue.add(queueName, jobData, {
       ...options,
       jobId: options.jobId || `${queueName}-${Date.now()}-${Math.random().toString(36).substring(2)}`,
+      removeOnComplete: { count: 100 }, // Keep last 100 for debugging
+      removeOnFail: { count: 500 },     // Keep last 500 fails
     });
     console.log(`Job ${job.id} added to queue ${queueName}`);
     return job;

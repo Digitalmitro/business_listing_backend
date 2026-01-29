@@ -188,8 +188,7 @@ const emailWorker = new Worker(
     }
   },
   { 
-    connection: redisConnection,
-    removeOnComplete: true 
+    connection: redisConnection
   }
 );
 
