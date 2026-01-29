@@ -17,6 +17,7 @@ const emailWorker = new Worker(
       fromEmail,
       template,
       localScheduleTime,
+      isRefTimeZone,
     } = job.data;
     try {
       console.log("Processing job:", {
@@ -186,7 +187,10 @@ const emailWorker = new Worker(
       throw error;
     }
   },
-  { connection: redisConnection }
+  { 
+    connection: redisConnection,
+    removeOnComplete: true 
+  }
 );
 
 emailWorker.on("completed", (job) => {

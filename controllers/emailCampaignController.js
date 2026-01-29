@@ -450,9 +450,11 @@ const createCampaign = async (req, res) => {
 
       for (const job of jobs) {
         const delay = new Date(job.localScheduleTime) - new Date();
-        console.log(`Scheduling initial job for timezone ${job.timeZone} at ${job.localScheduleTime} (Delay: ${delay}ms, Ref: ${job.isRefTimeZone})`);
+        const absoluteRunAt = new Date(job.localScheduleTime).toISOString();
+        console.log(`Scheduling initial job for timezone ${job.timeZone} to run at ${absoluteRunAt} (Delay: ${delay}ms, Ref: ${job.isRefTimeZone})`);
+        
         await addJob("email-campaigns", job, {
-          jobId: `email-campaigns-${campaign._id}-${job.timeZone}`,
+          jobId: `email-campaigns-${campaign._id}-${job.timeZone}-${Date.now()}`,
           delay: Math.max(0, delay),
           attempts: 3,
           backoff: { type: "exponential", delay: 5000 },
@@ -600,29 +602,32 @@ const updateCampaign = async (req, res) => {
         };
       });
 
-      // Remove existing jobs
+      // Remove ALL existing jobs for this campaign (even completed/failed ones)
       const existingJobs = await emailQueue.getJobs([
         "waiting",
         "active",
         "delayed",
+        "completed",
+        "failed",
       ]);
       for (const job of existingJobs) {
         if (job.id.startsWith(`email-campaigns-${campaign._id}-`)) {
           await job.remove();
-          console.log(`Removed job ${job.id}`);
+          console.log(`Removed old job ${job.id}`);
         }
       }
 
       for (const job of jobs) {
         const delay = new Date(job.localScheduleTime) - new Date();
+        const absoluteRunAt = new Date(job.localScheduleTime).toISOString();
         if (delay <= -60000) { // Allow 1 minute grace for immediate-ish scheduling
           return res.status(400).json({
             message: `Scheduled time for ${job.timeZone} must be in the future`,
           });
         }
-        console.log(`Updating campaign job for timezone ${job.timeZone} at ${job.localScheduleTime} (Delay: ${delay}ms, Ref: ${job.isRefTimeZone})`);
+        console.log(`Updating campaign job for timezone ${job.timeZone} to run at ${absoluteRunAt} (Delay: ${delay}ms, Ref: ${job.isRefTimeZone})`);
         await addJob("email-campaigns", job, {
-          jobId: `email-campaigns-${campaign._id}-${job.timeZone}`,
+          jobId: `email-campaigns-${campaign._id}-${job.timeZone}-${Date.now()}`,
           delay: Math.max(0, delay),
           attempts: 3,
           backoff: { type: "exponential", delay: 5000 },
