@@ -185,15 +185,8 @@ const updateClaimStatus = async (req, res) => {
     if (status === "approved") {
       claim.kycVerified = true;
       claim.kycVerifiedAt = new Date();
-    }
-    claim.updatedAt = Date.now();
-    await claim.save();
-
-    // Add claim email job to queue
-    await addJob("claim-email", {
-      claimId: claim._id,
-      status: claim.status,
-    });
+      claim.updatedAt = Date.now();
+      await claim.save();
 
       // 0. Find the previous owner if any
       const previousBusiness = await Business.findById(claim.businessId);
@@ -219,16 +212,20 @@ const updateClaimStatus = async (req, res) => {
 
       // Sync logo and photos from claim if they exist
       if (claim.businessLogo) businessUpdates.businessLogo = claim.businessLogo;
-      if (claim.photos && claim.photos.length > 0) businessUpdates.photos = claim.photos;
+      if (claim.photos && claim.photos.length > 0)
+        businessUpdates.photos = claim.photos;
 
       await Business.findByIdAndUpdate(claim.businessId, businessUpdates);
 
       // 2. Update Previous Owner record (if any)
-      if (previousOwnerId && previousOwnerId.toString() !== claim.userId.toString()) {
+      if (
+        previousOwnerId &&
+        previousOwnerId.toString() !== claim.userId.toString()
+      ) {
         await User.findByIdAndUpdate(previousOwnerId, {
-          $pull: { businesses: claim.businessId }
+          $pull: { businesses: claim.businessId },
         });
-        
+
         // Optionally update isSeller status for previous owner if they have no more businesses
         const prevUser = await User.findById(previousOwnerId);
         if (prevUser && prevUser.businesses.length === 0) {
@@ -240,9 +237,15 @@ const updateClaimStatus = async (req, res) => {
       // 3. Update New Owner record to include this business
       await User.findByIdAndUpdate(claim.userId, {
         $addToSet: { businesses: claim.businessId },
-        $set: { isSeller: true }
+        $set: { isSeller: true },
       });
     }
+
+    // Add claim email job to queue
+    await addJob("claim-email", {
+      claimId: claim._id,
+      status: claim.status,
+    });
 
     res.status(200).json({ message: `Claim ${status}`, claim });
   } catch (error) {
