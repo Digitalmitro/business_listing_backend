@@ -66,6 +66,12 @@ const emailWorker = new Worker(
         }))
       );
       for (const user of users) {
+        // Skip unsubscribed users
+        if (!user.subscribedToEmails) {
+          console.log(`Skipping unsubscribed user: ${user.email}`);
+          continue;
+        }
+
         // Find associated business name if exists for registered user
         let bizName = "User";
         const associatedBiz = await Business.findOne({

@@ -537,7 +537,6 @@ const updateCampaign = async (req, res) => {
       if (recipients.users) {
         const users = await User.find({
           _id: { $in: recipients.users },
-          subscribedToEmails: true,
         });
         if (recipients.users.length && !users.length) {
           return res.status(400).json({ message: "No valid users selected" });
@@ -702,12 +701,11 @@ const sendCampaign = async (req, res) => {
         .json({ message: "Sender email is invalid or inactive" });
     }
 
-    const recipients = campaign.userIds
-      .filter((user) => user.subscribedToEmails)
-      .map((user) => user.email);
+    const validRecipients = (campaign.recipients.users || [])
+      .filter((user) => user.subscribedToEmails);
 
-    if (recipients.length === 0) {
-      return res.status(400).json({ message: "No valid recipients found" });
+    if (validRecipients.length === 0 && (!campaign.recipients.customEmails || campaign.recipients.customEmails.length === 0)) {
+      return res.status(400).json({ message: "No valid recipients found (they may have unsubscribed)" });
     }
 
     try {
