@@ -217,16 +217,14 @@ const updateClaimStatus = async (req, res) => {
 
       await Business.findByIdAndUpdate(claim.businessId, businessUpdates);
 
-      // 2. Update Previous Owner record (if any)
-      if (
-        previousOwnerId &&
-        previousOwnerId.toString() !== claim.userId.toString()
-      ) {
-        await User.findByIdAndUpdate(previousOwnerId, {
-          $pull: { businesses: claim.businessId },
-        });
+      // 2. Remove this business from ALL users who might have it in their businesses array (Cleanup stale data)
+      await User.updateMany(
+        { businesses: claim.businessId },
+        { $pull: { businesses: claim.businessId } }
+      );
 
-        // Optionally update isSeller status for previous owner if they have no more businesses
+      // 3. Update Previous Owner's isSeller status if they have no more businesses
+      if (previousOwnerId && previousOwnerId.toString() !== claim.userId.toString()) {
         const prevUser = await User.findById(previousOwnerId);
         if (prevUser && prevUser.businesses.length === 0) {
           prevUser.isSeller = false;
@@ -234,7 +232,7 @@ const updateClaimStatus = async (req, res) => {
         }
       }
 
-      // 3. Update New Owner record to include this business
+      // 4. Update New Owner record to include this business
       await User.findByIdAndUpdate(claim.userId, {
         $addToSet: { businesses: claim.businessId },
         $set: { isSeller: true },
@@ -297,13 +295,14 @@ const syncApprovedClaims = async (req, res) => {
         updatedAt: Date.now(),
       });
 
-      // 2. Update Previous Owner record (if changed)
+      // 2. Remove this business from ALL users who might have it in their businesses array (Cleanup stale data)
+      await User.updateMany(
+        { businesses: claim.businessId },
+        { $pull: { businesses: claim.businessId } }
+      );
+
+      // 3. Update Previous Owner record (if changed)
       if (previousOwnerId && previousOwnerId.toString() !== claim.userId.toString()) {
-        await User.findByIdAndUpdate(previousOwnerId, {
-          $pull: { businesses: claim.businessId }
-        });
-        
-        // Update isSeller for previous owner if needed
         const prevUser = await User.findById(previousOwnerId);
         if (prevUser && prevUser.businesses.length === 0) {
           prevUser.isSeller = false;
@@ -311,7 +310,7 @@ const syncApprovedClaims = async (req, res) => {
         }
       }
 
-      // 3. Update User record (New owner)
+      // 4. Update User record (New owner)
       await User.findByIdAndUpdate(claim.userId, {
         $addToSet: { businesses: claim.businessId },
         $set: { isSeller: true },

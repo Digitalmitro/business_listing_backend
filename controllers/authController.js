@@ -318,7 +318,7 @@ exports.getAllUsers = async (req, res) => {
       .populate({
         path: "businesses",
         select:
-          "businessName address.city address.area address.state address.country",
+          "businessName userId address.city address.area address.state address.country",
       })
       .skip(skip)
       .limit(pageLimit)
@@ -328,14 +328,19 @@ exports.getAllUsers = async (req, res) => {
 
     // Format response with business names
     const formattedUsers = users.map((user) => {
+      // Filter out businesses that no longer point back to this user (stale data)
+      const validBusinesses = user.businesses?.filter(
+        (b) => b && b.userId && b.userId.toString() === user._id.toString()
+      ) || [];
+
       const businessNames =
-        user.businesses?.length > 0
-          ? user.businesses.map((b) => b.businessName).join(", ")
+        validBusinesses.length > 0
+          ? validBusinesses.map((b) => b.businessName).join(", ")
           : "No Business";
 
       const businessAddresses =
-        user.businesses?.length > 0
-          ? user.businesses
+        validBusinesses.length > 0
+          ? validBusinesses
               .map((b) => {
                 const addr = b.address;
                 return `${addr.area || ""}, ${addr.city || ""}, ${
@@ -352,7 +357,7 @@ exports.getAllUsers = async (req, res) => {
         full_name: user.full_name || "N/A",
         email: user.email,
         phone: user.phone || "N/A",
-        isSeller: user.isSeller,
+        isSeller: validBusinesses.length > 0, // Reflect actual ownership
         businessNames,
         businessAddresses,
         country: user.country || "N/A",
