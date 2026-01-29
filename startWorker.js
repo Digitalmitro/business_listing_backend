@@ -20,6 +20,11 @@ async function startWorker() {
     // Initialize the workers (BullMQ starts processing jobs automatically)
     console.log('Email workers started: email-campaigns, welcome-email, purchase-email, claim-email, kyc-email, geocoding-batch, enquiry-email, booking-email');
 
+    // System heartbeat to monitor process survival
+    setInterval(() => {
+      console.log(`[${new Date().toISOString()}] Background process heartbeat: System is healthy and monitoring queues...`);
+    }, 60000);
+
     // Keep the process alive to handle BullMQ jobs
     process.on('SIGINT', async () => {
       console.log('Shutting down email workers...');

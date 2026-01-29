@@ -425,6 +425,10 @@ const createCampaign = async (req, res) => {
       const timeZones = [
         ...new Set(users.map((user) => user.timeZone || "UTC")),
       ];
+      if (timeZones.length === 0 && recipients.customEmails && recipients.customEmails.length > 0) {
+        timeZones.push(refTimeZone);
+      }
+
       const jobs = timeZones.map((timeZone) => {
         const usersInTimeZone = users.filter(
           (user) => (user.timeZone || "UTC") === timeZone
@@ -440,11 +444,13 @@ const createCampaign = async (req, res) => {
           fromEmail,
           template, // Match emailWorker.js
           localScheduleTime,
+          isRefTimeZone: timeZones.length === 1 || timeZone === refTimeZone,
         };
       });
 
       for (const job of jobs) {
         const delay = new Date(job.localScheduleTime) - new Date();
+        console.log(`Scheduling initial job for timezone ${job.timeZone} at ${job.localScheduleTime} (Delay: ${delay}ms, Ref: ${job.isRefTimeZone})`);
         await addJob("email-campaigns", job, {
           jobId: `email-campaigns-${campaign._id}-${job.timeZone}`,
           delay: Math.max(0, delay),
@@ -571,6 +577,10 @@ const updateCampaign = async (req, res) => {
       const timeZones = [
         ...new Set(users.map((user) => user.timeZone || "UTC")),
       ];
+      if (timeZones.length === 0 && campaign.recipients.customEmails && campaign.recipients.customEmails.length > 0) {
+        timeZones.push(refTimeZone);
+      }
+
       const jobs = timeZones.map((timeZone) => {
         const usersInTimeZone = users.filter(
           (user) => (user.timeZone || "UTC") === timeZone
@@ -586,6 +596,7 @@ const updateCampaign = async (req, res) => {
           fromEmail: campaign.fromEmail,
           template: campaign.template,
           localScheduleTime,
+          isRefTimeZone: timeZones.length === 1 || timeZone === refTimeZone,
         };
       });
 
@@ -609,6 +620,7 @@ const updateCampaign = async (req, res) => {
             message: `Scheduled time for ${job.timeZone} must be in the future`,
           });
         }
+        console.log(`Updating campaign job for timezone ${job.timeZone} at ${job.localScheduleTime} (Delay: ${delay}ms, Ref: ${job.isRefTimeZone})`);
         await addJob("email-campaigns", job, {
           jobId: `email-campaigns-${campaign._id}-${job.timeZone}`,
           delay: Math.max(0, delay),

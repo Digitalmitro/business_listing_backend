@@ -111,39 +111,41 @@ const emailWorker = new Worker(
         sentCount++;
       }
 
-      // Send emails to customEmails
-      for (const item of campaign.recipients.customEmails || []) {
-        const email = typeof item === 'string' ? item : item.email;
-        const bizName = typeof item === 'string' ? "User" : (item.businessName || "User");
+      // Send emails to customEmails (ONLY if this is the reference timezone job to avoid duplicates)
+      const isRefTimeZone = job.data.isRefTimeZone;
+      if (isRefTimeZone) {
+        for (const item of campaign.recipients.customEmails || []) {
+          const email = typeof item === 'string' ? item : item.email;
+          const bizName = typeof item === 'string' ? "User" : (item.businessName || "User");
 
-        const html = templateDoc.body
-          .replace(/{{full_name}}/g, "User")
-          .replace(/{{email}}/g, email)
-          .replace(/{{business_name}}/g, bizName);
-        
-        const unsubscribeLink = `${
-          process.env.FRONTEND_URL
-        }/unsubscribe?email=${encodeURIComponent(email)}&campaignId=${
-          campaign._id
-        }`;
-        const result = await sendMail(
-          fromEmail,
-          email,
-          templateDoc.subject,
-          html,
-          unsubscribeLink
-        );
-        console.log("Send mail result for custom email:", {
-          email,
-          success: result.success,
-          error: result.error?.message,
-        });
-        if (!result.success) {
-          throw new Error(
-            `Failed to send email to ${email}: ${result.error.message}`
+          const html = templateDoc.body
+            .replace(/{{full_name}}/g, "User")
+            .replace(/{{email}}/g, email)
+            .replace(/{{business_name}}/g, bizName);
+          
+          const unsubscribeLink = `${
+            process.env.FRONTEND_URL
+          }/unsubscribe?email=${encodeURIComponent(email)}&campaignId=${
+            campaign._id
+          }`;
+          const result = await sendMail(
+            fromEmail,
+            email,
+            templateDoc.subject,
+            html,
+            unsubscribeLink
           );
+          console.log("Send mail result for custom email:", {
+            email,
+            success: result.success,
+            error: result.error?.message,
+          });
+          if (!result.success) {
+            console.error(`Failed to send to custom email ${email}, continuing...`);
+          } else {
+            sentCount++;
+          }
         }
-        sentCount++;
       }
 
       // Update campaign status
@@ -194,5 +196,10 @@ emailWorker.on("completed", (job) => {
 emailWorker.on("failed", (job, err) => {
   console.error(`Job ${job.id} failed:`, err.stack);
 });
+
+// Heartbeat to keep the process alive and log health
+setInterval(() => {
+  console.log(`[${new Date().toISOString()}] Email Worker heartbeat: Queue 'email-campaigns' is active`);
+}, 60000);
 
 module.exports = emailWorker;

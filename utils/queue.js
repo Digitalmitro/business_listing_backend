@@ -9,6 +9,10 @@ const redisConnection = new Redis({
   maxRetriesPerRequest: null, // Required for BullMQ
 });
 
+redisConnection.on('connect', () => console.log('Redis connected successfully'));
+redisConnection.on('error', (err) => console.error('Redis connection error:', err));
+redisConnection.on('ready', () => console.log('Redis is ready to accept commands'));
+
 const emailQueue = new Queue('email-campaigns', {
   connection: redisConnection,
   defaultJobOptions: {
@@ -65,6 +69,14 @@ const enquiryQueue = new Queue('enquiry-email', {
   },
 });
 
+const bookingQueue = new Queue('booking-email', {
+  connection: redisConnection,
+  defaultJobOptions: {
+    attempts: 3,
+    backoff: { type: 'exponential', delay: 1000 },
+  },
+});
+
 const queues = {
   'email-campaigns': emailQueue,
   'welcome-email': welcomeQueue,
@@ -73,6 +85,7 @@ const queues = {
   'kyc-email': kycQueue,
   'geocoding-batch': geocodingQueue,
   'enquiry-email': enquiryQueue,
+  'booking-email': bookingQueue,
 };
 
 /**
@@ -100,4 +113,4 @@ async function addJob(queueName, jobData, options = {}) {
   }
 }
 
-module.exports = { emailQueue, welcomeQueue, purchaseQueue, claimQueue, kycQueue, geocodingQueue, enquiryQueue, redisConnection, addJob };
+module.exports = { emailQueue, welcomeQueue, purchaseQueue, claimQueue, kycQueue, geocodingQueue, enquiryQueue, bookingQueue, redisConnection, addJob };
