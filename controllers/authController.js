@@ -296,10 +296,17 @@ exports.getAllUsers = async (req, res) => {
     // Build search query
     let searchQuery = {};
     if (search) {
+      // Find businesses matching search
+      const matchingBusinesses = await Business.find({ 
+        businessName: { $regex: search, $options: "i" } 
+      }).select("_id");
+      const businessIds = matchingBusinesses.map(b => b._id);
+
       searchQuery.$or = [
         { email: { $regex: search, $options: "i" } },
         { phone: { $regex: search, $options: "i" } },
         { full_name: { $regex: search, $options: "i" } },
+        { businesses: { $in: businessIds } }
       ];
     }
     if (country) {
@@ -373,14 +380,29 @@ exports.deleteById = async (req, res) => {
   try {
     const { id } = req.params;
 
-    // Find and delete user in one step
-    const deletedUser = await User.findByIdAndDelete(id);
-
-    if (!deletedUser) {
+    // 1. Find the user to get their businesses
+    const user = await User.findById(id);
+    if (!user) {
       return res.status(404).json({ message: "User not found" });
     }
 
-    res.status(200).json({ message: "User deleted successfully", deletedUser });
+    // 2. Update all businesses owned by this user
+    // Mark them as unowned and not claimed
+    await Business.updateMany(
+      { userId: id },
+      { 
+        $set: { 
+          userId: null, 
+          claimed: false, 
+          verified: false 
+        } 
+      }
+    );
+
+    // 3. Delete the user
+    await User.findByIdAndDelete(id);
+
+    res.status(200).json({ message: "User and their business associations cleared successfully" });
   } catch (error) {
     res.status(500).json({ message: "Server error", error: error.message });
     console.log(error);

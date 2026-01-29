@@ -965,22 +965,37 @@ exports.blockBusiness = async (req, res) => {
 exports.deleteBusiness = async (req, res) => {
   try {
     const { businessId } = req.params;
-    const business = await Business.findByIdAndDelete(businessId);
+    
+    // 1. Find the business to see if it exists and get its owner
+    const business = await Business.findById(businessId);
     if (!business) {
       return res.status(404).json({ message: "Business not found" });
     }
-    const user = await User.findOne({ businesses: businessId });
-    if (user) {
-      user.businesses.pull(businessId);
-      if (user.businesses.length === 0) {
-        user.isSeller = false;
+
+    const ownerId = business.userId;
+
+    // 2. Delete the business
+    await Business.findByIdAndDelete(businessId);
+
+    // 3. Remove this business from ALL users' businesses array (just in case of duplicates)
+    await User.updateMany(
+      { businesses: businessId },
+      { $pull: { businesses: businessId } }
+    );
+
+    // 4. Update isSeller status for the specific owner (if any)
+    if (ownerId) {
+      const owner = await User.findById(ownerId);
+      if (owner && owner.businesses.length === 0) {
+        owner.isSeller = false;
+        await owner.save();
       }
-      await user.save();
     }
-    res.status(200).json({ message: "Business successfully deleted" });
+
+    res.status(200).json({ message: "Business successfully deleted and user records updated" });
   } catch (error) {
-    console.error(error);
-    res.status(500).json({ message: "Internal server error" });
+    console.error("Error deleting business:", error);
+    res.status(500).json({ message: "Internal server error", error: error.message });
   }
 };
 
@@ -1159,14 +1174,36 @@ exports.updateBusinessStatus = async (req, res) => {
       return res.status(400).json({ message: "No status updates provided" });
     }
 
+    // Capture the business before update to check ownership
+    const businessBefore = await Business.findById(id);
+    if (!businessBefore) {
+      return res.status(404).json({ message: "Business not found" });
+    }
+
+    // If unclaiming, clear userId
+    if (claimed === false) {
+      updateData.userId = null;
+      
+      // Remove from previous owner's list
+      if (businessBefore.userId) {
+        await User.findByIdAndUpdate(businessBefore.userId, {
+          $pull: { businesses: id }
+        });
+        
+        // Update isSeller if needed
+        const prevUser = await User.findById(businessBefore.userId);
+        if (prevUser && prevUser.businesses.length === 0) {
+          prevUser.isSeller = false;
+          await prevUser.save();
+        }
+      }
+    }
+
     const business = await Business.findByIdAndUpdate(
       id,
       { $set: updateData },
       { new: true, runValidators: true }
     );
-    if (!business) {
-      return res.status(404).json({ message: "Business not found" });
-    }
 
     res
       .status(200)
