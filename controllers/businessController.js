@@ -1918,7 +1918,7 @@ exports.searchBusinesses = async (req, res) => {
     };
 
     const businesses = await Business.find(nameFilter)
-      .select("businessName _id category address addressString kyc")
+      .select("businessName _id category address addressString kyc businessLogo")
       .limit(20);
 
     let formattedBusinesses = businesses.map((biz) => {
@@ -1933,6 +1933,7 @@ exports.searchBusinesses = async (req, res) => {
         type: "business",
         addressLabel: displayAddress || biz.addressString || "Address N/A",
         verified: biz.kyc?.status === "verified",
+        iconUrl: biz.businessLogo,
       };
     });
 
