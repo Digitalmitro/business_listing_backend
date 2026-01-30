@@ -333,6 +333,7 @@ exports.searchCategories = async (req, res) => {
       _id: cat._id,
       name: cat.name,
       slug: cat.slug,
+      iconUrl: cat.iconUrl,
       type: "category",
     }));
 
@@ -340,6 +341,7 @@ exports.searchCategories = async (req, res) => {
       _id: sub._id,
       name: sub.name,
       slug: sub.slug,
+      iconUrl: sub.iconUrl,
       type: "subcategory",
       parentCategory: sub.category?.name,
     }));
