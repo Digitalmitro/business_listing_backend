@@ -303,6 +303,8 @@ const createRazorpaySubscription = async (req, res) => {
         businessId: businessId.toString(),
         businessName: business.businessName,
       },
+      callback_url: `${process.env.FRONTEND_URL}/subscription/success?businessId=${businessId}`,
+      callback_method: "get",
     });
 
     business.subscription = {
@@ -338,7 +340,7 @@ const verifyRazorpayWebhook = async (req, res) => {
   }
 
   const shasum = crypto.createHmac("sha256", webhookSecret);
-  shasum.update(JSON.stringify(req.body));
+  shasum.update(req.rawBody || JSON.stringify(req.body));
   const digest = shasum.digest("hex");
 
   if (signature !== digest) {
