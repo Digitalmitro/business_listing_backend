@@ -303,8 +303,6 @@ const createRazorpaySubscription = async (req, res) => {
         businessId: businessId.toString(),
         businessName: business.businessName,
       },
-      callback_url: `${process.env.FRONTEND_URL}/subscription/success?businessId=${businessId}`,
-      callback_method: "get",
     });
 
     business.subscription = {
@@ -321,6 +319,7 @@ const createRazorpaySubscription = async (req, res) => {
       success: true,
       subscriptionId: subscription.id,
       short_url: subscription.short_url,
+      key_id: process.env.RAZORPAY_KEY_ID,
     });
   } catch (error) {
     console.error("Razorpay Subscription Error:", error);
