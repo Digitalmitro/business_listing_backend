@@ -286,6 +286,14 @@ const createRazorpaySubscription = async (req, res) => {
         .json({ success: false, message: "Invalid package" });
     }
 
+    // --- PREVENT OVERWRITING ACTIVE SUB WITH SAME NAME ---
+    if (business.subscription?.status === "active" && business.subscription.packageName === pricingPackage.name) {
+      return res.status(400).json({ 
+        success: false, 
+        message: `You are already subscribed to the ${pricingPackage.name} plan.` 
+      });
+    }
+
     const planId =
       process.env[`RAZORPAY_PLAN_${pricingPackage.name.toUpperCase()}_ID`];
     if (!planId) {
