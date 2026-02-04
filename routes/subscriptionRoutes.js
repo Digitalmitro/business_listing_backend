@@ -7,6 +7,7 @@ const {
   handlePayPalWebhook,
   createRazorpaySubscription,
   verifyRazorpayWebhook,
+  verifyRazorpaySubscription,
   getBusinessSubscription,
   cancelBusinessSubscription,
   reactivateBusinessSubscription,
@@ -35,6 +36,11 @@ router.post(
   "/razorpay-webhook",
   express.raw({ type: "application/json" }),
   verifyRazorpayWebhook
+);
+router.post(
+  "/verify-razorpay-subscription",
+  authMiddleware,
+  verifyRazorpaySubscription
 );
 
 // BUSINESS-SPECIFIC ROUTES

@@ -395,6 +395,52 @@ const verifyRazorpayWebhook = async (req, res) => {
   res.json({ status: "ok" });
 };
 
+// MANUALLY VERIFY SUBSCRIPTION FROM FRONTEND (Immediate Activation)
+const verifyRazorpaySubscription = async (req, res) => {
+  const { razorpay_payment_id, razorpay_subscription_id, razorpay_signature, businessId } = req.body;
+
+  try {
+    const secret = process.env.RAZORPAY_KEY_SECRET;
+    const body = razorpay_payment_id + "|" + razorpay_subscription_id;
+
+    const expectedSignature = crypto
+      .createHmac("sha256", secret)
+      .update(body.toString())
+      .digest("hex");
+
+    if (expectedSignature !== razorpay_signature) {
+      return res.status(400).json({ success: false, message: "Invalid signature" });
+    }
+
+    const business = await Business.findOne({ _id: businessId, userId: req.user.id });
+    if (!business) {
+        return res.status(404).json({ success: false, message: "Business not found" });
+    }
+
+    business.subscription.status = "active";
+    business.subscription.nextBillingDate = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+    await business.save();
+
+    // Notify Admins & Send Email
+    await notifyAdmins({
+      title: "Subscription Verified (Manual)",
+      description: `${business.businessName} has activeated ${business.subscription.packageName}.`,
+      link: "/all-business",
+      category: "subscription",
+    });
+
+    await addJob("purchase-email", {
+      businessId: business._id,
+      packageDetails: { packageName: business.subscription.packageName },
+    });
+
+    res.json({ success: true, message: "Subscription activated successfully" });
+  } catch (error) {
+    console.error("Manual Verification Error:", error);
+    res.status(500).json({ success: false, message: "Verification failed" });
+  }
+};
+
 // GET BUSINESS SUBSCRIPTION
 const getBusinessSubscription = async (req, res) => {
   try {
@@ -551,6 +597,7 @@ module.exports = {
   handlePayPalWebhook,
   createRazorpaySubscription,
   verifyRazorpayWebhook,
+  verifyRazorpaySubscription,
   getBusinessSubscription,
   cancelBusinessSubscription,
   reactivateBusinessSubscription,
