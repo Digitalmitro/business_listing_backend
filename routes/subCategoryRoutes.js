@@ -17,6 +17,7 @@ const {
 } = require("../controllers/subCategoryContoller");
 
 // STATIC ROUTES FIRST
+router.get("/repair-slugs", bulkRepairSubCategorySlugs);
 router.get("/sample-subcategory-csv", downloadSampleSubCategoryCSV);
 router.post(
   "/import-subcategory-csv",
@@ -24,7 +25,6 @@ router.post(
   importSubCategoriesFromCSV
 );
 // Existing routes
-router.get("/repair-slugs", bulkRepairSubCategorySlugs);
 router.post("/subcategories", upload.single("icon"), createSubCategory);
 router.get("/subcategories", getAllsubcategory);
 router.get("/subcategories-paginated", getAllSubcategoryPaginated);
