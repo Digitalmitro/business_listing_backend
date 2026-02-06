@@ -405,3 +405,25 @@ exports.downloadSampleSubCategoryCSV = (req, res) => {
   res.attachment("sample-subcategories.csv");
   res.send(csv);
 };
+// BULK REPAIR SLUGS (One-time utility)
+exports.bulkRepairSubCategorySlugs = async (req, res) => {
+  try {
+    const subCategories = await SubCategory.find({
+      $or: [{ slug: { $exists: false } }, { slug: "" }, { slug: null }],
+    });
+
+    let count = 0;
+    for (const sub of subCategories) {
+      // The .save() will trigger the pre-save hook we just added to the model
+      await sub.save();
+      count++;
+    }
+
+    res.json({
+      success: true,
+      message: `Successfully generated slugs for ${count} subcategories.`,
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};

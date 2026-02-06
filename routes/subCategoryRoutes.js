@@ -10,9 +10,10 @@ const {
   updateSubCategory,
   getSubCategoriesByCategoryIds,
   getPopularSearches,
-  importSubCategoriesFromCSV, // ← NEW
+  importSubCategoriesFromCSV,
   downloadSampleSubCategoryCSV,
-  getAllSubcategoryPaginated, // ← NEW
+  getAllSubcategoryPaginated,
+  bulkRepairSubCategorySlugs,
 } = require("../controllers/subCategoryContoller");
 
 // STATIC ROUTES FIRST
@@ -22,6 +23,7 @@ router.post(
   upload.single("csvFile"),
   importSubCategoriesFromCSV
 );
+router.post("/repair-slugs", bulkRepairSubCategorySlugs);
 
 // Existing routes
 router.post("/subcategories", upload.single("icon"), createSubCategory);

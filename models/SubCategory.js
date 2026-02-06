@@ -41,4 +41,18 @@ const SubCategorySchema = new Schema({
   },
 });
 
+// Auto-generate slug before saving
+SubCategorySchema.pre("save", function (next) {
+  if (this.isModified("name") || !this.slug) {
+    this.slug = this.name
+      .toLowerCase()
+      .replace(/[^a-z0-9\s-]/g, "")
+      .replace(/\s+/g, "-")
+      .replace(/-+/g, "-")
+      .trim();
+  }
+  this.updatedAt = Date.now();
+  next();
+});
+
 module.exports = mongoose.model("SubCategory", SubCategorySchema);
