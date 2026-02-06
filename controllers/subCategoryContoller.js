@@ -427,3 +427,40 @@ exports.bulkRepairSubCategorySlugs = async (req, res) => {
     res.status(500).json({ success: false, message: error.message });
   }
 };
+// REMOVE DUPLICATE SUBCATEGORIES (Same name under same category)
+exports.removeDuplicateSubCategories = async (req, res) => {
+  try {
+    // Aggregate to find duplicates based on name and category
+    const duplicates = await SubCategory.aggregate([
+      {
+        $group: {
+          _id: { name: { $toLower: "$name" }, category: "$category" },
+          count: { $sum: 1 },
+          docs: { $push: "$_id" },
+        },
+      },
+      {
+        $match: {
+          count: { $gt: 1 },
+        },
+      },
+    ]);
+
+    let removedCount = 0;
+    for (const dup of duplicates) {
+      // Keep the first one, delete the rest
+      const [keep, ...toDelete] = dup.docs;
+      const result = await SubCategory.deleteMany({ _id: { $in: toDelete } });
+      removedCount += result.deletedCount;
+    }
+
+    res.json({
+      success: true,
+      message: `Cleaned up ${removedCount} duplicate subcategories.`,
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// GET BUSINESS SUBSCRIPTION

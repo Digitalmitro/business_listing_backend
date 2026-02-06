@@ -17,6 +17,8 @@ const SubCategorySchema = new Schema({
   },
   slug: {
     type: String,
+    unique: true,
+    trim: true,
   },
   description: {
     type: String,
@@ -40,6 +42,9 @@ const SubCategorySchema = new Schema({
     default: Date.now,
   },
 });
+
+// Prevent same name under same category
+SubCategorySchema.index({ name: 1, category: 1 }, { unique: true });
 
 // Auto-generate slug before saving
 SubCategorySchema.pre("save", function (next) {

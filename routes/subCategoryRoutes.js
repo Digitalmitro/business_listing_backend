@@ -14,10 +14,12 @@ const {
   downloadSampleSubCategoryCSV,
   getAllSubcategoryPaginated,
   bulkRepairSubCategorySlugs,
+  removeDuplicateSubCategories,
 } = require("../controllers/subCategoryContoller");
 
 // STATIC ROUTES FIRST
 router.get("/repair-slugs", bulkRepairSubCategorySlugs);
+router.get("/clean-duplicates", removeDuplicateSubCategories);
 router.get("/sample-subcategory-csv", downloadSampleSubCategoryCSV);
 router.post(
   "/import-subcategory-csv",
