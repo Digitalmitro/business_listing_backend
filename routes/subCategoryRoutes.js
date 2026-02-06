@@ -23,9 +23,8 @@ router.post(
   upload.single("csvFile"),
   importSubCategoriesFromCSV
 );
-router.post("/repair-slugs", bulkRepairSubCategorySlugs);
-
 // Existing routes
+router.get("/repair-slugs", bulkRepairSubCategorySlugs);
 router.post("/subcategories", upload.single("icon"), createSubCategory);
 router.get("/subcategories", getAllsubcategory);
 router.get("/subcategories-paginated", getAllSubcategoryPaginated);
