@@ -1967,6 +1967,21 @@ exports.getAllBusiness = async (req, res) => {
   }
 };
 
+exports.getDistinctCountries = async (req, res) => {
+  try {
+    const countries = await Business.distinct("address.country");
+    const filteredCountries = countries
+      .filter(Boolean)
+      .map(c => c.trim())
+      .filter((v, i, a) => a.indexOf(v) === i)
+      .sort();
+    
+    res.status(200).json(filteredCountries);
+  } catch (error) {
+    res.status(500).json({ message: "Failed to fetch countries", error: error.message });
+  }
+};
+
 exports.searchBusinesses = async (req, res) => {
   try {
     const { query, location } = req.query;

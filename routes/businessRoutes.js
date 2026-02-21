@@ -20,6 +20,7 @@ const {
   importBusinessFromCSV,
   downloadSampleCSV,
   searchBusinesses,
+  getDistinctCountries,
 } = require("../controllers/businessController");
 const {
   getOffers,
@@ -41,6 +42,7 @@ router.post(
   ]),
   createBusiness
 );
+router.get("/distinct-countries", getDistinctCountries);
 router.get("/all-business", getAllBusiness);
 
 router.put(
