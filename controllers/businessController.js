@@ -216,249 +216,300 @@ exports.importBusinessFromCSV = async (req, res) => {
   if (!req.file) return res.status(400).json({ message: "CSV file required" });
 
   const filePath = req.file.path;
-  const results = [];
+  const CHUNK_SIZE = 500;
+  let created = 0;
+  let updated = 0;
+  let skipped = 0;
   const errors = [];
 
-  // Read CSV
-  fs.createReadStream(filePath)
-    .pipe(csv())
-    .on("data", (data) => results.push(data))
-    .on("end", async () => {
+  // Robust Country Normalization
+  const normalizeCountry = (c) => {
+    if (!c) return "Unknown Country";
+    const upper = c.trim().toUpperCase();
+    const map = {
+      "USA": "United States",
+      "US": "United States",
+      "UNITED STATES": "United States",
+      "UK": "United Kingdom",
+      "U.K.": "United Kingdom",
+      "UNITED KINGDOM": "United Kingdom",
+      "INDIA": "India",
+      "AU": "Australia",
+      "AUSTRALIA": "Australia",
+      "CA": "Canada",
+      "CANADA": "Canada"
+    };
+    return map[upper] || c.trim();
+  };
+
+  // Pre-cache Categories and Subcategories to minimize DB queries
+  const categoryCache = new Map();
+  const subCategoryCache = new Map();
+
+  const getCategory = async (name) => {
+    const key = name.toLowerCase().trim();
+    if (categoryCache.has(key)) return categoryCache.get(key);
+    
+    let cat = await Category.findOne({ name: { $regex: new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, "i") } });
+    if (!cat) cat = await Category.create({ name });
+    categoryCache.set(key, cat);
+    return cat;
+  };
+
+  const getSubCategory = async (name, categoryId) => {
+    const key = `${categoryId}:${name.toLowerCase().trim()}`;
+    if (subCategoryCache.has(key)) return subCategoryCache.get(key);
+    
+    let sub = await SubCategory.findOne({ 
+      name: { $regex: new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, "i") }, 
+      category: categoryId 
+    });
+    if (!sub) sub = await SubCategory.create({ name, category: categoryId });
+    subCategoryCache.set(key, sub);
+    return sub;
+  };
+
+  const processChunk = async (chunk) => {
+    const bulkOps = [];
+    const geocodingJobs = [];
+
+    for (const row of chunk) {
       try {
-        let created = 0;
-        let updated = 0;
-        let skipped = 0;
+        const {
+          "Business Name": businessName,
+          address,
+          Website: website,
+          Email: email,
+          Phone: phone,
+          Rating: ratingStr,
+          Reviews: reviewsStr,
+          Latitude: latStr,
+          Longitude: lonStr,
+          Category: rawCategory,
+          Subcategory: rawSubCategory,
+          Country: rowCountry
+        } = row;
 
-        for (const row of results) {
-          try {
-            const {
-              "Business Name": businessName,
-              address,
-              Website: website,
-              Email: email,
-              Phone: phone,
-              Rating: ratingStr,
-              Reviews: reviewsStr,
-              Latitude: latStr,
-              Longitude: lonStr,
-              Category: rawCategory,
-              Subcategory: rawSubCategory,
-              Country: rowCountry // Check for explicit Country column
-            } = row;
-
-            if (!businessName || !address) {
-              errors.push(
-                `Missing required fields: ${businessName || "Unknown"}`
-              );
-              skipped++;
-              continue;
-            }
-
-            const latitude = latStr ? parseFloat(latStr) : 0;
-            const longitude = lonStr ? parseFloat(lonStr) : 0;
-            const needsGeocoding = !latStr || !lonStr;
-            const rating = parseFloat(ratingStr) || 0;
-            const totalReviews = parseInt(reviewsStr) || 0;
-
-            // Robust Country Normalization
-            const normalizeCountry = (c) => {
-              if (!c) return "Unknown Country";
-              const upper = c.trim().toUpperCase();
-              const map = {
-                "USA": "United States",
-                "US": "United States",
-                "UNITED STATES": "United States",
-                "UK": "United Kingdom",
-                "U.K.": "United Kingdom",
-                "UNITED KINGDOM": "United Kingdom",
-                "INDIA": "India",
-                "AU": "Australia",
-                "AUSTRALIA": "Australia",
-                "CA": "Canada",
-                "CANADA": "Canada"
-              };
-              return map[upper] || c.trim();
-            };
-
-            // Extract parts from address
-            // Format: Street; Area; City; State; Pincode; [Country]
-            const addressParts = address.split(";").map(p => p.trim());
-            const len = addressParts.length;
-
-            let streetName = addressParts[0] || "";
-            let area = ""; 
-            let city = "Unknown City";
-            let state = "Unknown State";
-            let pincode = "000000";
-            let country = rowCountry || "Unknown Country";
-
-            if (len >= 6) {
-              // Street; Area; City; State; Pincode; Country
-              area = addressParts[1];
-              city = addressParts[2];
-              state = addressParts[3];
-              pincode = addressParts[4];
-              country = rowCountry || addressParts[5] || country;
-            } else if (len === 5) {
-              // Street; Area; City; State; Pincode
-              area = addressParts[1];
-              city = addressParts[2];
-              state = addressParts[3];
-              pincode = addressParts[4];
-            } else if (len === 4) {
-              // Street; City; State (Zip); Country
-              city = addressParts[1];
-              state = addressParts[2]; // Might include Zip
-              country = rowCountry || addressParts[3] || country;
-            } else if (len === 3) {
-              // City; State; Country (Minimum fallback)
-              city = addressParts[0];
-              state = addressParts[1];
-              country = rowCountry || addressParts[2] || country;
-            }
-
-            country = normalizeCountry(country);
-
-            // Clean phone
-            const cleanedPhone = phone?.replace(/\D/g, "");
-            const mobile = cleanedPhone ? [cleanedPhone] : [];
-
-            // Find or create Category
-            const categoryText = rawCategory ? rawCategory.replace("· ", "").trim() : "Uncategorized";
-            let categoryObj = await Category.findOne({
-              name: { $regex: new RegExp(`^${categoryText}$`, "i") },
-            });
-
-            if (!categoryObj) {
-              categoryObj = await Category.create({ name: categoryText });
-            }
-
-            // Find or create SubCategory
-            const subCategoryText = rawSubCategory ? rawSubCategory.trim() : categoryText;
-            let subCategoryObj = await SubCategory.findOne({
-              name: { $regex: new RegExp(`^${subCategoryText}$`, "i") },
-              category: categoryObj._id
-            });
-
-            if (!subCategoryObj) {
-              subCategoryObj = await SubCategory.create({
-                name: subCategoryText,
-                category: categoryObj._id,
-              });
-            }
-
-            // Business already exists check
-            
-            let business = await Business.findOne({
-              businessName: { $regex: new RegExp(`^${businessName}$`, "i") },
-              "address.city": city,
-              "address.streetName": streetName,
-              "address.pincode": pincode
-            });
-
-            if (business) {
-              // APPEND categories if new
-              const newCatId = categoryObj._id.toString();
-              const newSubCatId = subCategoryObj._id.toString();
-
-              if (!business.category.includes(newCatId)) {
-                business.category.push(newCatId);
-              }
-              if (!business.subCategory.includes(newSubCatId)) {
-                business.subCategory.push(newSubCatId);
-              }
-
-              // Update other fields if better
-              if (!business.website && website) business.website = website;
-              if (!business.contact.email.length && email)
-                business.contact.email = [email];
-              if (!business.contact.mobile.length && mobile.length)
-                business.contact.mobile = mobile;
-              if (rating > business.rating) business.rating = rating;
-              if (totalReviews > business.totalReviews)
-                business.totalReviews = totalReviews;
-
-              await business.save();
-
-              if (needsGeocoding) {
-                await addJob("geocoding-batch", { businessId: business._id });
-              }
-
-              updated++;
-            } else {
-              // CREATE NEW
-              business = new Business({
-                businessName,
-                address: {
-                  city,
-                  state,
-                  country,
-                  area,
-                  pincode,
-                  streetName,
-                },
-                location: {
-                  type: "Point",
-                  coordinates: [longitude, latitude],
-                },
-                contact: {
-                  mobile,
-                  email: email ? [email] : [],
-                  contactDetails: [
-                    {
-                      title: "Mr",
-                      name: businessName,
-                      mobileNumbers: mobile,
-                      emails: email ? [email] : [],
-                    },
-                  ],
-                },
-                website,
-                rating,
-                totalReviews,
-                category: [categoryObj._id],
-                subCategory: [subCategoryObj._id],
-                verified: false,
-                claimed: false,
-                isBlocked: false,
-                profileCompletionScore: 70,
-                needsGeocoding: needsGeocoding,
-              });
-
-              await business.save();
-
-              if (needsGeocoding) {
-                await addJob("geocoding-batch", { businessId: business._id });
-              }
-
-              created++;
-            }
-          } catch (err) {
-            errors.push(
-              `Error processing ${row["Business Name"] || "row"}: ${
-                err.message
-              }`
-            );
-            skipped++;
-          }
+        if (!businessName || !address) {
+          skipped++;
+          continue;
         }
 
-        // Delete uploaded file
-        fs.unlinkSync(filePath);
+        const latitude = latStr ? parseFloat(latStr) : 0;
+        const longitude = lonStr ? parseFloat(lonStr) : 0;
+        const needsGeocoding = !latStr || !lonStr;
+        const rating = parseFloat(ratingStr) || 0;
+        const totalReviews = parseInt(reviewsStr) || 0;
 
-        res.json({
-          message: "Import completed",
-          created,
-          updated,
-          skipped,
-          errors,
+        const addressParts = address.split(";").map(p => p.trim());
+        const len = addressParts.length;
+        let streetName = addressParts[0] || "";
+        let area = ""; 
+        let city = "Unknown City";
+        let state = "Unknown State";
+        let pincode = "000000";
+        let country = rowCountry || "Unknown Country";
+
+        if (len >= 6) {
+          area = addressParts[1];
+          city = addressParts[2];
+          state = addressParts[3];
+          pincode = addressParts[4];
+          country = rowCountry || addressParts[5] || country;
+        } else if (len === 5) {
+          area = addressParts[1];
+          city = addressParts[2];
+          state = addressParts[3];
+          pincode = addressParts[4];
+        } else if (len === 4) {
+          city = addressParts[1];
+          state = addressParts[2];
+          country = rowCountry || addressParts[3] || country;
+        } else if (len === 3) {
+          city = addressParts[0];
+          state = addressParts[1];
+          country = rowCountry || addressParts[2] || country;
+        }
+
+        country = normalizeCountry(country);
+        const cleanedPhone = phone?.replace(/\D/g, "");
+        const mobile = cleanedPhone ? [cleanedPhone] : [];
+
+        const categoryText = rawCategory ? rawCategory.replace("· ", "").trim() : "Uncategorized";
+        const catObj = await getCategory(categoryText);
+
+        const subCategoryText = rawSubCategory ? rawSubCategory.trim() : categoryText;
+        const subCatObj = await getSubCategory(subCategoryText, catObj._id);
+
+        // Check for existing business
+        const existing = await Business.findOne({
+          businessName: { $regex: new RegExp(`^${businessName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, "i") },
+          "address.city": city,
+          "address.streetName": streetName,
+          "address.pincode": pincode
         });
+
+        if (existing) {
+          const update = {
+            $addToSet: { 
+              category: catObj._id,
+              subCategory: subCatObj._id
+            }
+          };
+          if (!existing.website && website) update.$set = { ...update.$set, website };
+          if (!existing.contact.email.length && email) {
+            update.$set = { ...update.$set, "contact.email": [email] };
+          }
+          if (!existing.contact.mobile.length && mobile.length) {
+            update.$set = { ...update.$set, "contact.mobile": mobile };
+          }
+          if (rating > existing.rating) {
+            update.$set = { ...update.$set, rating };
+          }
+          if (totalReviews > existing.totalReviews) {
+            update.$set = { ...update.$set, totalReviews };
+          }
+
+          bulkOps.push({
+            updateOne: {
+              filter: { _id: existing._id },
+              update
+            }
+          });
+          
+          if (needsGeocoding) geocodingJobs.push(existing._id);
+          updated++;
+        } else {
+          const newBiz = {
+            businessName,
+            address: { city, state, country, area, pincode, streetName },
+            location: { type: "Point", coordinates: [longitude, latitude] },
+            contact: {
+              mobile,
+              email: email ? [email] : [],
+              contactDetails: [{
+                title: "Mr",
+                name: businessName,
+                mobileNumbers: mobile,
+                emails: email ? [email] : [],
+              }],
+            },
+            website,
+            rating,
+            totalReviews,
+            category: [catObj._id],
+            subCategory: [subCatObj._id],
+            verified: false,
+            claimed: false,
+            isBlocked: false,
+            profileCompletionScore: 70,
+            needsGeocoding: needsGeocoding,
+          };
+
+          bulkOps.push({
+            insertOne: {
+              document: newBiz
+            }
+          });
+          created++;
+        }
       } catch (err) {
-        console.error("CSV Import error:", err);
-        res.status(500).json({ message: "Import failed", error: err.message });
+        errors.push(`Error processing ${row["Business Name"] || "row"}: ${err.message}`);
+        skipped++;
       }
+    }
+
+    if (bulkOps.length > 0) {
+      const bulkResult = await Business.bulkWrite(bulkOps, { ordered: false });
+      
+      // For newly inserted businesses that need geocoding, we'd need their IDs.
+      // InsertOne doesn't return IDs in bulkWrite easily for the entire set.
+      // However, we can query them or just rely on a separate sync if needed.
+      // To keep it simple and efficient, we trigger geocoding for existing updated ones.
+      for (const id of geocodingJobs) {
+        await addJob("geocoding-batch", { businessId: id });
+      }
+      
+      // Also trigger geocoding for the newly created ones in this chunk
+      // We'll look up the businesses just created by name/address in this chunk
+      const newlyCreatedNames = chunk.filter((_, i) => bulkOps[i]?.insertOne).map(r => r["Business Name"]);
+      if (newlyCreatedNames.length > 0) {
+        const newlyCreated = await Business.find({ 
+          businessName: { $in: newlyCreatedNames },
+          needsGeocoding: true,
+          "location.coordinates": [0,0]
+        }).select('_id');
+        for (const biz of newlyCreated) {
+          await addJob("geocoding-batch", { businessId: biz._id });
+        }
+      }
+    }
+  };
+
+  let currentChunk = [];
+  
+  fs.createReadStream(filePath)
+    .pipe(csv())
+    .on("data", (data) => {
+      currentChunk.push(data);
+      if (currentChunk.length >= CHUNK_SIZE) {
+        const chunkToProcess = [...currentChunk];
+        currentChunk = [];
+        // Use a wrapper to handle async in stream
+        streamWorker.push(chunkToProcess);
+      }
+    })
+    .on("end", async () => {
+      // Process remaining
+      if (currentChunk.length > 0) {
+        streamWorker.push(currentChunk);
+      }
+      streamWorker.finish();
     });
+
+  // A simple queue-like structure to handle chunks sequentially
+  const streamWorker = {
+    queue: [],
+    processing: false,
+    finished: false,
+    push(chunk) {
+      this.queue.push(chunk);
+      this.process();
+    },
+    async process() {
+      if (this.processing || this.queue.length === 0) return;
+      this.processing = true;
+      const chunk = this.queue.shift();
+      try {
+        await processChunk(chunk);
+      } catch (err) {
+        console.error("Chunk processing error:", err);
+      }
+      this.processing = false;
+      this.process();
+      this.checkFinish();
+    },
+    finish() {
+      this.finished = true;
+      this.checkFinish();
+    },
+    checkFinish() {
+      if (this.finished && !this.processing && this.queue.length === 0) {
+        fs.unlinkSync(filePath);
+        if (!res.headersSent) {
+          res.json({
+            message: "Import completed",
+            created,
+            updated,
+            skipped,
+            errors: errors.length > 20 ? errors.slice(0, 20).concat([`... and ${errors.length - 20} more`]) : errors,
+          });
+        }
+      }
+    }
+  };
 };
+
 
 exports.downloadSampleCSV = async (req, res) => {
   try {
