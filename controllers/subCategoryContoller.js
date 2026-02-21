@@ -169,7 +169,7 @@ exports.getAllSubcategoryPaginated = async (req, res) => {
     const total = await SubCategory.countDocuments(query);
     const subCategories = await SubCategory.find(query)
       .populate("category", "name")
-      .sort({ createdAt: -1 })
+      .sort({ createdAt: -1, _id: 1 })
       .skip(skip)
       .limit(limit);
 

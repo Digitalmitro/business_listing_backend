@@ -141,7 +141,7 @@ exports.getAllCategoriesPaginated = async (req, res) => {
 
     const total = await Category.countDocuments(query);
     const categories = await Category.find(query)
-      .sort({ createdAt: -1 })
+      .sort({ createdAt: -1, _id: 1 })
       .skip(skip)
       .limit(limit)
       .select("_id name description slug iconUrl createdAt bgImage");

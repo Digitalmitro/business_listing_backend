@@ -172,7 +172,10 @@ const BusinessSchema = new Schema(
   { timestamps: true }
 );
 
-// ✅ Create a 2dsphere index on the location field
+// ✅ Indexes for performance
+BusinessSchema.index({ businessName: 1 });
+BusinessSchema.index({ "address.city": 1 });
+BusinessSchema.index({ "address.pincode": 1 });
 BusinessSchema.index({ location: "2dsphere" });
 
 BusinessSchema.pre("save", function (next) {

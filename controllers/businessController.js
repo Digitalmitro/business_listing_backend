@@ -273,171 +273,182 @@ exports.importBusinessFromCSV = async (req, res) => {
     const bulkOps = [];
     const geocodingJobs = [];
 
-    for (const row of chunk) {
-      try {
-        const {
-          "Business Name": businessName,
-          address,
-          Website: website,
-          Email: email,
-          Phone: phone,
-          Rating: ratingStr,
-          Reviews: reviewsStr,
-          Latitude: latStr,
-          Longitude: lonStr,
-          Category: rawCategory,
-          Subcategory: rawSubCategory,
-          Country: rowCountry
-        } = row;
+    // 1. Prepare data and identify missing categories/subcategories
+    const normalizedRows = chunk.map(row => {
+      const {
+        "Business Name": businessName,
+        address,
+        Website: website,
+        Email: email,
+        Phone: phone,
+        Rating: ratingStr,
+        Reviews: reviewsStr,
+        Latitude: latStr,
+        Longitude: lonStr,
+        Category: rawCategory,
+        Subcategory: rawSubCategory,
+        Country: rowCountry
+      } = row;
 
-        if (!businessName || !address) {
-          skipped++;
-          continue;
+      if (!businessName || !address) return null;
+
+      const addressParts = address.split(";").map(p => p.trim());
+      const len = addressParts.length;
+      let streetName = addressParts[0] || "";
+      let area = ""; 
+      let city = "Unknown City";
+      let state = "Unknown State";
+      let pincode = "000000";
+      let country = normalizeCountry(rowCountry || (addressParts[5] || "Unknown Country"));
+
+      if (len >= 6) {
+        area = addressParts[1];
+        city = addressParts[2];
+        state = addressParts[3];
+        pincode = addressParts[4];
+      } else if (len === 5) {
+        area = addressParts[1];
+        city = addressParts[2];
+        state = addressParts[3];
+        pincode = addressParts[4];
+      } else if (len === 4) {
+        city = addressParts[1];
+        state = addressParts[2];
+        country = normalizeCountry(rowCountry || addressParts[3] || country);
+      } else if (len === 3) {
+        city = addressParts[0];
+        state = addressParts[1];
+        country = normalizeCountry(rowCountry || addressParts[2] || country);
+      }
+
+      return {
+        businessName,
+        address: { city, state, country, area, pincode, streetName },
+        website,
+        email,
+        phone,
+        rating: parseFloat(ratingStr) || 0,
+        totalReviews: parseInt(reviewsStr) || 0,
+        latitude: latStr ? parseFloat(latStr) : 0,
+        longitude: lonStr ? parseFloat(lonStr) : 0,
+        rawCategory: (rawCategory || "Uncategorized").replace("· ", "").trim(),
+        rawSubCategory: (rawSubCategory || rawCategory || "Uncategorized").trim(),
+        needsGeocoding: !latStr || !lonStr
+      };
+    }).filter(Boolean);
+
+    if (normalizedRows.length === 0) return;
+
+    // 2. Batch Lookup Categories and Subcategories
+    const uniqueCatNames = [...new Set(normalizedRows.map(r => r.rawCategory))];
+    for (const name of uniqueCatNames) await getCategory(name);
+
+    const subCatRequests = normalizedRows.map(r => ({ name: r.rawSubCategory, catId: categoryCache.get(r.rawCategory.toLowerCase().trim())._id }));
+    const uniqueSubCatKeys = [...new Set(subCatRequests.map(s => `${s.catId}:${s.name.toLowerCase().trim()}`))];
+    for (const key of uniqueSubCatKeys) {
+      const [catId, name] = [key.split(':')[0], key.split(':').slice(1).join(':')];
+      await getSubCategory(name, catId);
+    }
+
+    // 3. Batch Lookup Existing Businesses
+    const businessNames = normalizedRows.map(r => r.businessName);
+    const existingBusinesses = await Business.find({
+      businessName: { $in: businessNames }
+    }).lean();
+
+    // Map existing businesses for quick access (Name + City + Pincode)
+    const existingMap = new Map();
+    existingBusinesses.forEach(biz => {
+      const key = `${biz.businessName.toLowerCase().trim()}|${biz.address.city.toLowerCase().trim()}|${biz.address.pincode.trim()}`;
+      existingMap.set(key, biz);
+    });
+
+    // 4. Build Bulk Operations
+    for (const row of normalizedRows) {
+      const catObj = categoryCache.get(row.rawCategory.toLowerCase().trim());
+      const subCatObj = subCategoryCache.get(`${catObj._id}:${row.rawSubCategory.toLowerCase().trim()}`);
+      
+      const lookupKey = `${row.businessName.toLowerCase().trim()}|${row.address.city.toLowerCase().trim()}|${row.address.pincode.trim()}`;
+      const existing = existingMap.get(lookupKey);
+
+      const cleanedPhone = row.phone?.replace(/\D/g, "");
+      const mobile = cleanedPhone ? [cleanedPhone] : [];
+
+      if (existing) {
+        const update = {
+          $addToSet: { 
+            category: catObj._id,
+            subCategory: subCatObj._id
+          },
+          $set: { updatedAt: new Date() }
+        };
+        if (!existing.website && row.website) update.$set.website = row.website;
+        if (!existing.contact?.email?.length && row.email) {
+          update.$set["contact.email"] = [row.email];
         }
-
-        const latitude = latStr ? parseFloat(latStr) : 0;
-        const longitude = lonStr ? parseFloat(lonStr) : 0;
-        const needsGeocoding = !latStr || !lonStr;
-        const rating = parseFloat(ratingStr) || 0;
-        const totalReviews = parseInt(reviewsStr) || 0;
-
-        const addressParts = address.split(";").map(p => p.trim());
-        const len = addressParts.length;
-        let streetName = addressParts[0] || "";
-        let area = ""; 
-        let city = "Unknown City";
-        let state = "Unknown State";
-        let pincode = "000000";
-        let country = rowCountry || "Unknown Country";
-
-        if (len >= 6) {
-          area = addressParts[1];
-          city = addressParts[2];
-          state = addressParts[3];
-          pincode = addressParts[4];
-          country = rowCountry || addressParts[5] || country;
-        } else if (len === 5) {
-          area = addressParts[1];
-          city = addressParts[2];
-          state = addressParts[3];
-          pincode = addressParts[4];
-        } else if (len === 4) {
-          city = addressParts[1];
-          state = addressParts[2];
-          country = rowCountry || addressParts[3] || country;
-        } else if (len === 3) {
-          city = addressParts[0];
-          state = addressParts[1];
-          country = rowCountry || addressParts[2] || country;
+        if (!existing.contact?.mobile?.length && mobile.length) {
+          update.$set["contact.mobile"] = mobile;
         }
+        if (row.rating > (existing.rating || 0)) update.$set.rating = row.rating;
+        if (row.totalReviews > (existing.totalReviews || 0)) update.$set.totalReviews = row.totalReviews;
 
-        country = normalizeCountry(country);
-        const cleanedPhone = phone?.replace(/\D/g, "");
-        const mobile = cleanedPhone ? [cleanedPhone] : [];
-
-        const categoryText = rawCategory ? rawCategory.replace("· ", "").trim() : "Uncategorized";
-        const catObj = await getCategory(categoryText);
-
-        const subCategoryText = rawSubCategory ? rawSubCategory.trim() : categoryText;
-        const subCatObj = await getSubCategory(subCategoryText, catObj._id);
-
-        // Check for existing business
-        const existing = await Business.findOne({
-          businessName: { $regex: new RegExp(`^${businessName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, "i") },
-          "address.city": city,
-          "address.streetName": streetName,
-          "address.pincode": pincode
+        bulkOps.push({
+          updateOne: {
+            filter: { _id: existing._id },
+            update
+          }
         });
-
-        if (existing) {
-          const update = {
-            $addToSet: { 
-              category: catObj._id,
-              subCategory: subCatObj._id
+        if (row.needsGeocoding) geocodingJobs.push(existing._id);
+        updated++;
+      } else {
+        bulkOps.push({
+          insertOne: {
+            document: {
+              businessName: row.businessName,
+              address: row.address,
+              location: { type: "Point", coordinates: [row.longitude, row.latitude] },
+              contact: {
+                mobile,
+                email: row.email ? [row.email] : [],
+                contactDetails: [{
+                  title: "Mr",
+                  name: row.businessName,
+                  mobileNumbers: mobile,
+                  emails: row.email ? [row.email] : [],
+                }],
+              },
+              website: row.website,
+              rating: row.rating,
+              totalReviews: row.totalReviews,
+              category: [catObj._id],
+              subCategory: [subCatObj._id],
+              verified: false,
+              claimed: false,
+              isBlocked: false,
+              profileCompletionScore: 70,
+              needsGeocoding: row.needsGeocoding,
             }
-          };
-          if (!existing.website && website) update.$set = { ...update.$set, website };
-          if (!existing.contact.email.length && email) {
-            update.$set = { ...update.$set, "contact.email": [email] };
           }
-          if (!existing.contact.mobile.length && mobile.length) {
-            update.$set = { ...update.$set, "contact.mobile": mobile };
-          }
-          if (rating > existing.rating) {
-            update.$set = { ...update.$set, rating };
-          }
-          if (totalReviews > existing.totalReviews) {
-            update.$set = { ...update.$set, totalReviews };
-          }
-
-          bulkOps.push({
-            updateOne: {
-              filter: { _id: existing._id },
-              update
-            }
-          });
-          
-          if (needsGeocoding) geocodingJobs.push(existing._id);
-          updated++;
-        } else {
-          const newBiz = {
-            businessName,
-            address: { city, state, country, area, pincode, streetName },
-            location: { type: "Point", coordinates: [longitude, latitude] },
-            contact: {
-              mobile,
-              email: email ? [email] : [],
-              contactDetails: [{
-                title: "Mr",
-                name: businessName,
-                mobileNumbers: mobile,
-                emails: email ? [email] : [],
-              }],
-            },
-            website,
-            rating,
-            totalReviews,
-            category: [catObj._id],
-            subCategory: [subCatObj._id],
-            verified: false,
-            claimed: false,
-            isBlocked: false,
-            profileCompletionScore: 70,
-            needsGeocoding: needsGeocoding,
-          };
-
-          bulkOps.push({
-            insertOne: {
-              document: newBiz
-            }
-          });
-          created++;
-        }
-      } catch (err) {
-        errors.push(`Error processing ${row["Business Name"] || "row"}: ${err.message}`);
-        skipped++;
+        });
+        created++;
       }
     }
 
     if (bulkOps.length > 0) {
       const bulkResult = await Business.bulkWrite(bulkOps, { ordered: false });
       
-      // For newly inserted businesses that need geocoding, we'd need their IDs.
-      // InsertOne doesn't return IDs in bulkWrite easily for the entire set.
-      // However, we can query them or just rely on a separate sync if needed.
-      // To keep it simple and efficient, we trigger geocoding for existing updated ones.
+      // Queue geocoding for existing updated ones
       for (const id of geocodingJobs) {
         await addJob("geocoding-batch", { businessId: id });
       }
       
-      // Also trigger geocoding for the newly created ones in this chunk
-      // We'll look up the businesses just created by name/address in this chunk
-      const newlyCreatedNames = chunk.filter((_, i) => bulkOps[i]?.insertOne).map(r => r["Business Name"]);
-      if (newlyCreatedNames.length > 0) {
+      // Queue geocoding for new ones (approximate lookup for new IDs)
+      if (bulkResult.insertedCount > 0) {
         const newlyCreated = await Business.find({ 
-          businessName: { $in: newlyCreatedNames },
+          businessName: { $in: businessNames },
           needsGeocoding: true,
-          "location.coordinates": [0,0]
+          "location.coordinates": [0,0],
+          createdAt: { $gte: new Date(Date.now() - 60000) } // Just created in last minute
         }).select('_id');
         for (const biz of newlyCreated) {
           await addJob("geocoding-batch", { businessId: biz._id });
@@ -445,6 +456,7 @@ exports.importBusinessFromCSV = async (req, res) => {
       }
     }
   };
+
 
   let currentChunk = [];
   
