@@ -6,7 +6,7 @@ const BlogSchema = new mongoose.Schema(
     slug: { type: String, unique: true, required: true },
     featuredImage: { type: String, required: true },
     content: { type: String, required: true }, // Rich HTML from editor
-    excerpt: { type: String, required: true, maxlength: 300 },
+    excerpt: { type: String, required: true },
 
     author: {
       name: { type: String, required: true },
