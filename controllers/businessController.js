@@ -13,6 +13,28 @@ const fs = require("fs");
 const { addJob } = require("../utils/queue");
 const { notifyAdmins } = require("../helpers/notificationHelper");
 
+// Helper to normalize country names
+const normalizeCountry = (c) => {
+  if (!c) return "Unknown Country";
+  const trimmed = c.trim();
+  const upper = trimmed.toUpperCase();
+  const map = {
+    "USA": "United States",
+    "US": "United States",
+    "UNITED STATES": "United States",
+    "UK": "United Kingdom",
+    "U.K.": "United Kingdom",
+    "UNITED KINGDOM": "United Kingdom",
+    "UAE": "United Arab Emirates",
+    "AU": "Australia",
+    "AUSTRALIA": "Australia",
+    "CA": "Canada",
+    "CANADA": "Canada",
+    "INDIA": "India"
+  };
+  return map[upper] || trimmed;
+};
+
 ///this api use combine for admin and users
 exports.createBusiness = async (req, res) => {
   try {
@@ -139,7 +161,8 @@ exports.createBusiness = async (req, res) => {
         blockName: businessData.address?.blockName || "",
         streetName: businessData.address?.streetName,
         area: businessData.address?.area,
-        country: businessData.address?.country,
+        state: businessData.address?.state,
+        country: normalizeCountry(businessData.address?.country),
         landmark: businessData.address?.landmark || "",
         pincode: businessData.address?.pincode,
         city: businessData.address?.city,
@@ -222,25 +245,6 @@ exports.importBusinessFromCSV = async (req, res) => {
   let skipped = 0;
   const errors = [];
 
-  // Robust Country Normalization
-  const normalizeCountry = (c) => {
-    if (!c) return "Unknown Country";
-    const upper = c.trim().toUpperCase();
-    const map = {
-      "USA": "United States",
-      "US": "United States",
-      "UNITED STATES": "United States",
-      "UK": "United Kingdom",
-      "U.K.": "United Kingdom",
-      "UNITED KINGDOM": "United Kingdom",
-      "INDIA": "India",
-      "AU": "Australia",
-      "AUSTRALIA": "Australia",
-      "CA": "Canada",
-      "CANADA": "Canada"
-    };
-    return map[upper] || c.trim();
-  };
 
   // Pre-cache Categories and Subcategories to minimize DB queries
   const categoryCache = new Map();
@@ -1103,7 +1107,11 @@ exports.updateBusiness = async (req, res) => {
     const updates = {};
     for (const field of allowedFields) {
       if (parsedData.hasOwnProperty(field)) {
-        updates[field] = parsedData[field];
+        let value = parsedData[field];
+        if (field === "address" && value?.country) {
+          value.country = normalizeCountry(value.country);
+        }
+        updates[field] = value;
       }
     }
 
@@ -1998,27 +2006,15 @@ exports.getDistinctCountries = async (req, res) => {
   try {
     const rawCountries = await Business.distinct("address.country");
     
-    const countryMap = {
-      "USA": "United States",
-      "US": "United States",
-      "UK": "United Kingdom",
-      "U.K.": "United Kingdom",
-      "UAE": "United Arab Emirates",
-      "AU": "Australia",
-      "CA": "Canada",
-      "INDIA": "India"
-    };
-
-    const validSet = new Set(VALID_COUNTRIES.map(c => c.toLowerCase()));
-
     const filteredCountries = rawCountries
       .filter(Boolean)
+      .map(c => normalizeCountry(c))
       .map(c => {
-        let trimmed = c.trim();
-        let upper = trimmed.toUpperCase();
-        return countryMap[upper] || trimmed;
+        // Find in VALID_COUNTRIES to get standard casing
+        const standardName = VALID_COUNTRIES.find(v => v.toLowerCase() === c.toLowerCase());
+        return standardName || c;
       })
-      .filter(c => validSet.has(c.toLowerCase()))
+      .filter(c => VALID_COUNTRIES.includes(c))
       .filter((v, i, a) => a.indexOf(v) === i)
       .sort();
     
