@@ -18,8 +18,8 @@ const BlogSchema = new mongoose.Schema(
     tags: [{ type: String }],
 
     // SEO Fields
-    metaTitle: { type: String, maxlength: 60 },
-    metaDescription: { type: String, maxlength: 155 },
+    metaTitle: { type: String },
+    metaDescription: { type: String },
     focusKeyword: { type: String },
 
     isPublished: { type: Boolean, default: false },
