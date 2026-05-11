@@ -23,6 +23,7 @@ const {
   toggleSenderEmailStatus,
   processCampaignExcel,
   downloadCampaignSampleExcel,
+  sendTestEmail,
 } = require("../controllers/emailCampaignController");
 const { upload } = require("../config/multerConfig");
 
@@ -38,6 +39,7 @@ router.get("/templates", authMiddleware, getTemplates);
 router.get("/templates/:id", authMiddleware, getTemplateById);
 router.put("/templates/:id", authMiddleware, updateTemplate);
 router.delete("/templates/:id", authMiddleware, deleteTemplate);
+router.post("/templates/send-test", authMiddleware, sendTestEmail);
 
 // Sender Email Routes
 router.post("/sender-emails", authMiddleware, addSenderEmail);

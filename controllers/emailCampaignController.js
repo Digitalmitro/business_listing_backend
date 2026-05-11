@@ -919,6 +919,51 @@ const deleteCampaign = async (req, res) => {
   }
 };
 
+// Send a test email for a template
+const sendTestEmail = async (req, res) => {
+  try {
+    const { template, to } = req.body;
+    if (!template || !to) {
+      return res.status(400).json({ message: "Template and recipient email are required" });
+    }
+
+    // Find the first active sender email
+    const sender = await SenderEmail.findOne({ isActive: true });
+    if (!sender) {
+      return res.status(400).json({ message: "No active sender email found. Please add one in Settings." });
+    }
+
+    // Replace placeholders with test data
+    const html = template.body
+      .replace(/{{full_name}}/g, "Test User")
+      .replace(/{{email}}/g, to)
+      .replace(/{{business_name}}/g, "Test Business")
+      .replace(/{{frontend_url}}/g, process.env.FRONTEND_URL || "http://localhost:3000")
+      .replace(/{{package_name}}/g, "Premium Package")
+      .replace(/{{start_date}}/g, new Date().toLocaleDateString())
+      .replace(/{{business_id}}/g, "12345")
+      .replace(/{{status}}/g, "Approved")
+      .replace(/{{rejection_reason}}/g, "Test Rejection Reason");
+
+    const result = await sendMail(
+      sender.email,
+      to,
+      `[TEST] ${template.subject}`,
+      html,
+      `${process.env.FRONTEND_URL}/unsubscribe?test=true`
+    );
+
+    if (result.success) {
+      res.status(200).json({ message: "Test email sent successfully" });
+    } else {
+      throw result.error;
+    }
+  } catch (error) {
+    console.error("Error in sendTestEmail:", error);
+    res.status(500).json({ message: "Error sending test email", error: error.message });
+  }
+};
+
 module.exports = {
   createTemplate,
   getTemplates,
@@ -941,4 +986,5 @@ module.exports = {
   toggleSenderEmailStatus,
   processCampaignExcel,
   downloadCampaignSampleExcel,
+  sendTestEmail,
 };
