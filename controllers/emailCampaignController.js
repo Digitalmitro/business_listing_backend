@@ -731,27 +731,61 @@ const sendCampaign = async (req, res) => {
     }
 
     try {
+      // Helper: replace all 8 CSV-field placeholders + legacy ones in a template body
+      // Keeps in sync with: businessController.downloadSampleCSV header columns
+      const applyPlaceholders = (body, data) => body
+        // Legacy / other-trigger-type tokens
+        .replace(/{{full_name}}/g,       data.full_name       || "User")
+        .replace(/{{frontend_url}}/g,    data.frontend_url    || process.env.FRONTEND_URL || "")
+        .replace(/{{package_name}}/g,    data.package_name    || "")
+        .replace(/{{start_date}}/g,      data.start_date      || "")
+        .replace(/{{business_id}}/g,     data.business_id     || "")
+        .replace(/{{status}}/g,          data.status          || "")
+        .replace(/{{rejection_reason}}/g,data.rejection_reason|| "")
+        // CSV-field tokens (Marketing Campaign)
+        .replace(/{{business_name}}/g,   data.business_name   || "")
+        .replace(/{{address}}/g,         data.address         || "")
+        .replace(/{{website}}/g,         data.website         || "")
+        .replace(/{{email}}/g,           data.email           || "")
+        .replace(/{{phone}}/g,           data.phone           || "")
+        .replace(/{{category}}/g,        data.category        || "")
+        .replace(/{{subcategory}}/g,     data.subcategory     || "")
+        .replace(/{{country}}/g,         data.country         || "");
+
       // Send to registered users
       for (const user of campaign.recipients.users || []) {
         const fullUser = await User.findById(user);
         if (!fullUser || !fullUser.subscribedToEmails) continue;
 
-        let bizName = "User";
+        // Look up associated business for CSV-field placeholders
         const associatedBiz = await Business.findOne({
           $or: [
             { "contact.email": fullUser.email },
             { "contact.contactDetails.emails": fullUser.email }
           ]
-        }).select("businessName");
-        
-        if (associatedBiz) {
-          bizName = associatedBiz.businessName;
-        }
+        })
+          .populate("category", "name")
+          .populate("subCategory", "name")
+          .select("businessName address website contact category subCategory");
 
-        const html = campaign.template.body
-          .replace(/{{full_name}}/g, fullUser.full_name || "User")
-          .replace(/{{email}}/g, fullUser.email)
-          .replace(/{{business_name}}/g, bizName);
+        const addressStr = associatedBiz
+          ? [associatedBiz.address?.streetName, associatedBiz.address?.area, associatedBiz.address?.city, associatedBiz.address?.state, associatedBiz.address?.pincode, associatedBiz.address?.country]
+              .filter(Boolean).join(", ")
+          : "";
+
+        const data = {
+          full_name:     fullUser.full_name || "User",
+          email:         fullUser.email,
+          business_name: associatedBiz?.businessName || "",
+          address:       addressStr,
+          website:       associatedBiz?.website || "",
+          phone:         (associatedBiz?.contact?.mobile?.[0] || ""),
+          category:      (associatedBiz?.category || []).map(c => c.name || c).join(", "),
+          subcategory:   (associatedBiz?.subCategory || []).map(s => s.name || s).join(", "),
+          country:       associatedBiz?.address?.country || "",
+        };
+
+        const html = applyPlaceholders(campaign.template.body, data);
 
         const unsubscribeLink = `${process.env.FRONTEND_URL}/unsubscribe?userId=${fullUser._id}&campaignId=${campaign._id}`;
         
@@ -766,14 +800,22 @@ const sendCampaign = async (req, res) => {
       }
 
       // Send to custom emails
+      // Custom email items may carry CSV-field values if they were imported via the business CSV flow
       for (const item of campaign.recipients.customEmails || []) {
-        const email = typeof item === 'string' ? item : item.email;
-        const bizName = typeof item === 'string' ? "User" : (item.businessName || "User");
+        const email    = typeof item === 'string' ? item : item.email;
+        const data = {
+          full_name:     typeof item === 'string' ? "User" : (item.full_name     || "User"),
+          email,
+          business_name: typeof item === 'string' ? ""     : (item.businessName  || item.business_name || ""),
+          address:       typeof item === 'string' ? ""     : (item.address       || ""),
+          website:       typeof item === 'string' ? ""     : (item.website       || ""),
+          phone:         typeof item === 'string' ? ""     : (item.phone         || ""),
+          category:      typeof item === 'string' ? ""     : (item.category      || ""),
+          subcategory:   typeof item === 'string' ? ""     : (item.subcategory   || ""),
+          country:       typeof item === 'string' ? ""     : (item.country       || ""),
+        };
 
-        const html = campaign.template.body
-          .replace(/{{full_name}}/g, "User")
-          .replace(/{{email}}/g, email)
-          .replace(/{{business_name}}/g, bizName);
+        const html = applyPlaceholders(campaign.template.body, data);
 
         const unsubscribeLink = `${process.env.FRONTEND_URL}/unsubscribe?email=${encodeURIComponent(email)}&campaignId=${campaign._id}`;
         
@@ -933,17 +975,26 @@ const sendTestEmail = async (req, res) => {
       return res.status(400).json({ message: "No active sender email found. Please add one in Settings." });
     }
 
-    // Replace placeholders with test data
+    // Replace all placeholders with test / sample data
+    // CSV-field tokens stay in sync with businessController.downloadSampleCSV columns
     const html = template.body
-      .replace(/{{full_name}}/g, "Test User")
-      .replace(/{{email}}/g, to)
-      .replace(/{{business_name}}/g, "Test Business")
-      .replace(/{{frontend_url}}/g, process.env.FRONTEND_URL || "http://localhost:3000")
-      .replace(/{{package_name}}/g, "Premium Package")
-      .replace(/{{start_date}}/g, new Date().toLocaleDateString())
-      .replace(/{{business_id}}/g, "12345")
-      .replace(/{{status}}/g, "Approved")
-      .replace(/{{rejection_reason}}/g, "Test Rejection Reason");
+      // Legacy / other-trigger tokens
+      .replace(/{{full_name}}/g,       "Test User")
+      .replace(/{{frontend_url}}/g,    process.env.FRONTEND_URL || "http://localhost:3000")
+      .replace(/{{package_name}}/g,    "Premium Package")
+      .replace(/{{start_date}}/g,      new Date().toLocaleDateString())
+      .replace(/{{business_id}}/g,     "12345")
+      .replace(/{{status}}/g,          "Approved")
+      .replace(/{{rejection_reason}}/g,"Test Rejection Reason")
+      // CSV-field tokens (Marketing Campaign)
+      .replace(/{{business_name}}/g,   "DigitalMitro (Sample)")
+      .replace(/{{address}}/g,         "123 Tech St, Salt Lake, Kolkata, West Bengal, 700091, India")
+      .replace(/{{website}}/g,         "https://digitalmitro.com")
+      .replace(/{{email}}/g,           to)
+      .replace(/{{phone}}/g,           "9876543210")
+      .replace(/{{category}}/g,        "Marketing Agency")
+      .replace(/{{subcategory}}/g,     "Digital Marketing")
+      .replace(/{{country}}/g,         "India");
 
     const result = await sendMail(
       sender.email,
