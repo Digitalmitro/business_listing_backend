@@ -9,6 +9,7 @@ const Enquiry = require("../models/Enquiry");
 const Offer = require("../models/Offer");
 const toObjectIdArray = require("../helpers/convertToObjectId");
 const csv = require("csv-parser");
+const ExcelJS = require("exceljs");
 const fs = require("fs");
 const { addJob } = require("../utils/queue");
 const { notifyAdmins } = require("../helpers/notificationHelper");
@@ -236,15 +237,22 @@ exports.createBusiness = async (req, res) => {
 };
 
 exports.importBusinessFromCSV = async (req, res) => {
-  if (!req.file) return res.status(400).json({ message: "CSV file required" });
+  if (!req.file) return res.status(400).json({ message: "File is required. Upload a CSV or Excel (.xlsx/.xls) file." });
 
   const filePath = req.file.path;
+  const fileExt = path.extname(req.file.originalname).toLowerCase();
   const CHUNK_SIZE = 500;
   let created = 0;
   let updated = 0;
   let skipped = 0;
   const errors = [];
 
+  console.log(`[BulkImport] Starting import: file=${req.file.originalname}, ext=${fileExt}, size=${req.file.size}`);
+  // Validate file type
+  if (![".csv", ".xlsx", ".xls"].includes(fileExt)) {
+    fs.unlinkSync(filePath);
+    return res.status(400).json({ message: "Unsupported file type. Upload a .csv, .xlsx, or .xls file." });
+  }
 
   // Pre-cache Categories and Subcategories to minimize DB queries
   const categoryCache = new Map();
@@ -253,8 +261,7 @@ exports.importBusinessFromCSV = async (req, res) => {
   const getCategory = async (name) => {
     const key = name.toLowerCase().trim();
     if (categoryCache.has(key)) return categoryCache.get(key);
-    
-    let cat = await Category.findOne({ name: { $regex: new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, "i") } });
+    let cat = await Category.findOne({ name: { $regex: new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i") } });
     if (!cat) cat = await Category.create({ name });
     categoryCache.set(key, cat);
     return cat;
@@ -263,267 +270,365 @@ exports.importBusinessFromCSV = async (req, res) => {
   const getSubCategory = async (name, categoryId) => {
     const key = `${categoryId}:${name.toLowerCase().trim()}`;
     if (subCategoryCache.has(key)) return subCategoryCache.get(key);
-    
-    let sub = await SubCategory.findOne({ 
-      name: { $regex: new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, "i") }, 
-      category: categoryId 
+    let sub = await SubCategory.findOne({
+      name: { $regex: new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i") },
+      category: categoryId,
     });
     if (!sub) sub = await SubCategory.create({ name, category: categoryId });
     subCategoryCache.set(key, sub);
     return sub;
   };
 
+  // Normalize a raw row object (from CSV or Excel) into a standard shape.
+  // Supports two layouts:
+  //   Layout A (combined address): "Business Name", "address" (semicolon-separated), ...
+  //   Layout B (flat columns):     "business_name", "address", "city", "state", "country", "postal_code", ...
+  const normalizeRow = (row) => {
+    // ── Business name: try multiple common header variants ──
+    const businessName = (
+      row["Business Name"] || row["businessName"] || row["business_name"] ||
+      row["Name"] || row["name"] || ""
+    ).toString().trim();
+
+    // ── Contact fields ──
+    const website  = (row["Website"]  || row["website"]  || "").toString().trim();
+    const email    = (row["Email"]    || row["email"]    || "").toString().trim();
+    const phone    = (row["Phone"]    || row["phone"]    || row["mobile"] || row["Mobile"] || "").toString().trim();
+    const ratingStr  = (row["Rating"]  || row["rating"]  || "0").toString().trim();
+    const reviewsStr = (row["Reviews"] || row["reviews"] || "0").toString().trim();
+    const latStr   = (row["Latitude"]  || row["latitude"]  || "").toString().trim();
+    const lonStr   = (row["Longitude"] || row["longitude"] || "").toString().trim();
+
+    // ── Category ──
+    const rawCategory    = (row["Category"]   || row["category"]   || "Uncategorized").toString().trim().replace("· ", "");
+    const rawSubCategory = (row["Subcategory"] || row["subcategory"] || rawCategory).toString().trim();
+
+    // ── Extra fields ──
+    const businessSummary = (row["description"] || row["Description"] || row["businessSummary"] || "").toString().trim();
+    const ownerName       = (row["owner_name"]  || row["Owner Name"]  || "").toString().trim();
+
+    if (!businessName) return null;
+
+    // ── Address resolution: detect Layout A vs B ──
+    // Layout B detected when any of these separate-column headers are present
+    const hasCity      = !!(row["city"]        || row["City"]);
+    const hasState     = !!(row["state"]       || row["State"]);
+    const hasCountryCol = !!(row["country"]    || row["Country"]);
+    const hasPostal    = !!(row["postal_code"] || row["Postal Code"] || row["pincode"] || row["Pincode"]);
+    const isFlatLayout = hasCity || hasState || hasPostal;
+
+    let streetName = "";
+    let area       = "";
+    let city       = "Unknown City";
+    let state      = "Unknown State";
+    let pincode    = "000000";
+    let country    = "Unknown Country";
+
+    if (isFlatLayout) {
+      // Layout B: separate columns
+      streetName = (row["address"] || row["Address"] || row["street"] || row["Street"] || "").toString().trim();
+      area       = (row["area"]    || row["Area"]    || row["locality"] || "").toString().trim();
+      city       = (row["city"]    || row["City"]    || "Unknown City").toString().trim();
+      state      = (row["state"]   || row["State"]   || "Unknown State").toString().trim();
+      pincode    = (row["postal_code"] || row["Postal Code"] || row["pincode"] || row["Pincode"] || "000000").toString().trim();
+      country    = normalizeCountry((row["country"] || row["Country"] || "Unknown Country").toString().trim());
+    } else {
+      // Layout A: semicolon-delimited combined address string
+      const rawAddress = (row["address"] || row["Address"] || "").toString().trim();
+      if (!rawAddress) return null; // Layout A requires an address string
+      const rowCountry = (row["Country"] || row["country"] || "").toString().trim();
+
+      const parts = rawAddress.split(";").map((p) => p.trim());
+      const len = parts.length;
+      streetName = parts[0] || "";
+      country = normalizeCountry(rowCountry || parts[5] || "Unknown Country");
+
+      if (len >= 5) {
+        area    = parts[1]; city  = parts[2]; state = parts[3]; pincode = parts[4];
+      } else if (len === 4) {
+        city    = parts[1]; state = parts[2];
+        country = normalizeCountry(rowCountry || parts[3] || country);
+      } else if (len === 3) {
+        city    = parts[0]; state = parts[1];
+        country = normalizeCountry(rowCountry || parts[2] || country);
+      }
+    }
+
+    // Require at minimum a business name and a resolvable city (or street)
+    if (!businessName || (city === "Unknown City" && !streetName)) return null;
+
+    return {
+      businessName,
+      address: { city, state, country, area, pincode, streetName },
+      website,
+      email,
+      phone,
+      rating: parseFloat(ratingStr) || 0,
+      totalReviews: parseInt(reviewsStr) || 0,
+      latitude:  latStr ? parseFloat(latStr) : 0,
+      longitude: lonStr ? parseFloat(lonStr) : 0,
+      rawCategory:    rawCategory    || "Uncategorized",
+      rawSubCategory: rawSubCategory || rawCategory || "Uncategorized",
+      needsGeocoding: !latStr || !lonStr,
+      businessSummary,
+      ownerName,
+    };
+  };
+
   const processChunk = async (chunk) => {
     const bulkOps = [];
     const geocodingJobs = [];
 
-    // 1. Prepare data and identify missing categories/subcategories
-    const normalizedRows = chunk.map(row => {
-      const {
-        "Business Name": businessName,
-        address,
-        Website: website,
-        Email: email,
-        Phone: phone,
-        Rating: ratingStr,
-        Reviews: reviewsStr,
-        Latitude: latStr,
-        Longitude: lonStr,
-        Category: rawCategory,
-        Subcategory: rawSubCategory,
-        Country: rowCountry
-      } = row;
-
-      if (!businessName || !address) return null;
-
-      const addressParts = address.split(";").map(p => p.trim());
-      const len = addressParts.length;
-      let streetName = addressParts[0] || "";
-      let area = ""; 
-      let city = "Unknown City";
-      let state = "Unknown State";
-      let pincode = "000000";
-      let country = normalizeCountry(rowCountry || (addressParts[5] || "Unknown Country"));
-
-      if (len >= 6) {
-        area = addressParts[1];
-        city = addressParts[2];
-        state = addressParts[3];
-        pincode = addressParts[4];
-      } else if (len === 5) {
-        area = addressParts[1];
-        city = addressParts[2];
-        state = addressParts[3];
-        pincode = addressParts[4];
-      } else if (len === 4) {
-        city = addressParts[1];
-        state = addressParts[2];
-        country = normalizeCountry(rowCountry || addressParts[3] || country);
-      } else if (len === 3) {
-        city = addressParts[0];
-        state = addressParts[1];
-        country = normalizeCountry(rowCountry || addressParts[2] || country);
+    // 1. Normalize rows
+    const normalizedRows = [];
+    for (const row of chunk) {
+      try {
+        const normalized = normalizeRow(row);
+        if (!normalized) {
+          skipped++;
+          const rowId = row["Business Name"] || row["business_name"] || row["Name"] || JSON.stringify(row).slice(0, 60);
+          const reason = !( row["Business Name"] || row["business_name"] || row["Name"] || row["businessName"] )
+            ? "missing business name"
+            : "missing address / city";
+          const msg = `Row skipped (${reason}): ${rowId}`;
+          errors.push(msg);
+          console.warn(`[BulkImport] ${msg}`);
+          continue;
+        }
+        normalizedRows.push(normalized);
+      } catch (err) {
+        skipped++;
+        const msg = `Row skipped (error): ${err.message}`;
+        errors.push(msg);
+        console.warn(`[BulkImport] ${msg}`);
       }
-
-      return {
-        businessName,
-        address: { city, state, country, area, pincode, streetName },
-        website,
-        email,
-        phone,
-        rating: parseFloat(ratingStr) || 0,
-        totalReviews: parseInt(reviewsStr) || 0,
-        latitude: latStr ? parseFloat(latStr) : 0,
-        longitude: lonStr ? parseFloat(lonStr) : 0,
-        rawCategory: (rawCategory || "Uncategorized").replace("· ", "").trim(),
-        rawSubCategory: (rawSubCategory || rawCategory || "Uncategorized").trim(),
-        needsGeocoding: !latStr || !lonStr
-      };
-    }).filter(Boolean);
+    }
 
     if (normalizedRows.length === 0) return;
 
-    // 2. Batch Lookup Categories and Subcategories
-    const uniqueCatNames = [...new Set(normalizedRows.map(r => r.rawCategory))];
-    for (const name of uniqueCatNames) await getCategory(name);
+    // 2. Batch-resolve categories/subcategories
+    try {
+      const uniqueCatNames = [...new Set(normalizedRows.map((r) => r.rawCategory))];
+      for (const name of uniqueCatNames) await getCategory(name);
 
-    const subCatRequests = normalizedRows.map(r => ({ name: r.rawSubCategory, catId: categoryCache.get(r.rawCategory.toLowerCase().trim())._id }));
-    const uniqueSubCatKeys = [...new Set(subCatRequests.map(s => `${s.catId}:${s.name.toLowerCase().trim()}`))];
-    for (const key of uniqueSubCatKeys) {
-      const [catId, name] = [key.split(':')[0], key.split(':').slice(1).join(':')];
-      await getSubCategory(name, catId);
+      for (const r of normalizedRows) {
+        const catObj = categoryCache.get(r.rawCategory.toLowerCase().trim());
+        if (catObj) await getSubCategory(r.rawSubCategory, catObj._id);
+      }
+    } catch (err) {
+      errors.push(`Category resolution error: ${err.message}`);
     }
 
-    // 3. Batch Lookup Existing Businesses
-    const businessNames = normalizedRows.map(r => r.businessName);
-    const existingBusinesses = await Business.find({
-      businessName: { $in: businessNames }
-    }).lean();
-
-    // Map existing businesses for quick access (Name + City + Pincode)
+    // 3. Batch-lookup existing businesses
+    const businessNames = normalizedRows.map((r) => r.businessName);
+    const existingBusinesses = await Business.find({ businessName: { $in: businessNames } }).lean();
     const existingMap = new Map();
-    existingBusinesses.forEach(biz => {
-      const key = `${biz.businessName.toLowerCase().trim()}|${biz.address.city.toLowerCase().trim()}|${biz.address.pincode.trim()}`;
+    existingBusinesses.forEach((biz) => {
+      const key = `${biz.businessName.toLowerCase().trim()}|${(biz.address.city || "").toLowerCase().trim()}|${(biz.address.pincode || "").trim()}`;
       existingMap.set(key, biz);
     });
 
-    // 4. Build Bulk Operations
+    // 4. Build bulk ops
     for (const row of normalizedRows) {
-      const catObj = categoryCache.get(row.rawCategory.toLowerCase().trim());
-      const subCatObj = subCategoryCache.get(`${catObj._id}:${row.rawSubCategory.toLowerCase().trim()}`);
-      
-      const lookupKey = `${row.businessName.toLowerCase().trim()}|${row.address.city.toLowerCase().trim()}|${row.address.pincode.trim()}`;
-      const existing = existingMap.get(lookupKey);
+      try {
+        const catObj = categoryCache.get(row.rawCategory.toLowerCase().trim());
+        const subCatObj = subCategoryCache.get(`${catObj?._id}:${row.rawSubCategory.toLowerCase().trim()}`);
 
-      const cleanedPhone = row.phone?.replace(/\D/g, "");
-      const mobile = cleanedPhone ? [cleanedPhone] : [];
+        if (!catObj) { skipped++; errors.push(`No category found for row: ${row.businessName}`); continue; }
 
-      if (existing) {
-        const update = {
-          $addToSet: { 
-            category: catObj._id,
-            subCategory: subCatObj._id
-          },
-          $set: { updatedAt: new Date() }
-        };
-        if (!existing.website && row.website) update.$set.website = row.website;
-        if (!existing.contact?.email?.length && row.email) {
-          update.$set["contact.email"] = [row.email];
-        }
-        if (!existing.contact?.mobile?.length && mobile.length) {
-          update.$set["contact.mobile"] = mobile;
-        }
-        if (row.rating > (existing.rating || 0)) update.$set.rating = row.rating;
-        if (row.totalReviews > (existing.totalReviews || 0)) update.$set.totalReviews = row.totalReviews;
+        const lookupKey = `${row.businessName.toLowerCase().trim()}|${row.address.city.toLowerCase().trim()}|${row.address.pincode.trim()}`;
+        const existing = existingMap.get(lookupKey);
+        const cleanedPhone = row.phone?.replace(/\D/g, "");
+        const mobile = cleanedPhone ? [cleanedPhone] : [];
 
-        bulkOps.push({
-          updateOne: {
-            filter: { _id: existing._id },
-            update
-          }
-        });
-        if (row.needsGeocoding) geocodingJobs.push(existing._id);
-        updated++;
-      } else {
-        bulkOps.push({
-          insertOne: {
-            document: {
-              businessName: row.businessName,
-              address: row.address,
-              location: { type: "Point", coordinates: [row.longitude, row.latitude] },
-              contact: {
-                mobile,
-                email: row.email ? [row.email] : [],
-                contactDetails: [{
-                  title: "Mr",
-                  name: row.businessName,
-                  mobileNumbers: mobile,
-                  emails: row.email ? [row.email] : [],
-                }],
+        if (existing) {
+          const update = {
+            $addToSet: { category: catObj._id, ...(subCatObj ? { subCategory: subCatObj._id } : {}) },
+            $set: { updatedAt: new Date() },
+          };
+          if (!existing.website && row.website) update.$set.website = row.website;
+          if (!existing.contact?.email?.length && row.email) update.$set["contact.email"] = [row.email];
+          if (!existing.contact?.mobile?.length && mobile.length) update.$set["contact.mobile"] = mobile;
+          if (row.rating > (existing.rating || 0)) update.$set.rating = row.rating;
+          if (row.totalReviews > (existing.totalReviews || 0)) update.$set.totalReviews = row.totalReviews;
+
+          bulkOps.push({ updateOne: { filter: { _id: existing._id }, update } });
+          if (row.needsGeocoding) geocodingJobs.push(existing._id);
+          updated++;
+        } else {
+          bulkOps.push({
+            insertOne: {
+              document: {
+                businessName: row.businessName,
+                address: row.address,
+                location: { type: "Point", coordinates: [row.longitude, row.latitude] },
+                contact: {
+                  mobile,
+                  email: row.email ? [row.email] : [],
+                  contactDetails: [{
+                    title: "Mr",
+                    name: row.businessName,
+                    mobileNumbers: mobile,
+                    emails: row.email ? [row.email] : [],
+                  }],
+                },
+                website: row.website,
+                rating: row.rating,
+                totalReviews: row.totalReviews,
+                businessSummary: row.businessSummary || "",
+                category: [catObj._id],
+                subCategory: subCatObj ? [subCatObj._id] : [],
+                verified: false,
+                claimed: false,
+                isBlocked: false,
+                profileCompletionScore: 70,
+                needsGeocoding: row.needsGeocoding,
               },
-              website: row.website,
-              rating: row.rating,
-              totalReviews: row.totalReviews,
-              category: [catObj._id],
-              subCategory: [subCatObj._id],
-              verified: false,
-              claimed: false,
-              isBlocked: false,
-              profileCompletionScore: 70,
-              needsGeocoding: row.needsGeocoding,
-            }
-          }
-        });
-        created++;
+            },
+          });
+          created++;
+        }
+      } catch (err) {
+        skipped++;
+        errors.push(`Error processing row "${row.businessName}": ${err.message}`);
       }
     }
 
     if (bulkOps.length > 0) {
-      const bulkResult = await Business.bulkWrite(bulkOps, { ordered: false });
-      
-      // Queue geocoding for existing updated ones
-      for (const id of geocodingJobs) {
-        await addJob("geocoding-batch", { businessId: id });
-      }
-      
-      // Queue geocoding for new ones (approximate lookup for new IDs)
-      if (bulkResult.insertedCount > 0) {
-        const newlyCreated = await Business.find({ 
-          businessName: { $in: businessNames },
-          needsGeocoding: true,
-          "location.coordinates": [0,0],
-          createdAt: { $gte: new Date(Date.now() - 60000) } // Just created in last minute
-        }).select('_id');
-        for (const biz of newlyCreated) {
-          await addJob("geocoding-batch", { businessId: biz._id });
-        }
-      }
-    }
-  };
-
-
-  let currentChunk = [];
-  
-  fs.createReadStream(filePath)
-    .pipe(csv())
-    .on("data", (data) => {
-      currentChunk.push(data);
-      if (currentChunk.length >= CHUNK_SIZE) {
-        const chunkToProcess = [...currentChunk];
-        currentChunk = [];
-        // Use a wrapper to handle async in stream
-        streamWorker.push(chunkToProcess);
-      }
-    })
-    .on("end", async () => {
-      // Process remaining
-      if (currentChunk.length > 0) {
-        streamWorker.push(currentChunk);
-      }
-      streamWorker.finish();
-    });
-
-  // A simple queue-like structure to handle chunks sequentially
-  const streamWorker = {
-    queue: [],
-    processing: false,
-    finished: false,
-    push(chunk) {
-      this.queue.push(chunk);
-      this.process();
-    },
-    async process() {
-      if (this.processing || this.queue.length === 0) return;
-      this.processing = true;
-      const chunk = this.queue.shift();
       try {
-        await processChunk(chunk);
-      } catch (err) {
-        console.error("Chunk processing error:", err);
-      }
-      this.processing = false;
-      this.process();
-      this.checkFinish();
-    },
-    finish() {
-      this.finished = true;
-      this.checkFinish();
-    },
-    checkFinish() {
-      if (this.finished && !this.processing && this.queue.length === 0) {
-        fs.unlinkSync(filePath);
-        if (!res.headersSent) {
-          res.json({
-            message: "Import completed",
-            created,
-            updated,
-            skipped,
-            errors: errors.length > 20 ? errors.slice(0, 20).concat([`... and ${errors.length - 20} more`]) : errors,
-          });
+        const bulkResult = await Business.bulkWrite(bulkOps, { ordered: false });
+
+        for (const id of geocodingJobs) {
+          await addJob("geocoding-batch", { businessId: id });
         }
+
+        if (bulkResult.insertedCount > 0) {
+          const newlyCreated = await Business.find({
+            businessName: { $in: businessNames },
+            needsGeocoding: true,
+            "location.coordinates": [0, 0],
+            createdAt: { $gte: new Date(Date.now() - 60000) },
+          }).select("_id");
+          for (const biz of newlyCreated) {
+            await addJob("geocoding-batch", { businessId: biz._id });
+          }
+        }
+      } catch (err) {
+        errors.push(`Bulk write error: ${err.message}`);
       }
     }
   };
+
+  const sendResponse = () => {
+    try { if (fs.existsSync(filePath)) fs.unlinkSync(filePath); } catch (_) {}
+    console.log(`[BulkImport] Done — created:${created} updated:${updated} skipped:${skipped} errors:${errors.length}`);
+    if (errors.length > 0) console.warn(`[BulkImport] First errors:`, errors.slice(0, 5));
+    if (!res.headersSent) {
+      res.json({
+        message: "Import completed",
+        created,
+        updated,
+        skipped,
+        errors: errors.length > 20 ? errors.slice(0, 20).concat([`... and ${errors.length - 20} more`]) : errors,
+      });
+    }
+  };
+
+  // ── CSV path ──────────────────────────────────────────────────────────────
+  if (fileExt === ".csv") {
+    let currentChunk = [];
+
+    const streamWorker = {
+      queue: [],
+      processing: false,
+      finished: false,
+      push(chunk) { this.queue.push(chunk); this.process(); },
+      async process() {
+        if (this.processing || this.queue.length === 0) return;
+        this.processing = true;
+        const chunk = this.queue.shift();
+        try {
+          await processChunk(chunk);
+        } catch (err) {
+          console.error("Chunk processing error:", err);
+          errors.push(`Chunk error: ${err.message}`);
+        } finally {
+          this.processing = false;
+          this.process();
+          this.checkFinish();
+        }
+      },
+      finish() { this.finished = true; this.checkFinish(); },
+      checkFinish() {
+        if (this.finished && !this.processing && this.queue.length === 0) {
+          sendResponse();
+        }
+      },
+    };
+
+    fs.createReadStream(filePath)
+      .pipe(csv())
+      .on("data", (data) => {
+        currentChunk.push(data);
+        if (currentChunk.length >= CHUNK_SIZE) {
+          const chunkToProcess = [...currentChunk];
+          currentChunk = [];
+          streamWorker.push(chunkToProcess);
+        }
+      })
+      .on("end", () => {
+        if (currentChunk.length > 0) streamWorker.push(currentChunk);
+        streamWorker.finish();
+      })
+      .on("error", (err) => {
+        console.error("CSV stream error:", err);
+        errors.push(`CSV parse error: ${err.message}`);
+        sendResponse();
+      });
+
+  // ── Excel path ─────────────────────────────────────────────────────────────
+  } else {
+    try {
+      const workbook = new ExcelJS.Workbook();
+      await workbook.xlsx.readFile(filePath);
+
+      const worksheet = workbook.worksheets[0];
+      if (!worksheet) {
+        sendResponse();
+        return;
+      }
+
+      // Build header map from first row
+      const headers = [];
+      worksheet.getRow(1).eachCell((cell) => { headers.push((cell.value || "").toString().trim()); });
+
+      // Convert each data row into a plain object keyed by header
+      const rows = [];
+      worksheet.eachRow((row, rowNumber) => {
+        if (rowNumber === 1) return; // skip header row
+        const obj = {};
+        row.eachCell({ includeEmpty: true }, (cell, colNumber) => {
+          const header = headers[colNumber - 1];
+          if (header) {
+            const v = cell.value;
+            obj[header] = v === null || v === undefined ? "" : typeof v === "object" && v.text ? v.text : String(v);
+          }
+        });
+        rows.push(obj);
+      });
+
+      // Process in chunks
+      for (let i = 0; i < rows.length; i += CHUNK_SIZE) {
+        await processChunk(rows.slice(i, i + CHUNK_SIZE));
+      }
+
+      sendResponse();
+    } catch (err) {
+      console.error("Excel parse error:", err);
+      errors.push(`Excel parse error: ${err.message}`);
+      sendResponse();
+    }
+  }
 };
 
 
@@ -542,6 +647,138 @@ exports.downloadSampleCSV = async (req, res) => {
   } catch (error) {
     console.error("Error generating sample CSV:", error);
     res.status(500).json({ message: "Failed to generate sample CSV" });
+  }
+};
+
+exports.downloadSampleExcel = async (req, res) => {
+  try {
+    const workbook = new ExcelJS.Workbook();
+    workbook.creator = "Urban Citations Admin";
+    workbook.created = new Date();
+
+    const worksheet = workbook.addWorksheet("Businesses", {
+      views: [{ state: "frozen", ySplit: 2 }],
+    });
+
+    // Define columns
+    const columns = [
+      { header: "Business Name", key: "Business Name", width: 30 },
+      { header: "address", key: "address", width: 60 },
+      { header: "Website", key: "Website", width: 35 },
+      { header: "Email", key: "Email", width: 30 },
+      { header: "Phone", key: "Phone", width: 18 },
+      { header: "Rating", key: "Rating", width: 10 },
+      { header: "Reviews", key: "Reviews", width: 10 },
+      { header: "Latitude", key: "Latitude", width: 14 },
+      { header: "Longitude", key: "Longitude", width: 14 },
+      { header: "Category", key: "Category", width: 25 },
+      { header: "Subcategory", key: "Subcategory", width: 25 },
+      { header: "Country", key: "Country", width: 20 },
+    ];
+    worksheet.columns = columns;
+
+    // Style header row
+    const headerRow = worksheet.getRow(1);
+    headerRow.eachCell((cell) => {
+      cell.font = { bold: true, color: { argb: "FFFFFFFF" } };
+      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF1976D2" } };
+      cell.alignment = { vertical: "middle", horizontal: "center", wrapText: true };
+      cell.border = { bottom: { style: "thin" } };
+    });
+    headerRow.height = 24;
+
+    // Instruction row
+    const instrRow = worksheet.getRow(2);
+    instrRow.values = [
+      "Required: business name",
+      "Format: Street; Area; City; State; Pincode; Country (semicolon-separated)",
+      "Optional URL",
+      "Optional email",
+      "Optional phone",
+      "0-5",
+      "Integer",
+      "Decimal (optional)",
+      "Decimal (optional)",
+      "Required",
+      "Optional",
+      "Required",
+    ];
+    instrRow.eachCell((cell) => {
+      cell.font = { italic: true, size: 9, color: { argb: "FF555555" } };
+      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF5F5F5" } };
+      cell.alignment = { wrapText: true, vertical: "top" };
+    });
+    instrRow.height = 40;
+
+    // Example data rows
+    const examples = [
+      {
+        "Business Name": "DigitalMitro",
+        address: "123 Tech St; Salt Lake; Kolkata; West Bengal; 700091; India",
+        Website: "https://digitalmitro.com",
+        Email: "info@digitalmitro.com",
+        Phone: "9876543210",
+        Rating: 4.5,
+        Reviews: 120,
+        Latitude: 22.5726,
+        Longitude: 88.3639,
+        Category: "Marketing Agency",
+        Subcategory: "Digital Marketing",
+        Country: "India",
+      },
+      {
+        "Business Name": "Urban Citations",
+        address: "45 High St; Central; London; Greater London; WC1 1AA; United Kingdom",
+        Website: "https://urbancitations.com",
+        Email: "contact@urbancitations.com",
+        Phone: "+44207123456",
+        Rating: 4.2,
+        Reviews: 80,
+        Latitude: 51.5074,
+        Longitude: -0.1278,
+        Category: "Business Service",
+        Subcategory: "Local Listing",
+        Country: "United Kingdom",
+      },
+      {
+        "Business Name": "Example Business",
+        address: "789 Broadway; Manhattan; New York; NY; 10003; USA",
+        Website: "https://example.com",
+        Email: "hello@example.com",
+        Phone: "12125550199",
+        Rating: 3.8,
+        Reviews: 45,
+        Latitude: 40.7282,
+        Longitude: -73.9942,
+        Category: "Retail",
+        Subcategory: "Clothing",
+        Country: "United States",
+      },
+    ];
+
+    examples.forEach((ex) => {
+      const row = worksheet.addRow(ex);
+      row.eachCell((cell) => {
+        cell.alignment = { vertical: "middle", wrapText: true };
+      });
+    });
+
+    // Alternate row shading for data rows
+    for (let i = 3; i <= worksheet.rowCount; i++) {
+      if (i % 2 === 0) {
+        worksheet.getRow(i).eachCell((cell) => {
+          cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF0F7FF" } };
+        });
+      }
+    }
+
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    res.setHeader("Content-Disposition", "attachment; filename=sample_business_import.xlsx");
+    await workbook.xlsx.write(res);
+    res.end();
+  } catch (error) {
+    console.error("Error generating sample Excel:", error);
+    res.status(500).json({ message: "Failed to generate sample Excel" });
   }
 };
 

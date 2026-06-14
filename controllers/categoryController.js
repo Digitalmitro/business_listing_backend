@@ -222,6 +222,8 @@ exports.importCategoriesFromCSV = async (req, res) => {
   const results = [];
   const errors = [];
 
+  console.log(`[CategoryImport] Starting import: file=${req.file.originalname}, size=${req.file.size}`);
+
   fs.createReadStream(filePath)
     .pipe(csv())
     .on("data", (data) => results.push(data))
@@ -230,24 +232,43 @@ exports.importCategoriesFromCSV = async (req, res) => {
         let created = 0;
         let skipped = 0;
 
+        // Log the headers found in the file so mismatches are obvious
+        if (results.length > 0) {
+          console.log(`[CategoryImport] CSV headers detected:`, Object.keys(results[0]));
+          console.log(`[CategoryImport] Total rows to process: ${results.length}`);
+        }
+
         for (const row of results) {
           try {
-            const name = row["name"]?.trim();
-            const description = row["description"]?.trim() || "";
+            // Accept multiple common header variants for the category name
+            const name = (
+              row["name"] || row["Name"] ||
+              row["category_name"] || row["Category Name"] ||
+              row["category"] || row["Category"] ||
+              row["title"] || row["Title"] || ""
+            ).toString().trim();
+
+            const description = (
+              row["description"] || row["Description"] || ""
+            ).toString().trim();
 
             if (!name) {
-              errors.push(`Missing name: ${JSON.stringify(row)}`);
+              const msg = `Skipped row — no name found. Headers in file: ${Object.keys(row).join(", ")}`;
+              errors.push(msg);
+              console.warn(`[CategoryImport] ${msg}`);
               skipped++;
               continue;
             }
 
             // Check if category already exists
             const exists = await Category.findOne({
-              name: { $regex: new RegExp(`^${name}$`, "i") },
+              name: { $regex: new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i") },
             });
 
             if (exists) {
-              errors.push(`Already exists: ${name}`);
+              const msg = `Already exists: ${name}`;
+              errors.push(msg);
+              console.log(`[CategoryImport] ${msg}`);
               skipped++;
               continue;
             }
@@ -263,33 +284,40 @@ exports.importCategoriesFromCSV = async (req, res) => {
               name,
               slug,
               description,
-              // iconUrl uses default placeholder
-              // bgImage optional
             });
 
             await category.save();
+            console.log(`[CategoryImport] Created: ${name}`);
             created++;
           } catch (err) {
-            errors.push(
-              `Error processing ${row["name"] || "row"}: ${err.message}`
-            );
+            const msg = `Error processing "${row["name"] || row["category"] || "row"}": ${err.message}`;
+            errors.push(msg);
+            console.error(`[CategoryImport] ${msg}`);
             skipped++;
           }
         }
 
         // Clean up file
-        fs.unlinkSync(filePath);
+        try { fs.unlinkSync(filePath); } catch (_) {}
+
+        console.log(`[CategoryImport] Done — created:${created} skipped:${skipped} errors:${errors.length}`);
 
         res.json({
           message: "Category import completed",
           created,
           skipped,
-          errors,
+          errors: errors.length > 20 ? errors.slice(0, 20).concat([`... and ${errors.length - 20} more`]) : errors,
         });
       } catch (err) {
-        console.error("CSV Import error:", err);
-        res.status(500).json({ message: "Import failed" });
+        console.error("[CategoryImport] Fatal error:", err);
+        try { fs.unlinkSync(filePath); } catch (_) {}
+        res.status(500).json({ message: "Import failed", error: err.message });
       }
+    })
+    .on("error", (err) => {
+      console.error("[CategoryImport] Stream error:", err);
+      try { fs.unlinkSync(filePath); } catch (_) {}
+      res.status(500).json({ message: "Failed to read CSV file", error: err.message });
     });
 };
 

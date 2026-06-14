@@ -19,6 +19,7 @@ const {
   updateBusinessStatus,
   importBusinessFromCSV,
   downloadSampleCSV,
+  downloadSampleExcel,
   searchBusinesses,
   getDistinctCountries,
 } = require("../controllers/businessController");
@@ -131,5 +132,6 @@ router.post("/sync-geocoding", authMiddleware, async (req, res) => {
 });
 
 router.get("/download-sample-csv", downloadSampleCSV);
+router.get("/download-sample-excel", downloadSampleExcel);
 
 module.exports = router;
