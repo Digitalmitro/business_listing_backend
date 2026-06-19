@@ -10,6 +10,7 @@ const Offer = require("../models/Offer");
 const toObjectIdArray = require("../helpers/convertToObjectId");
 const csv = require("csv-parser");
 const ExcelJS = require("exceljs");
+const XLSX = require("xlsx");
 const fs = require("fs");
 const { addJob } = require("../utils/queue");
 const { notifyAdmins } = require("../helpers/notificationHelper");
@@ -237,21 +238,24 @@ exports.createBusiness = async (req, res) => {
 };
 
 exports.importBusinessFromCSV = async (req, res) => {
-  if (!req.file) return res.status(400).json({ message: "File is required. Upload a CSV or Excel (.xlsx/.xls) file." });
+  if (!req.file) return res.status(400).json({ message: "File is required. Upload a CSV or Excel (.xlsx) file." });
 
   const filePath = req.file.path;
   const fileExt = path.extname(req.file.originalname).toLowerCase();
   const CHUNK_SIZE = 500;
   let created = 0;
   let updated = 0;
+  let unchanged = 0;
   let skipped = 0;
   const errors = [];
+  const warnings = [];
+  const importKeys = new Set();
 
   console.log(`[BulkImport] Starting import: file=${req.file.originalname}, ext=${fileExt}, size=${req.file.size}`);
   // Validate file type
-  if (![".csv", ".xlsx", ".xls"].includes(fileExt)) {
+  if (![".csv", ".xlsx"].includes(fileExt)) {
     fs.unlinkSync(filePath);
-    return res.status(400).json({ message: "Unsupported file type. Upload a .csv, .xlsx, or .xls file." });
+    return res.status(400).json({ message: "Unsupported file type. Upload a .csv or .xlsx file. Save legacy .xls files as .xlsx first." });
   }
 
   // Pre-cache Categories and Subcategories to minimize DB queries
@@ -279,42 +283,94 @@ exports.importBusinessFromCSV = async (req, res) => {
     return sub;
   };
 
+  // CSV files exported by Excel commonly contain a UTF-8 BOM and headers vary
+  // between providers (for example "Business Name", "business_name", etc.).
+  // Normalize the keys once so those harmless differences do not skip every row.
+  const normalizeHeader = (header) => String(header || "")
+    .replace(/^\uFEFF/, "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
+
+  const createRowReader = (row) => {
+    const values = new Map();
+    Object.entries(row || {}).forEach(([header, value]) => {
+      values.set(normalizeHeader(header), value);
+    });
+
+    return {
+      get(...aliases) {
+        for (const alias of aliases) {
+          const key = normalizeHeader(alias);
+          if (values.has(key)) {
+            const value = values.get(key);
+            return value === null || value === undefined ? "" : String(value).trim();
+          }
+        }
+        return "";
+      },
+      has(...aliases) {
+        return aliases.some((alias) => values.has(normalizeHeader(alias)));
+      },
+    };
+  };
+
+  const normalizeIdentityPart = (value) => String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ");
+
+  const getBusinessImportKey = (business) => [
+    normalizeIdentityPart(business.businessName),
+    normalizeIdentityPart(business.address?.city),
+    normalizeIdentityPart(business.address?.pincode).replace(/\s+/g, ""),
+    normalizeIdentityPart(normalizeCountry(business.address?.country)),
+  ].join("|");
+
   // Normalize a raw row object (from CSV or Excel) into a standard shape.
   // Supports two layouts:
   //   Layout A (combined address): "Business Name", "address" (semicolon-separated), ...
   //   Layout B (flat columns):     "business_name", "address", "city", "state", "country", "postal_code", ...
   const normalizeRow = (row) => {
+    const reader = createRowReader(row);
+
     // ── Business name: try multiple common header variants ──
-    const businessName = (
-      row["Business Name"] || row["businessName"] || row["business_name"] ||
-      row["Name"] || row["name"] || ""
-    ).toString().trim();
+    const businessName = reader.get("Business Name", "businessName", "business_name", "Name", "Company Name");
 
     // ── Contact fields ──
-    const website  = (row["Website"]  || row["website"]  || "").toString().trim();
-    const email    = (row["Email"]    || row["email"]    || "").toString().trim();
-    const phone    = (row["Phone"]    || row["phone"]    || row["mobile"] || row["Mobile"] || "").toString().trim();
-    const ratingStr  = (row["Rating"]  || row["rating"]  || "0").toString().trim();
-    const reviewsStr = (row["Reviews"] || row["reviews"] || "0").toString().trim();
-    const latStr   = (row["Latitude"]  || row["latitude"]  || "").toString().trim();
-    const lonStr   = (row["Longitude"] || row["longitude"] || "").toString().trim();
+    const website = reader.get("Website", "Website URL", "URL");
+    const email = reader.get("Email", "Email Address");
+    const phone = reader.get("Phone", "Mobile", "Phone Number", "Mobile Number");
+    const ratingStr = reader.get("Rating") || "0";
+    const reviewsStr = reader.get("Reviews", "Review Count", "Total Reviews") || "0";
+    const latStr = reader.get("Latitude", "Lat");
+    const lonStr = reader.get("Longitude", "Lng", "Lon", "Long");
+    const parsedLatitude = Number.parseFloat(latStr);
+    const parsedLongitude = Number.parseFloat(lonStr);
+    const hasValidCoordinates = Number.isFinite(parsedLatitude) &&
+      Number.isFinite(parsedLongitude) &&
+      parsedLatitude >= -90 && parsedLatitude <= 90 &&
+      parsedLongitude >= -180 && parsedLongitude <= 180;
 
     // ── Category ──
-    const rawCategory    = (row["Category"]   || row["category"]   || "Uncategorized").toString().trim().replace("· ", "");
-    const rawSubCategory = (row["Subcategory"] || row["subcategory"] || rawCategory).toString().trim();
+    const rawCategory = (reader.get("Category") || "Uncategorized").replace("· ", "").trim();
+    const rawSubCategory = reader.get("Subcategory", "Sub Category") || rawCategory;
 
     // ── Extra fields ──
-    const businessSummary = (row["description"] || row["Description"] || row["businessSummary"] || "").toString().trim();
-    const ownerName       = (row["owner_name"]  || row["Owner Name"]  || "").toString().trim();
+    const businessSummary = reader.get("Description", "Business Summary");
+    const ownerName = reader.get("Owner Name");
 
     if (!businessName) return null;
 
+    // Older generated Excel samples included an instruction row below the
+    // headers. Ignore it rather than importing it as a real business.
+    if (/^required\s*:/i.test(businessName)) return { ignored: true };
+
     // ── Address resolution: detect Layout A vs B ──
     // Layout B detected when any of these separate-column headers are present
-    const hasCity      = !!(row["city"]        || row["City"]);
-    const hasState     = !!(row["state"]       || row["State"]);
-    const hasCountryCol = !!(row["country"]    || row["Country"]);
-    const hasPostal    = !!(row["postal_code"] || row["Postal Code"] || row["pincode"] || row["Pincode"]);
+    const hasCity = reader.has("City");
+    const hasState = reader.has("State");
+    const hasPostal = reader.has("Postal Code", "Pincode", "Zip Code", "ZIP");
     const isFlatLayout = hasCity || hasState || hasPostal;
 
     let streetName = "";
@@ -326,17 +382,17 @@ exports.importBusinessFromCSV = async (req, res) => {
 
     if (isFlatLayout) {
       // Layout B: separate columns
-      streetName = (row["address"] || row["Address"] || row["street"] || row["Street"] || "").toString().trim();
-      area       = (row["area"]    || row["Area"]    || row["locality"] || "").toString().trim();
-      city       = (row["city"]    || row["City"]    || "Unknown City").toString().trim();
-      state      = (row["state"]   || row["State"]   || "Unknown State").toString().trim();
-      pincode    = (row["postal_code"] || row["Postal Code"] || row["pincode"] || row["Pincode"] || "000000").toString().trim();
-      country    = normalizeCountry((row["country"] || row["Country"] || "Unknown Country").toString().trim());
+      streetName = reader.get("Address", "Street", "Street Address");
+      area = reader.get("Area", "Locality");
+      city = reader.get("City") || "Unknown City";
+      state = reader.get("State", "Province") || "Unknown State";
+      pincode = reader.get("Postal Code", "Pincode", "Zip Code", "ZIP") || "000000";
+      country = normalizeCountry(reader.get("Country") || "Unknown Country");
     } else {
       // Layout A: semicolon-delimited combined address string
-      const rawAddress = (row["address"] || row["Address"] || "").toString().trim();
+      const rawAddress = reader.get("Address", "Street Address");
       if (!rawAddress) return null; // Layout A requires an address string
-      const rowCountry = (row["Country"] || row["country"] || "").toString().trim();
+      const rowCountry = reader.get("Country");
 
       const parts = rawAddress.split(";").map((p) => p.trim());
       const len = parts.length;
@@ -365,11 +421,11 @@ exports.importBusinessFromCSV = async (req, res) => {
       phone,
       rating: parseFloat(ratingStr) || 0,
       totalReviews: parseInt(reviewsStr) || 0,
-      latitude:  latStr ? parseFloat(latStr) : 0,
-      longitude: lonStr ? parseFloat(lonStr) : 0,
+      latitude: hasValidCoordinates ? parsedLatitude : 0,
+      longitude: hasValidCoordinates ? parsedLongitude : 0,
       rawCategory:    rawCategory    || "Uncategorized",
       rawSubCategory: rawSubCategory || rawCategory || "Uncategorized",
-      needsGeocoding: !latStr || !lonStr,
+      needsGeocoding: !hasValidCoordinates,
       businessSummary,
       ownerName,
     };
@@ -377,7 +433,8 @@ exports.importBusinessFromCSV = async (req, res) => {
 
   const processChunk = async (chunk) => {
     const bulkOps = [];
-    const geocodingJobs = [];
+    const bulkOpTypes = [];
+    const geocodingCandidates = [];
 
     // 1. Normalize rows
     const normalizedRows = [];
@@ -386,8 +443,9 @@ exports.importBusinessFromCSV = async (req, res) => {
         const normalized = normalizeRow(row);
         if (!normalized) {
           skipped++;
-          const rowId = row["Business Name"] || row["business_name"] || row["Name"] || JSON.stringify(row).slice(0, 60);
-          const reason = !( row["Business Name"] || row["business_name"] || row["Name"] || row["businessName"] )
+          const reader = createRowReader(row);
+          const rowId = reader.get("Business Name", "Name", "Company Name") || JSON.stringify(row).slice(0, 60);
+          const reason = !reader.get("Business Name", "Name", "Company Name")
             ? "missing business name"
             : "missing address / city";
           const msg = `Row skipped (${reason}): ${rowId}`;
@@ -395,6 +453,16 @@ exports.importBusinessFromCSV = async (req, res) => {
           console.warn(`[BulkImport] ${msg}`);
           continue;
         }
+
+        if (normalized.ignored) continue;
+
+        const importKey = getBusinessImportKey(normalized);
+        if (importKeys.has(importKey)) {
+          unchanged++;
+          warnings.push(`Duplicate row in uploaded file: ${normalized.businessName}`);
+          continue;
+        }
+        importKeys.add(importKey);
         normalizedRows.push(normalized);
       } catch (err) {
         skipped++;
@@ -421,11 +489,12 @@ exports.importBusinessFromCSV = async (req, res) => {
 
     // 3. Batch-lookup existing businesses
     const businessNames = normalizedRows.map((r) => r.businessName);
-    const existingBusinesses = await Business.find({ businessName: { $in: businessNames } }).lean();
+    const existingBusinesses = await Business.find({ businessName: { $in: businessNames } })
+      .collation({ locale: "en", strength: 2 })
+      .lean();
     const existingMap = new Map();
     existingBusinesses.forEach((biz) => {
-      const key = `${biz.businessName.toLowerCase().trim()}|${(biz.address.city || "").toLowerCase().trim()}|${(biz.address.pincode || "").trim()}`;
-      existingMap.set(key, biz);
+      existingMap.set(getBusinessImportKey(biz), biz);
     });
 
     // 4. Build bulk ops
@@ -436,29 +505,57 @@ exports.importBusinessFromCSV = async (req, res) => {
 
         if (!catObj) { skipped++; errors.push(`No category found for row: ${row.businessName}`); continue; }
 
-        const lookupKey = `${row.businessName.toLowerCase().trim()}|${row.address.city.toLowerCase().trim()}|${row.address.pincode.trim()}`;
+        const lookupKey = getBusinessImportKey(row);
         const existing = existingMap.get(lookupKey);
         const cleanedPhone = row.phone?.replace(/\D/g, "");
         const mobile = cleanedPhone ? [cleanedPhone] : [];
 
         if (existing) {
-          const update = {
-            $addToSet: { category: catObj._id, ...(subCatObj ? { subCategory: subCatObj._id } : {}) },
-            $set: { updatedAt: new Date() },
-          };
-          if (!existing.website && row.website) update.$set.website = row.website;
-          if (!existing.contact?.email?.length && row.email) update.$set["contact.email"] = [row.email];
-          if (!existing.contact?.mobile?.length && mobile.length) update.$set["contact.mobile"] = mobile;
-          if (row.rating > (existing.rating || 0)) update.$set.rating = row.rating;
-          if (row.totalReviews > (existing.totalReviews || 0)) update.$set.totalReviews = row.totalReviews;
+          const set = {};
+          const addToSet = {};
+          const existingCategoryIds = (existing.category || []).map(String);
+          const existingSubCategoryIds = (existing.subCategory || []).map(String);
+
+          if (!existingCategoryIds.includes(String(catObj._id))) addToSet.category = catObj._id;
+          if (subCatObj && !existingSubCategoryIds.includes(String(subCatObj._id))) {
+            addToSet.subCategory = subCatObj._id;
+          }
+          if (!existing.website && row.website) set.website = row.website;
+          if (!existing.contact?.email?.length && row.email) set["contact.email"] = [row.email];
+          if (!existing.contact?.mobile?.length && mobile.length) set["contact.mobile"] = mobile;
+          if (!existing.businessSummary && row.businessSummary) set.businessSummary = row.businessSummary;
+          if (row.rating > (existing.rating || 0)) set.rating = row.rating;
+          if (row.totalReviews > (existing.totalReviews || 0)) set.totalReviews = row.totalReviews;
+
+          const existingCoordinates = existing.location?.coordinates || [];
+          if (!row.needsGeocoding && (
+            existing.needsGeocoding ||
+            existingCoordinates.length !== 2 ||
+            (existingCoordinates[0] === 0 && existingCoordinates[1] === 0)
+          )) {
+            set.location = { type: "Point", coordinates: [row.longitude, row.latitude] };
+            set.needsGeocoding = false;
+            set.geocodingError = null;
+          }
+
+          if (Object.keys(set).length === 0 && Object.keys(addToSet).length === 0) {
+            unchanged++;
+            continue;
+          }
+
+          set.updatedAt = new Date();
+          const update = { $set: set };
+          if (Object.keys(addToSet).length > 0) update.$addToSet = addToSet;
 
           bulkOps.push({ updateOne: { filter: { _id: existing._id }, update } });
-          if (row.needsGeocoding) geocodingJobs.push(existing._id);
-          updated++;
+          bulkOpTypes.push("update");
+          if (row.needsGeocoding) geocodingCandidates.push(existing._id);
         } else {
+          const businessId = new mongoose.Types.ObjectId();
           bulkOps.push({
             insertOne: {
               document: {
+                _id: businessId,
                 businessName: row.businessName,
                 address: row.address,
                 location: { type: "Point", coordinates: [row.longitude, row.latitude] },
@@ -467,7 +564,7 @@ exports.importBusinessFromCSV = async (req, res) => {
                   email: row.email ? [row.email] : [],
                   contactDetails: [{
                     title: "Mr",
-                    name: row.businessName,
+                    name: row.ownerName || row.businessName,
                     mobileNumbers: mobile,
                     emails: row.email ? [row.email] : [],
                   }],
@@ -486,7 +583,8 @@ exports.importBusinessFromCSV = async (req, res) => {
               },
             },
           });
-          created++;
+          bulkOpTypes.push("insert");
+          if (row.needsGeocoding) geocodingCandidates.push(businessId);
         }
       } catch (err) {
         skipped++;
@@ -495,41 +593,76 @@ exports.importBusinessFromCSV = async (req, res) => {
     }
 
     if (bulkOps.length > 0) {
+      const plannedInserts = bulkOpTypes.filter((type) => type === "insert").length;
+      const plannedUpdates = bulkOpTypes.length - plannedInserts;
+      let insertedCount = 0;
+      let matchedCount = 0;
+      let modifiedCount = 0;
+
+      const readResultCount = (result, key, legacyKey) => Number(
+        result?.[key] ??
+        result?.result?.[key] ??
+        result?.result?.result?.[legacyKey] ??
+        0
+      );
+
       try {
         const bulkResult = await Business.bulkWrite(bulkOps, { ordered: false });
-
-        for (const id of geocodingJobs) {
-          await addJob("geocoding-batch", { businessId: id });
-        }
-
-        if (bulkResult.insertedCount > 0) {
-          const newlyCreated = await Business.find({
-            businessName: { $in: businessNames },
-            needsGeocoding: true,
-            "location.coordinates": [0, 0],
-            createdAt: { $gte: new Date(Date.now() - 60000) },
-          }).select("_id");
-          for (const biz of newlyCreated) {
-            await addJob("geocoding-batch", { businessId: biz._id });
-          }
-        }
+        insertedCount = readResultCount(bulkResult, "insertedCount", "nInserted");
+        matchedCount = readResultCount(bulkResult, "matchedCount", "nMatched");
+        modifiedCount = readResultCount(bulkResult, "modifiedCount", "nModified");
       } catch (err) {
         errors.push(`Bulk write error: ${err.message}`);
+        const partialResult = err.result || err;
+        insertedCount = readResultCount(partialResult, "insertedCount", "nInserted");
+        matchedCount = readResultCount(partialResult, "matchedCount", "nMatched");
+        modifiedCount = readResultCount(partialResult, "modifiedCount", "nModified");
+
+        const writeErrors = err.writeErrors || [];
+        writeErrors.slice(0, 10).forEach((writeError) => {
+          const index = writeError.index;
+          const name = bulkOps[index]?.insertOne?.document?.businessName || `operation ${index + 1}`;
+          errors.push(`Failed to import ${name}: ${writeError.errmsg || writeError.message || "database error"}`);
+        });
+      }
+
+      created += insertedCount;
+      updated += modifiedCount;
+      unchanged += Math.max(0, matchedCount - modifiedCount);
+      skipped += Math.max(0, plannedInserts - insertedCount);
+      skipped += Math.max(0, plannedUpdates - matchedCount);
+
+      if (geocodingCandidates.length > 0) {
+        try {
+          const businessesToGeocode = await Business.find({
+            _id: { $in: geocodingCandidates },
+            needsGeocoding: true,
+          }).select("_id");
+          const queueResults = await Promise.allSettled(
+            businessesToGeocode.map((business) => addJob("geocoding-batch", { businessId: business._id }))
+          );
+          const queueFailures = queueResults.filter((result) => result.status === "rejected").length;
+          if (queueFailures > 0) warnings.push(`Imported successfully, but ${queueFailures} geocoding jobs could not be queued.`);
+        } catch (err) {
+          warnings.push(`Imported successfully, but geocoding could not be queued: ${err.message}`);
+        }
       }
     }
   };
 
   const sendResponse = () => {
     try { if (fs.existsSync(filePath)) fs.unlinkSync(filePath); } catch (_) {}
-    console.log(`[BulkImport] Done — created:${created} updated:${updated} skipped:${skipped} errors:${errors.length}`);
+    console.log(`[BulkImport] Done — created:${created} updated:${updated} unchanged:${unchanged} skipped:${skipped} errors:${errors.length}`);
     if (errors.length > 0) console.warn(`[BulkImport] First errors:`, errors.slice(0, 5));
     if (!res.headersSent) {
       res.json({
         message: "Import completed",
         created,
         updated,
+        unchanged,
         skipped,
         errors: errors.length > 20 ? errors.slice(0, 20).concat([`... and ${errors.length - 20} more`]) : errors,
+        warnings: warnings.length > 20 ? warnings.slice(0, 20).concat([`... and ${warnings.length - 20} more`]) : warnings,
       });
     }
   };
@@ -567,7 +700,9 @@ exports.importBusinessFromCSV = async (req, res) => {
     };
 
     fs.createReadStream(filePath)
-      .pipe(csv())
+      .pipe(csv({
+        mapHeaders: ({ header }) => String(header || "").replace(/^\uFEFF/, "").trim(),
+      }))
       .on("data", (data) => {
         currentChunk.push(data);
         if (currentChunk.length >= CHUNK_SIZE) {
@@ -589,33 +724,54 @@ exports.importBusinessFromCSV = async (req, res) => {
   // ── Excel path ─────────────────────────────────────────────────────────────
   } else {
     try {
-      const workbook = new ExcelJS.Workbook();
-      await workbook.xlsx.readFile(filePath);
+      let rows = [];
 
-      const worksheet = workbook.worksheets[0];
-      if (!worksheet) {
-        sendResponse();
-        return;
+      try {
+        const workbook = new ExcelJS.Workbook();
+        await workbook.xlsx.readFile(filePath);
+
+        const worksheet = workbook.worksheets[0];
+        if (!worksheet) throw new Error("Workbook does not contain a worksheet.");
+
+        // Build header map from first row
+        const headers = [];
+        worksheet.getRow(1).eachCell({ includeEmpty: true }, (cell, colNumber) => {
+          headers[colNumber] = String(cell.value || "").replace(/^\uFEFF/, "").trim();
+        });
+
+        // Convert each data row into a plain object keyed by header
+        worksheet.eachRow((row, rowNumber) => {
+          if (rowNumber === 1) return; // skip header row
+          const obj = {};
+          row.eachCell({ includeEmpty: true }, (cell, colNumber) => {
+            const header = headers[colNumber];
+            if (header) {
+              const value = cell.value;
+              obj[header] = value === null || value === undefined
+                ? ""
+                : typeof value === "object" && value.text
+                  ? value.text
+                  : String(value);
+            }
+          });
+          if (Object.values(obj).some((value) => String(value).trim())) rows.push(obj);
+        });
+      } catch (excelJsError) {
+        // ExcelJS crashes on some valid workbooks that use prefixed XML
+        // namespaces. SheetJS provides a more tolerant compatibility path.
+        console.warn(`[BulkImport] ExcelJS parser failed; using XLSX fallback: ${excelJsError.message}`);
+        const workbook = XLSX.readFile(filePath, { cellDates: false });
+        const firstSheetName = workbook.SheetNames?.[0];
+        const worksheet = firstSheetName ? workbook.Sheets[firstSheetName] : null;
+        if (!worksheet) throw new Error("Workbook does not contain a readable worksheet.");
+        rows = XLSX.utils.sheet_to_json(worksheet, {
+          defval: "",
+          raw: false,
+          blankrows: false,
+        });
       }
 
-      // Build header map from first row
-      const headers = [];
-      worksheet.getRow(1).eachCell((cell) => { headers.push((cell.value || "").toString().trim()); });
-
-      // Convert each data row into a plain object keyed by header
-      const rows = [];
-      worksheet.eachRow((row, rowNumber) => {
-        if (rowNumber === 1) return; // skip header row
-        const obj = {};
-        row.eachCell({ includeEmpty: true }, (cell, colNumber) => {
-          const header = headers[colNumber - 1];
-          if (header) {
-            const v = cell.value;
-            obj[header] = v === null || v === undefined ? "" : typeof v === "object" && v.text ? v.text : String(v);
-          }
-        });
-        rows.push(obj);
-      });
+      if (rows.length === 0) throw new Error("The first worksheet does not contain any business rows.");
 
       // Process in chunks
       for (let i = 0; i < rows.length; i += CHUNK_SIZE) {
@@ -625,8 +781,18 @@ exports.importBusinessFromCSV = async (req, res) => {
       sendResponse();
     } catch (err) {
       console.error("Excel parse error:", err);
-      errors.push(`Excel parse error: ${err.message}`);
-      sendResponse();
+      try { if (fs.existsSync(filePath)) fs.unlinkSync(filePath); } catch (_) {}
+      if (!res.headersSent) {
+        res.status(400).json({
+          message: "The Excel file could not be read. Please verify that it is a valid .xlsx workbook.",
+          created,
+          updated,
+          unchanged,
+          skipped,
+          errors: [`Excel parse error: ${err.message}`],
+          warnings,
+        });
+      }
     }
   }
 };
@@ -657,7 +823,7 @@ exports.downloadSampleExcel = async (req, res) => {
     workbook.created = new Date();
 
     const worksheet = workbook.addWorksheet("Businesses", {
-      views: [{ state: "frozen", ySplit: 2 }],
+      views: [{ state: "frozen", ySplit: 1 }],
     });
 
     // Define columns
@@ -686,29 +852,6 @@ exports.downloadSampleExcel = async (req, res) => {
       cell.border = { bottom: { style: "thin" } };
     });
     headerRow.height = 24;
-
-    // Instruction row
-    const instrRow = worksheet.getRow(2);
-    instrRow.values = [
-      "Required: business name",
-      "Format: Street; Area; City; State; Pincode; Country (semicolon-separated)",
-      "Optional URL",
-      "Optional email",
-      "Optional phone",
-      "0-5",
-      "Integer",
-      "Decimal (optional)",
-      "Decimal (optional)",
-      "Required",
-      "Optional",
-      "Required",
-    ];
-    instrRow.eachCell((cell) => {
-      cell.font = { italic: true, size: 9, color: { argb: "FF555555" } };
-      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF5F5F5" } };
-      cell.alignment = { wrapText: true, vertical: "top" };
-    });
-    instrRow.height = 40;
 
     // Example data rows
     const examples = [
@@ -764,13 +907,31 @@ exports.downloadSampleExcel = async (req, res) => {
     });
 
     // Alternate row shading for data rows
-    for (let i = 3; i <= worksheet.rowCount; i++) {
+    for (let i = 2; i <= worksheet.rowCount; i++) {
       if (i % 2 === 0) {
         worksheet.getRow(i).eachCell((cell) => {
           cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF0F7FF" } };
         });
       }
     }
+
+    const instructions = workbook.addWorksheet("Instructions");
+    instructions.columns = [
+      { header: "Field", key: "field", width: 24 },
+      { header: "Guidance", key: "guidance", width: 80 },
+    ];
+    instructions.addRows([
+      { field: "Business Name", guidance: "Required." },
+      { field: "address", guidance: "Required unless separate city/state columns are used. Format: Street; Area; City; State; Pincode; Country." },
+      { field: "Category", guidance: "Required. A missing category will be created automatically." },
+      { field: "Subcategory", guidance: "Optional. Defaults to the category." },
+      { field: "Country", guidance: "Required. Common abbreviations such as US, USA, UK, and AU are accepted." },
+      { field: "Latitude / Longitude", guidance: "Optional. Businesses without coordinates are queued for geocoding." },
+    ]);
+    instructions.getRow(1).eachCell((cell) => {
+      cell.font = { bold: true, color: { argb: "FFFFFFFF" } };
+      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF1976D2" } };
+    });
 
     res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
     res.setHeader("Content-Disposition", "attachment; filename=sample_business_import.xlsx");
