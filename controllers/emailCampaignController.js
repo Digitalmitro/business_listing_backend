@@ -8,6 +8,7 @@ const User = require("../models/User");
 const Business = require("../models/Business");
 const { sendMail } = require("../utils/nodemailer");
 const { emailQueue, addJob } = require("../utils/queue");
+const { applyEmailPlaceholders, getBusinessPlaceholderData } = require("../utils/emailPlaceholders");
 
 // Validate email format
 const validateEmail = (email) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
@@ -85,10 +86,13 @@ const processCampaignExcel = async (req, res) => {
     };
     console.log("Database Query:", JSON.stringify(query, null, 2));
 
-    const matches = await Business.find(query).select("businessName contact.email contact.contactDetails.emails");
+    const matches = await Business.find(query)
+      .populate("category", "name")
+      .populate("subCategory", "name")
+      .select("businessName address website contact category subCategory");
     console.log(`Found ${matches.length} businesses matching these emails.`);
 
-    const emailToBusinessName = {};
+    const emailToBusiness = {};
     matches.forEach(biz => {
       // Ensure email is treated as an array even if stored as string in legacy data
       const primaryEmails = Array.isArray(biz.contact?.email) 
@@ -102,15 +106,25 @@ const processCampaignExcel = async (req, res) => {
 
       uniqueEmails.forEach(e => {
         if (bizEmails.includes(e)) {
-          emailToBusinessName[e] = biz.businessName;
+          emailToBusiness[e] = biz;
         }
       });
     });
 
-    const result = uniqueEmails.map(email => ({
-      email,
-      businessName: emailToBusinessName[email] || ""
-    }));
+    const result = uniqueEmails.map(email => {
+      const businessData = getBusinessPlaceholderData(emailToBusiness[email]);
+      return {
+        email,
+        businessName: businessData.business_name,
+        address: businessData.address,
+        website: businessData.website,
+        phone: businessData.phone,
+        category: businessData.category,
+        subcategory: businessData.subcategory,
+        country: businessData.country,
+        listingUrl: businessData.listing_url,
+      };
+    });
 
     const matchCount = result.filter(r => r.businessName).length;
     console.log("Final Mapping Result (Matches):", matchCount);
@@ -731,27 +745,6 @@ const sendCampaign = async (req, res) => {
     }
 
     try {
-      // Helper: replace all 8 CSV-field placeholders + legacy ones in a template body
-      // Keeps in sync with: businessController.downloadSampleCSV header columns
-      const applyPlaceholders = (body, data) => body
-        // Legacy / other-trigger-type tokens
-        .replace(/{{full_name}}/g,       data.full_name       || "User")
-        .replace(/{{frontend_url}}/g,    data.frontend_url    || process.env.FRONTEND_URL || "")
-        .replace(/{{package_name}}/g,    data.package_name    || "")
-        .replace(/{{start_date}}/g,      data.start_date      || "")
-        .replace(/{{business_id}}/g,     data.business_id     || "")
-        .replace(/{{status}}/g,          data.status          || "")
-        .replace(/{{rejection_reason}}/g,data.rejection_reason|| "")
-        // CSV-field tokens (Marketing Campaign)
-        .replace(/{{business_name}}/g,   data.business_name   || "")
-        .replace(/{{address}}/g,         data.address         || "")
-        .replace(/{{website}}/g,         data.website         || "")
-        .replace(/{{email}}/g,           data.email           || "")
-        .replace(/{{phone}}/g,           data.phone           || "")
-        .replace(/{{category}}/g,        data.category        || "")
-        .replace(/{{subcategory}}/g,     data.subcategory     || "")
-        .replace(/{{country}}/g,         data.country         || "");
-
       // Send to registered users
       for (const user of campaign.recipients.users || []) {
         const fullUser = await User.findById(user);
@@ -768,24 +761,13 @@ const sendCampaign = async (req, res) => {
           .populate("subCategory", "name")
           .select("businessName address website contact category subCategory");
 
-        const addressStr = associatedBiz
-          ? [associatedBiz.address?.streetName, associatedBiz.address?.area, associatedBiz.address?.city, associatedBiz.address?.state, associatedBiz.address?.pincode, associatedBiz.address?.country]
-              .filter(Boolean).join(", ")
-          : "";
-
         const data = {
+          ...getBusinessPlaceholderData(associatedBiz),
           full_name:     fullUser.full_name || "User",
           email:         fullUser.email,
-          business_name: associatedBiz?.businessName || "",
-          address:       addressStr,
-          website:       associatedBiz?.website || "",
-          phone:         (associatedBiz?.contact?.mobile?.[0] || ""),
-          category:      (associatedBiz?.category || []).map(c => c.name || c).join(", "),
-          subcategory:   (associatedBiz?.subCategory || []).map(s => s.name || s).join(", "),
-          country:       associatedBiz?.address?.country || "",
         };
 
-        const html = applyPlaceholders(campaign.template.body, data);
+        const html = applyEmailPlaceholders(campaign.template.body, data);
 
         const unsubscribeLink = `${process.env.FRONTEND_URL}/unsubscribe?userId=${fullUser._id}&campaignId=${campaign._id}`;
         
@@ -802,20 +784,31 @@ const sendCampaign = async (req, res) => {
       // Send to custom emails
       // Custom email items may carry CSV-field values if they were imported via the business CSV flow
       for (const item of campaign.recipients.customEmails || []) {
-        const email    = typeof item === 'string' ? item : item.email;
+        const email = typeof item === 'string' ? item : item.email;
+        const associatedBiz = await Business.findOne({
+          $or: [
+            { "contact.email": email },
+            { "contact.contactDetails.emails": email },
+          ],
+        })
+          .populate("category", "name")
+          .populate("subCategory", "name")
+          .select("businessName address website contact category subCategory");
+        const businessData = getBusinessPlaceholderData(associatedBiz);
         const data = {
           full_name:     typeof item === 'string' ? "User" : (item.full_name     || "User"),
           email,
-          business_name: typeof item === 'string' ? ""     : (item.businessName  || item.business_name || ""),
-          address:       typeof item === 'string' ? ""     : (item.address       || ""),
-          website:       typeof item === 'string' ? ""     : (item.website       || ""),
-          phone:         typeof item === 'string' ? ""     : (item.phone         || ""),
-          category:      typeof item === 'string' ? ""     : (item.category      || ""),
-          subcategory:   typeof item === 'string' ? ""     : (item.subcategory   || ""),
-          country:       typeof item === 'string' ? ""     : (item.country       || ""),
+          business_name: typeof item === 'string' ? businessData.business_name : (item.businessName || item.business_name || businessData.business_name),
+          address:       typeof item === 'string' ? businessData.address       : (item.address       || businessData.address),
+          website:       typeof item === 'string' ? businessData.website       : (item.website       || businessData.website),
+          phone:         typeof item === 'string' ? businessData.phone         : (item.phone         || businessData.phone),
+          category:      typeof item === 'string' ? businessData.category      : (item.category      || businessData.category),
+          subcategory:   typeof item === 'string' ? businessData.subcategory   : (item.subcategory   || businessData.subcategory),
+          country:       typeof item === 'string' ? businessData.country       : (item.country       || businessData.country),
+          listing_url:   typeof item === 'string' ? businessData.listing_url   : (item.listingUrl || item.listing_url || businessData.listing_url),
         };
 
-        const html = applyPlaceholders(campaign.template.body, data);
+        const html = applyEmailPlaceholders(campaign.template.body, data);
 
         const unsubscribeLink = `${process.env.FRONTEND_URL}/unsubscribe?email=${encodeURIComponent(email)}&campaignId=${campaign._id}`;
         
@@ -975,26 +968,24 @@ const sendTestEmail = async (req, res) => {
       return res.status(400).json({ message: "No active sender email found. Please add one in Settings." });
     }
 
-    // Replace all placeholders with test / sample data
-    // CSV-field tokens stay in sync with businessController.downloadSampleCSV columns
-    const html = template.body
-      // Legacy / other-trigger tokens
-      .replace(/{{full_name}}/g,       "Test User")
-      .replace(/{{frontend_url}}/g,    process.env.FRONTEND_URL || "http://localhost:3000")
-      .replace(/{{package_name}}/g,    "Premium Package")
-      .replace(/{{start_date}}/g,      new Date().toLocaleDateString())
-      .replace(/{{business_id}}/g,     "12345")
-      .replace(/{{status}}/g,          "Approved")
-      .replace(/{{rejection_reason}}/g,"Test Rejection Reason")
-      // CSV-field tokens (Marketing Campaign)
-      .replace(/{{business_name}}/g,   "DigitalMitro (Sample)")
-      .replace(/{{address}}/g,         "123 Tech St, Salt Lake, Kolkata, West Bengal, 700091, India")
-      .replace(/{{website}}/g,         "https://digitalmitro.com")
-      .replace(/{{email}}/g,           to)
-      .replace(/{{phone}}/g,           "9876543210")
-      .replace(/{{category}}/g,        "Marketing Agency")
-      .replace(/{{subcategory}}/g,     "Digital Marketing")
-      .replace(/{{country}}/g,         "India");
+    const html = applyEmailPlaceholders(template.body, {
+      full_name: "Test User",
+      frontend_url: process.env.FRONTEND_URL || "http://localhost:3000",
+      package_name: "Premium Package",
+      start_date: new Date().toLocaleDateString(),
+      business_id: "12345",
+      status: "Approved",
+      rejection_reason: "Test Rejection Reason",
+      business_name: "DigitalMitro (Sample)",
+      address: "123 Tech St, Salt Lake, Kolkata, West Bengal, 700091, India",
+      website: "https://digitalmitro.com",
+      email: to,
+      phone: "9876543210",
+      category: "Marketing Agency",
+      subcategory: "Digital Marketing",
+      country: "India",
+      listing_url: `${(process.env.FRONTEND_URL || "https://urbancitations.com").replace(/\/+$/, "")}/digital-mitro-pvt-ltd/69c22f65bbcdf3b5f6f8dcbb`,
+    });
 
     const result = await sendMail(
       sender.email,

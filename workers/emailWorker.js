@@ -6,6 +6,7 @@ const SenderEmail = require("../models/SenderEmail");
 const User = require("../models/User");
 const Business = require("../models/Business");
 const { sendMail } = require("../utils/nodemailer");
+const { applyEmailPlaceholders, getBusinessPlaceholderData } = require("../utils/emailPlaceholders");
 
 const emailWorker = new Worker(
   "email-campaigns",
@@ -41,23 +42,21 @@ const emailWorker = new Worker(
       for (const user of users) {
 
 
-        // Find associated business name if exists for registered user
-        let bizName = "User";
         const associatedBiz = await Business.findOne({
           $or: [
             { "contact.email": user.email },
             { "contact.contactDetails.emails": user.email }
           ]
-        }).select("businessName");
-        
-        if (associatedBiz) {
-          bizName = associatedBiz.businessName;
-        }
+        })
+          .populate("category", "name")
+          .populate("subCategory", "name")
+          .select("businessName address website contact category subCategory");
 
-        const html = templateDoc.body
-          .replace(/{{full_name}}/g, user.full_name || "User")
-          .replace(/{{email}}/g, user.email)
-          .replace(/{{business_name}}/g, bizName);
+        const html = applyEmailPlaceholders(templateDoc.body, {
+          ...getBusinessPlaceholderData(associatedBiz),
+          full_name: user.full_name || "User",
+          email: user.email,
+        });
         
         const unsubscribeLink = `${process.env.FRONTEND_URL}/unsubscribe?userId=${user._id}&campaignId=${campaign._id}`;
         const result = await sendMail(fromEmail, user.email, templateDoc.subject, html, unsubscribeLink);
@@ -73,12 +72,29 @@ const emailWorker = new Worker(
       if (isRefTimeZone) {
         for (const item of campaign.recipients.customEmails || []) {
           const email = typeof item === 'string' ? item : item.email;
-          const bizName = typeof item === 'string' ? "User" : (item.businessName || "User");
+          const associatedBiz = await Business.findOne({
+            $or: [
+              { "contact.email": email },
+              { "contact.contactDetails.emails": email },
+            ],
+          })
+            .populate("category", "name")
+            .populate("subCategory", "name")
+            .select("businessName address website contact category subCategory");
+          const businessData = getBusinessPlaceholderData(associatedBiz);
 
-          const html = templateDoc.body
-            .replace(/{{full_name}}/g, "User")
-            .replace(/{{email}}/g, email)
-            .replace(/{{business_name}}/g, bizName);
+          const html = applyEmailPlaceholders(templateDoc.body, {
+            full_name: "User",
+            email,
+            business_name: typeof item === 'string' ? businessData.business_name : (item.businessName || businessData.business_name),
+            address: typeof item === 'string' ? businessData.address : (item.address || businessData.address),
+            website: typeof item === 'string' ? businessData.website : (item.website || businessData.website),
+            phone: typeof item === 'string' ? businessData.phone : (item.phone || businessData.phone),
+            category: typeof item === 'string' ? businessData.category : (item.category || businessData.category),
+            subcategory: typeof item === 'string' ? businessData.subcategory : (item.subcategory || businessData.subcategory),
+            country: typeof item === 'string' ? businessData.country : (item.country || businessData.country),
+            listing_url: typeof item === 'string' ? businessData.listing_url : (item.listingUrl || item.listing_url || businessData.listing_url),
+          });
           
           const unsubscribeLink = `${process.env.FRONTEND_URL}/unsubscribe?email=${encodeURIComponent(email)}&campaignId=${campaign._id}`;
           const result = await sendMail(fromEmail, email, templateDoc.subject, html, unsubscribeLink);

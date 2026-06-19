@@ -16,6 +16,13 @@ const emailCampaignSchema = new mongoose.Schema({
       {
         email: { type: String, required: true },
         businessName: { type: String },
+        address: { type: String },
+        website: { type: String },
+        phone: { type: String },
+        category: { type: String },
+        subcategory: { type: String },
+        country: { type: String },
+        listingUrl: { type: String },
       },
     ],
   },
