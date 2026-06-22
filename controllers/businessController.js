@@ -34,7 +34,11 @@ const normalizeCountry = (c) => {
     "CANADA": "Canada",
     "INDIA": "India"
   };
-  return map[upper] || trimmed;
+  const mappedCountry = map[upper] || trimmed;
+  const standardName = VALID_COUNTRIES.find(
+    (country) => country.toLowerCase() === mappedCountry.toLowerCase()
+  );
+  return standardName || mappedCountry;
 };
 
 ///this api use combine for admin and users
@@ -250,6 +254,8 @@ exports.importBusinessFromCSV = async (req, res) => {
   const errors = [];
   const warnings = [];
   const importKeys = new Set();
+  const affectedCountries = new Set();
+  const selectedCountry = req.body?.country ? normalizeCountry(req.body.country) : "";
 
   console.log(`[BulkImport] Starting import: file=${req.file.originalname}, ext=${fileExt}, size=${req.file.size}`);
   // Validate file type
@@ -387,7 +393,7 @@ exports.importBusinessFromCSV = async (req, res) => {
       city = reader.get("City") || "Unknown City";
       state = reader.get("State", "Province") || "Unknown State";
       pincode = reader.get("Postal Code", "Pincode", "Zip Code", "ZIP") || "000000";
-      country = normalizeCountry(reader.get("Country") || "Unknown Country");
+      country = normalizeCountry(reader.get("Country") || selectedCountry || "Unknown Country");
     } else {
       // Layout A: semicolon-delimited combined address string
       const rawAddress = reader.get("Address", "Street Address");
@@ -397,16 +403,26 @@ exports.importBusinessFromCSV = async (req, res) => {
       const parts = rawAddress.split(";").map((p) => p.trim());
       const len = parts.length;
       streetName = parts[0] || "";
-      country = normalizeCountry(rowCountry || parts[5] || "Unknown Country");
+      country = normalizeCountry(rowCountry || parts[5] || selectedCountry || "Unknown Country");
 
       if (len >= 5) {
         area    = parts[1]; city  = parts[2]; state = parts[3]; pincode = parts[4];
       } else if (len === 4) {
         city    = parts[1]; state = parts[2];
-        country = normalizeCountry(rowCountry || parts[3] || country);
+        if (rowCountry || selectedCountry) {
+          pincode = parts[3] || pincode;
+          country = normalizeCountry(rowCountry || selectedCountry);
+        } else {
+          country = normalizeCountry(parts[3] || country);
+        }
       } else if (len === 3) {
-        city    = parts[0]; state = parts[1];
-        country = normalizeCountry(rowCountry || parts[2] || country);
+        if (rowCountry || selectedCountry) {
+          city = parts[1] || parts[0]; state = parts[2] || state;
+          country = normalizeCountry(rowCountry || selectedCountry);
+        } else {
+          city = parts[0]; state = parts[1];
+          country = normalizeCountry(parts[2] || country);
+        }
       }
     }
 
@@ -434,6 +450,7 @@ exports.importBusinessFromCSV = async (req, res) => {
   const processChunk = async (chunk) => {
     const bulkOps = [];
     const bulkOpTypes = [];
+    const bulkOpCountries = [];
     const geocodingCandidates = [];
 
     // 1. Normalize rows
@@ -549,6 +566,7 @@ exports.importBusinessFromCSV = async (req, res) => {
 
           bulkOps.push({ updateOne: { filter: { _id: existing._id }, update } });
           bulkOpTypes.push("update");
+          bulkOpCountries.push(row.address.country);
           if (row.needsGeocoding) geocodingCandidates.push(existing._id);
         } else {
           const businessId = new mongoose.Types.ObjectId();
@@ -584,6 +602,7 @@ exports.importBusinessFromCSV = async (req, res) => {
             },
           });
           bulkOpTypes.push("insert");
+          bulkOpCountries.push(row.address.country);
           if (row.needsGeocoding) geocodingCandidates.push(businessId);
         }
       } catch (err) {
@@ -598,6 +617,7 @@ exports.importBusinessFromCSV = async (req, res) => {
       let insertedCount = 0;
       let matchedCount = 0;
       let modifiedCount = 0;
+      let successfulOperationIndexes = [];
 
       const readResultCount = (result, key, legacyKey) => Number(
         result?.[key] ??
@@ -611,6 +631,7 @@ exports.importBusinessFromCSV = async (req, res) => {
         insertedCount = readResultCount(bulkResult, "insertedCount", "nInserted");
         matchedCount = readResultCount(bulkResult, "matchedCount", "nMatched");
         modifiedCount = readResultCount(bulkResult, "modifiedCount", "nModified");
+        successfulOperationIndexes = bulkOps.map((_, index) => index);
       } catch (err) {
         errors.push(`Bulk write error: ${err.message}`);
         const partialResult = err.result || err;
@@ -619,6 +640,12 @@ exports.importBusinessFromCSV = async (req, res) => {
         modifiedCount = readResultCount(partialResult, "modifiedCount", "nModified");
 
         const writeErrors = err.writeErrors || [];
+        const failedOperationIndexes = new Set(writeErrors.map((writeError) => writeError.index));
+        if (writeErrors.length > 0) {
+          successfulOperationIndexes = bulkOps
+            .map((_, index) => index)
+            .filter((index) => !failedOperationIndexes.has(index));
+        }
         writeErrors.slice(0, 10).forEach((writeError) => {
           const index = writeError.index;
           const name = bulkOps[index]?.insertOne?.document?.businessName || `operation ${index + 1}`;
@@ -631,6 +658,10 @@ exports.importBusinessFromCSV = async (req, res) => {
       unchanged += Math.max(0, matchedCount - modifiedCount);
       skipped += Math.max(0, plannedInserts - insertedCount);
       skipped += Math.max(0, plannedUpdates - matchedCount);
+      successfulOperationIndexes.forEach((index) => {
+        const affectedCountry = bulkOpCountries[index];
+        if (affectedCountry) affectedCountries.add(normalizeCountry(affectedCountry));
+      });
 
       if (geocodingCandidates.length > 0) {
         try {
@@ -661,6 +692,7 @@ exports.importBusinessFromCSV = async (req, res) => {
         updated,
         unchanged,
         skipped,
+        affectedCountries: Array.from(affectedCountries).sort(),
         errors: errors.length > 20 ? errors.slice(0, 20).concat([`... and ${errors.length - 20} more`]) : errors,
         warnings: warnings.length > 20 ? warnings.slice(0, 20).concat([`... and ${warnings.length - 20} more`]) : warnings,
       });
@@ -1025,6 +1057,7 @@ exports.getBusiness = async (req, res) => {
       .select(
         "businessName address contact businessTiming verified trust claimed isBlocked subscriptionActive _id rating totalReviews businessLogo photos"
       )
+      .sort({ updatedAt: -1, _id: -1 })
       .skip(skip)
       .limit(limitNum)
       .lean();

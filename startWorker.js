@@ -1,61 +1,99 @@
-require('dotenv').config();
-const mongoose = require('mongoose');
-const emailWorker = require('./workers/emailWorker');
-const welcomeWorker = require('./workers/welcomeWorker');
-const purchaseWorker = require('./workers/purchaseWorker');
-const claimWorker = require('./workers/claimWorker');
-const kycWorker = require('./workers/kycWorker');
-const geocodingWorker = require('./workers/geocodingWorker');
-const enquiryWorker = require('./workers/enquiryWorker');
-const bookingWorker = require('./workers/bookingWorker');
+"use strict";
 
-async function startWorker() {
-  try {
-    await mongoose.connect(process.env.MONGO_URI, {
-      useNewUrlParser: true,
-      useUnifiedTopology: true,
-    });
-    console.log('Connected to MongoDB');
+require("dotenv").config();
 
-    // Initialize the workers (BullMQ starts processing jobs automatically)
-    console.log('Email workers started: email-campaigns, welcome-email, purchase-email, claim-email, kyc-email, geocoding-batch, enquiry-email, booking-email');
+const logger = require("./utils/logger");
+logger.installConsoleBridge();
 
+const connectDB = require("./config/db");
+const { disconnectDB } = require("./config/db");
+const { closeQueueConnections } = require("./utils/queue");
+const { installProcessHandlers } = require("./utils/processHandlers");
+const { ResourceMonitor } = require("./utils/resourceMonitor");
+const emailWorker = require("./workers/emailWorker");
+const welcomeWorker = require("./workers/welcomeWorker");
+const purchaseWorker = require("./workers/purchaseWorker");
+const claimWorker = require("./workers/claimWorker");
+const kycWorker = require("./workers/kycWorker");
+const geocodingWorker = require("./workers/geocodingWorker");
+const enquiryWorker = require("./workers/enquiryWorker");
+const bookingWorker = require("./workers/bookingWorker");
 
+const workers = [
+  emailWorker,
+  welcomeWorker,
+  purchaseWorker,
+  claimWorker,
+  kycWorker,
+  geocodingWorker,
+  enquiryWorker,
+  bookingWorker,
+];
+const workerNames = [
+  "email-campaigns",
+  "welcome-email",
+  "purchase-email",
+  "claim-email",
+  "kyc-email",
+  "geocoding-batch",
+  "enquiry-email",
+  "booking-email",
+];
 
-    // Keep the process alive to handle BullMQ jobs
-    process.on('SIGINT', async () => {
-      console.log('Shutting down email workers...');
-      await emailWorker.close();
-      await welcomeWorker.close();
-      await purchaseWorker.close();
-      await claimWorker.close();
-      await kycWorker.close();
-      await geocodingWorker.close();
-      await enquiryWorker.close();
-      await bookingWorker.close();
-      await mongoose.connection.close();
-      console.log('Workers and MongoDB connection closed');
-      process.exit(0);
-    });
+let resourceMonitor;
+let shutdownPromise;
 
-    process.on('SIGTERM', async () => {
-      console.log('Shutting down email workers...');
-      await emailWorker.close();
-      await welcomeWorker.close();
-      await purchaseWorker.close();
-      await claimWorker.close();
-      await kycWorker.close();
-      await geocodingWorker.close();
-      await enquiryWorker.close();
-      await bookingWorker.close();
-      await mongoose.connection.close();
-      console.log('Workers and MongoDB connection closed');
-      process.exit(0);
-    });
-  } catch (error) {
-    console.error('Error starting worker:', error);
-    process.exit(1);
-  }
+async function startWorkers() {
+  logger.info("workers.starting", "Queue worker startup initiated", { workerNames });
+  await connectDB();
+  resourceMonitor = new ResourceMonitor({ logger });
+  resourceMonitor.start();
+  logger.info("workers.ready", "Queue workers are ready", { workerNames });
+  if (typeof process.send === "function") process.send("ready");
 }
 
-startWorker();
+async function shutdown(reason, { crash = false } = {}) {
+  if (shutdownPromise) return shutdownPromise;
+  shutdownPromise = (async () => {
+    logger.info("workers.shutdown_started", "Graceful queue worker shutdown started", {
+      reason,
+      crash,
+    });
+    resourceMonitor?.stop();
+
+    const workerResults = await Promise.allSettled(workers.map((worker) => worker.close()));
+    const workerFailures = workerResults.filter((result) => result.status === "rejected");
+    if (workerFailures.length) {
+      logger.error("workers.shutdown_partial", "Some queue workers did not close cleanly", {
+        errors: workerFailures.map((failure) => failure.reason),
+      });
+    }
+
+    const dependencyResults = await Promise.allSettled([
+      closeQueueConnections(),
+      disconnectDB(),
+    ]);
+    const dependencyFailures = dependencyResults.filter((result) => result.status === "rejected");
+    if (dependencyFailures.length) {
+      logger.error("workers.dependency_shutdown_failed", "Worker dependencies did not close cleanly", {
+        errors: dependencyFailures.map((failure) => failure.reason),
+      });
+    }
+    logger.info("workers.shutdown_complete", "Queue workers shut down cleanly", { reason });
+  })();
+  return shutdownPromise;
+}
+
+if (require.main === module) {
+  installProcessHandlers({ logger, shutdown });
+  startWorkers().catch(async (error) => {
+    logger.fatal("workers.startup_failed", "Queue workers failed during startup", { error });
+    try {
+      await shutdown("startupFailure", { crash: true });
+    } finally {
+      process.exit(1);
+    }
+  });
+}
+
+module.exports = { shutdown, startWorkers };

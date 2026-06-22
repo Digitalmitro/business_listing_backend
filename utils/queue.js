@@ -1,6 +1,7 @@
 // backend/utils/queue.js
 const { Queue } = require('bullmq');
 const Redis = require('ioredis');
+const logger = require('./logger');
 
 const redisConnection = new Redis({
   host: process.env.REDIS_HOST || 'localhost',
@@ -9,9 +10,21 @@ const redisConnection = new Redis({
   maxRetriesPerRequest: null, // Required for BullMQ
 });
 
-redisConnection.on('connect', () => console.log('Redis connected successfully'));
-redisConnection.on('error', (err) => console.error('Redis connection error:', err));
-redisConnection.on('ready', () => console.log('Redis is ready to accept commands'));
+redisConnection.on('connect', () => {
+  logger.info('redis.connected', 'Redis connection established');
+});
+redisConnection.on('error', (error) => {
+  logger.error('redis.connection_error', 'Redis connection emitted an error', { error });
+});
+redisConnection.on('ready', () => {
+  logger.info('redis.ready', 'Redis is ready to accept commands');
+});
+redisConnection.on('reconnecting', (delayMs) => {
+  logger.warn('redis.reconnecting', 'Redis is reconnecting', { delayMs });
+});
+redisConnection.on('end', () => {
+  logger.warn('redis.disconnected', 'Redis connection closed');
+});
 
 const emailQueue = new Queue('email-campaigns', {
   connection: redisConnection,
@@ -107,12 +120,47 @@ async function addJob(queueName, jobData, options = {}) {
       removeOnComplete: { count: 100 }, // Keep last 100 for debugging
       removeOnFail: { count: 500 },     // Keep last 500 fails
     });
-    console.log(`Job ${job.id} added to queue ${queueName}`);
+    logger.info('queue.job_added', 'Job added to BullMQ queue', {
+      queue: queueName,
+      jobId: job.id,
+    });
     return job;
   } catch (error) {
-    console.error(`Error adding job to queue ${queueName}:`, error);
+    logger.error('queue.add_failed', 'Failed to add job to BullMQ queue', {
+      queue: queueName,
+      error,
+    });
     throw error;
   }
 }
 
-module.exports = { emailQueue, welcomeQueue, purchaseQueue, claimQueue, kycQueue, geocodingQueue, enquiryQueue, bookingQueue, redisConnection, addJob };
+async function closeQueueConnections() {
+  logger.info('queue.shutdown_started', 'Closing BullMQ queues and Redis connection');
+  const results = await Promise.allSettled(Object.values(queues).map((queue) => queue.close()));
+  const failures = results.filter((result) => result.status === 'rejected');
+
+  if (redisConnection.status !== 'end') await redisConnection.quit();
+
+  if (failures.length) {
+    logger.error('queue.shutdown_partial', 'Some BullMQ queues did not close cleanly', {
+      failureCount: failures.length,
+      errors: failures.map((failure) => failure.reason),
+    });
+  } else {
+    logger.info('queue.shutdown_complete', 'BullMQ queues and Redis connection closed');
+  }
+}
+
+module.exports = {
+  emailQueue,
+  welcomeQueue,
+  purchaseQueue,
+  claimQueue,
+  kycQueue,
+  geocodingQueue,
+  enquiryQueue,
+  bookingQueue,
+  redisConnection,
+  addJob,
+  closeQueueConnections,
+};
