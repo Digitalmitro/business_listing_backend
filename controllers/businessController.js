@@ -15,9 +15,38 @@ const fs = require("fs");
 const { addJob } = require("../utils/queue");
 const { notifyAdmins } = require("../helpers/notificationHelper");
 
+const VALID_COUNTRIES = [
+  "Afghanistan", "Albania", "Algeria", "Andorra", "Angola", "Antigua and Barbuda", "Argentina", "Armenia", "Australia", "Austria", "Azerbaijan",
+  "Bahamas", "Bahrain", "Bangladesh", "Barbados", "Belarus", "Belgium", "Belize", "Benin", "Bhutan", "Bolivia", "Bosnia and Herzegovina", "Botswana", "Brazil", "Brunei", "Bulgaria", "Burkina Faso", "Burundi",
+  "Cabo Verde", "Cambodia", "Cameroon", "Canada", "Central African Republic", "Chad", "Chile", "China", "Colombia", "Comoros", "Congo", "Costa Rica", "Croatia", "Cuba", "Cyprus", "Czech Republic",
+  "Denmark", "Djibouti", "Dominica", "Dominican Republic",
+  "Ecuador", "Egypt", "El Salvador", "Equatorial Guinea", "Eritrea", "Estonia", "Eswatini", "Ethiopia",
+  "Fiji", "Finland", "France",
+  "Gabon", "Gambia", "Georgia", "Germany", "Ghana", "Greece", "Grenada", "Guatemala", "Guinea", "Guinea-Bissau", "Guyana",
+  "Haiti", "Honduras", "Hungary",
+  "Iceland", "India", "Indonesia", "Iran", "Iraq", "Ireland", "Israel", "Italy", "Ivory Coast",
+  "Jamaica", "Japan", "Jordan",
+  "Kazakhstan", "Kenya", "Kiribati", "Kuwait", "Kyrgyzstan",
+  "Laos", "Latvia", "Lebanon", "Lesotho", "Liberia", "Libya", "Liechtenstein", "Lithuania", "Luxembourg",
+  "Madagascar", "Malawi", "Malaysia", "Maldives", "Mali", "Malta", "Marshall Islands", "Mauritania", "Mauritius", "Mexico", "Micronesia", "Moldova", "Monaco", "Mongolia", "Montenegro", "Morocco", "Mozambique", "Myanmar",
+  "Namibia", "Nauru", "Nepal", "Netherlands", "New Zealand", "Nicaragua", "Niger", "Nigeria", "North Korea", "North Macedonia", "Norway",
+  "Oman",
+  "Pakistan", "Palau", "Palestine", "Panama", "Papua New Guinea", "Paraguay", "Peru", "Philippines", "Poland", "Portugal",
+  "Qatar",
+  "Romania", "Russia", "Rwanda",
+  "Saint Kitts and Nevis", "Saint Lucia", "Saint Vincent and the Grenadines", "Samoa", "San Marino", "Sao Tome and Principe", "Saudi Arabia", "Senegal", "Serbia", "Seychelles", "Sierra Leone", "Singapore", "Slovakia", "Slovenia", "Solomon Islands", "Somalia", "South Africa", "South Korea", "South Sudan", "Spain", "Sri Lanka", "Sudan", "Suriname", "Sweden", "Switzerland", "Syria",
+  "Taiwan", "Tajikistan", "Tanzania", "Thailand", "Timor-Leste", "Togo", "Tonga", "Trinidad and Tobago", "Tunisia", "Turkey", "Turkmenistan", "Tuvalu",
+  "Uganda", "Ukraine", "United Arab Emirates", "United Kingdom", "United States", "Uruguay", "Uzbekistan",
+  "Vanuatu", "Vatican City", "Venezuela", "Vietnam",
+  "Yemen",
+  "Zambia", "Zimbabwe"
+];
+
+const VALID_COUNTRIES_MAP = new Map(VALID_COUNTRIES.map(c => [c.toLowerCase(), c]));
+
 // Helper to normalize country names
 const normalizeCountry = (c) => {
-  if (!c) return "Unknown Country";
+  if (!c || typeof c !== "string") return "Unknown Country";
   const trimmed = c.trim();
   const upper = trimmed.toUpperCase();
   const map = {
@@ -25,19 +54,12 @@ const normalizeCountry = (c) => {
     "US": "United States",
     "UNITED STATES": "United States",
     "UK": "United Kingdom",
-    "U.K.": "United Kingdom",
-    "UNITED KINGDOM": "United Kingdom",
     "UAE": "United Arab Emirates",
-    "AU": "Australia",
-    "AUSTRALIA": "Australia",
-    "CA": "Canada",
     "CANADA": "Canada",
     "INDIA": "India"
   };
   const mappedCountry = map[upper] || trimmed;
-  const standardName = VALID_COUNTRIES.find(
-    (country) => country.toLowerCase() === mappedCountry.toLowerCase()
-  );
+  const standardName = VALID_COUNTRIES_MAP.get(mappedCountry.toLowerCase());
   return standardName || mappedCountry;
 };
 
@@ -129,9 +151,7 @@ exports.createBusiness = async (req, res) => {
       ? [req.files.photos]
       : [];
 
-    console.log("Received files:", req.files);
-    console.log("Processed photos:", photos);
-    console.log("Category:", validCategories);
+    // Removed console.logs from hot path
     console.log("SubCategory:", validSubCategories);
 
     // Initialize and validate contact object
@@ -1050,7 +1070,7 @@ exports.getBusiness = async (req, res) => {
     if (trust !== undefined) query.trust = trust === "true";
     if (claimed !== undefined) query.claimed = claimed === "true";
 
-    console.log("Final Query:", query);
+    // Removed console.log from hot path
 
     // Fetch businesses
     const businesses = await Business.find(query)
@@ -1184,24 +1204,18 @@ exports.getBusinessById = async (req, res) => {
       (sum, { weight, check }) => sum + (check ? weight : 0),
       0
     );
+    // Final calculation - do NOT write back to DB on every GET request
     const profileCompletionScore = Math.round(
       (completedWeight / totalWeight) * 100
     );
 
-    // Update business document
-    const updatedBusiness = await Business.findByIdAndUpdate(
-      id,
-      {
-        $set: {
-          profileCompletionScore,
-          enquiryCount,
-          offerCount: offersWithService.length, // ← NEW: Save count in business
-        },
-      },
-      { new: true, runValidators: true }
-    )
-      .populate("category")
-      .populate("subCategory");
+    // Provide the expected shape to the frontend without the DB write storm
+    const businessDataForClient = {
+      ...business.toObject({ flattenMaps: true }),
+      profileCompletionScore,
+      enquiryCount,
+      offerCount: offersWithService.length,
+    };
 
     // Pending actions
     const pendingActions = Object.entries(criteria)
@@ -1230,8 +1244,7 @@ exports.getBusinessById = async (req, res) => {
       success: true,
       message: "Business fetched successfully",
       business: {
-        ...updatedBusiness.toObject({ flattenMaps: true }),
-        offerCount: offersWithService.length,
+        ...businessDataForClient,
         offers: offersWithService, // ← Full offer details for frontend
       },
       enquiryCount,
@@ -2376,15 +2389,21 @@ exports.getAllBusiness = async (req, res) => {
       { $unset: "subCategoryDetails" },
     ];
 
-    const businesses = await Business.aggregate(pipeline);
+    // Total Count Pipeline combined with results using $facet for better performance
+    const facetPipeline = pipeline.filter(
+      (stage) => !["$skip", "$limit"].includes(Object.keys(stage)[0])
+    );
 
-    // Total Count Pipeline
-    const countPipeline = pipeline
-      .filter((stage) => !["$skip", "$limit"].includes(Object.keys(stage)[0]))
-      .concat([{ $count: "total" }]);
+    facetPipeline.push({
+      $facet: {
+        data: [{ $skip: skip }, { $limit: Number(limit) }],
+        totalCount: [{ $count: "total" }],
+      },
+    });
 
-    const totalResult = await Business.aggregate(countPipeline);
-    const total = totalResult[0]?.total || 0;
+    const [facetResult] = await Business.aggregate(facetPipeline);
+    const businesses = facetResult?.data || [];
+    const total = facetResult?.totalCount?.[0]?.total || 0;
 
     return res.status(200).json({
       success: true,
@@ -2406,32 +2425,7 @@ exports.getAllBusiness = async (req, res) => {
   }
 };
 
-const VALID_COUNTRIES = [
-  "Afghanistan", "Albania", "Algeria", "Andorra", "Angola", "Antigua and Barbuda", "Argentina", "Armenia", "Australia", "Austria", "Azerbaijan",
-  "Bahamas", "Bahrain", "Bangladesh", "Barbados", "Belarus", "Belgium", "Belize", "Benin", "Bhutan", "Bolivia", "Bosnia and Herzegovina", "Botswana", "Brazil", "Brunei", "Bulgaria", "Burkina Faso", "Burundi",
-  "Cabo Verde", "Cambodia", "Cameroon", "Canada", "Central African Republic", "Chad", "Chile", "China", "Colombia", "Comoros", "Congo", "Costa Rica", "Croatia", "Cuba", "Cyprus", "Czech Republic",
-  "Denmark", "Djibouti", "Dominica", "Dominican Republic",
-  "Ecuador", "Egypt", "El Salvador", "Equatorial Guinea", "Eritrea", "Estonia", "Eswatini", "Ethiopia",
-  "Fiji", "Finland", "France",
-  "Gabon", "Gambia", "Georgia", "Germany", "Ghana", "Greece", "Grenada", "Guatemala", "Guinea", "Guinea-Bissau", "Guyana",
-  "Haiti", "Honduras", "Hungary",
-  "Iceland", "India", "Indonesia", "Iran", "Iraq", "Ireland", "Israel", "Italy", "Ivory Coast",
-  "Jamaica", "Japan", "Jordan",
-  "Kazakhstan", "Kenya", "Kiribati", "Kuwait", "Kyrgyzstan",
-  "Laos", "Latvia", "Lebanon", "Lesotho", "Liberia", "Libya", "Liechtenstein", "Lithuania", "Luxembourg",
-  "Madagascar", "Malawi", "Malaysia", "Maldives", "Mali", "Malta", "Marshall Islands", "Mauritania", "Mauritius", "Mexico", "Micronesia", "Moldova", "Monaco", "Mongolia", "Montenegro", "Morocco", "Mozambique", "Myanmar",
-  "Namibia", "Nauru", "Nepal", "Netherlands", "New Zealand", "Nicaragua", "Niger", "Nigeria", "North Korea", "North Macedonia", "Norway",
-  "Oman",
-  "Pakistan", "Palau", "Palestine", "Panama", "Papua New Guinea", "Paraguay", "Peru", "Philippines", "Poland", "Portugal",
-  "Qatar",
-  "Romania", "Russia", "Rwanda",
-  "Saint Kitts and Nevis", "Saint Lucia", "Saint Vincent and the Grenadines", "Samoa", "San Marino", "Sao Tome and Principe", "Saudi Arabia", "Senegal", "Serbia", "Seychelles", "Sierra Leone", "Singapore", "Slovakia", "Slovenia", "Solomon Islands", "Somalia", "South Africa", "South Korea", "South Sudan", "Spain", "Sri Lanka", "Sudan", "Suriname", "Sweden", "Switzerland", "Syria",
-  "Taiwan", "Tajikistan", "Tanzania", "Thailand", "Timor-Leste", "Togo", "Tonga", "Trinidad and Tobago", "Tunisia", "Turkey", "Turkmenistan", "Tuvalu",
-  "Uganda", "Ukraine", "United Arab Emirates", "United Kingdom", "United States", "Uruguay", "Uzbekistan",
-  "Vanuatu", "Vatican City", "Venezuela", "Vietnam",
-  "Yemen",
-  "Zambia", "Zimbabwe"
-];
+// VALID_COUNTRIES moved to top for optimization
 
 exports.getDistinctCountries = async (req, res) => {
   try {

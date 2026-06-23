@@ -28,22 +28,25 @@ const common = {
 module.exports = {
   apps: [
     {
-      ...common,
       name: "business-listing-api",
       script: "./server.js",
+      instances: 1,
       exec_mode: "cluster",
-      instances: Number(process.env.WEB_CONCURRENCY || 2),
-      instance_var: "NODE_APP_INSTANCE",
-      wait_ready: true,
-      max_memory_restart: process.env.API_MAX_MEMORY || "1G",
-      out_file: path.join(logDirectory, "api-out.log"),
-      error_file: path.join(logDirectory, "api-error.log"),
+      watch: false,
+      max_memory_restart: "1500M",
+      env: {
+        NODE_ENV: "development",
+      },
       env_production: {
         NODE_ENV: "production",
         SERVICE_NAME: "business-listing-api",
         LOG_FORMAT: "json",
         LOG_LEVEL: "info",
       },
+      wait_ready: true,
+      instance_var: "NODE_APP_INSTANCE",
+      out_file: path.join(logDirectory, "api-out.log"),
+      error_file: path.join(logDirectory, "api-error.log"),
     },
     {
       ...common,

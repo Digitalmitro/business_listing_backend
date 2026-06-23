@@ -86,6 +86,7 @@ async function connectDB() {
     await mongoose.connect(uri, {
       serverSelectionTimeoutMS: Number(process.env.MONGO_SERVER_SELECTION_TIMEOUT_MS || 10_000),
       monitorCommands: process.env.MONGO_COMMAND_MONITORING !== "false",
+      autoIndex: false, // Prevents duplicate key errors from spamming the logs on startup
     });
     installDriverListeners(mongoose.connection.getClient());
     logger.info("database.connection_ready", "MongoDB is ready for application traffic", {

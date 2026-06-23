@@ -745,93 +745,23 @@ const sendCampaign = async (req, res) => {
     }
 
     try {
-      // Send to registered users
-      for (const user of campaign.recipients.users || []) {
-        const fullUser = await User.findById(user);
-        if (!fullUser || !fullUser.subscribedToEmails) continue;
+      // Instead of processing emails inline (which hangs the request for up to an hour),
+      // we queue the campaign to be processed by the background worker.
+      const { addJob } = require("../utils/queue");
 
-        // Look up associated business for CSV-field placeholders
-        const associatedBiz = await Business.findOne({
-          $or: [
-            { "contact.email": fullUser.email },
-            { "contact.contactDetails.emails": fullUser.email }
-          ]
-        })
-          .populate("category", "name")
-          .populate("subCategory", "name")
-          .select("businessName address website contact category subCategory");
+      await addJob("email-campaigns", {
+        campaignId: campaign._id,
+      });
 
-        const data = {
-          ...getBusinessPlaceholderData(associatedBiz),
-          full_name:     fullUser.full_name || "User",
-          email:         fullUser.email,
-        };
-
-        const html = applyEmailPlaceholders(campaign.template.body, data);
-
-        const unsubscribeLink = `${process.env.FRONTEND_URL}/unsubscribe?userId=${fullUser._id}&campaignId=${campaign._id}`;
-        
-        const result = await sendMail(
-          campaign.fromEmail,
-          fullUser.email,
-          campaign.template.subject,
-          html,
-          unsubscribeLink
-        );
-        if (!result.success) throw result.error;
-      }
-
-      // Send to custom emails
-      // Custom email items may carry CSV-field values if they were imported via the business CSV flow
-      for (const item of campaign.recipients.customEmails || []) {
-        const email = typeof item === 'string' ? item : item.email;
-        const associatedBiz = await Business.findOne({
-          $or: [
-            { "contact.email": email },
-            { "contact.contactDetails.emails": email },
-          ],
-        })
-          .populate("category", "name")
-          .populate("subCategory", "name")
-          .select("businessName address website contact category subCategory");
-        const businessData = getBusinessPlaceholderData(associatedBiz);
-        const data = {
-          full_name:     typeof item === 'string' ? "User" : (item.full_name     || "User"),
-          email,
-          business_name: typeof item === 'string' ? businessData.business_name : (item.businessName || item.business_name || businessData.business_name),
-          address:       typeof item === 'string' ? businessData.address       : (item.address       || businessData.address),
-          website:       typeof item === 'string' ? businessData.website       : (item.website       || businessData.website),
-          phone:         typeof item === 'string' ? businessData.phone         : (item.phone         || businessData.phone),
-          category:      typeof item === 'string' ? businessData.category      : (item.category      || businessData.category),
-          subcategory:   typeof item === 'string' ? businessData.subcategory   : (item.subcategory   || businessData.subcategory),
-          country:       typeof item === 'string' ? businessData.country       : (item.country       || businessData.country),
-          listing_url:   typeof item === 'string' ? businessData.listing_url   : (item.listingUrl || item.listing_url || businessData.listing_url),
-        };
-
-        const html = applyEmailPlaceholders(campaign.template.body, data);
-
-        const unsubscribeLink = `${process.env.FRONTEND_URL}/unsubscribe?email=${encodeURIComponent(email)}&campaignId=${campaign._id}`;
-        
-        const result = await sendMail(
-          campaign.fromEmail,
-          email,
-          campaign.template.subject,
-          html,
-          unsubscribeLink
-        );
-        if (!result.success) throw result.error;
-      }
-
-      campaign.status = "sent";
-      campaign.sentAt = new Date();
+      campaign.status = "processing";
       await campaign.save();
-      res.status(200).json({ message: "Campaign sent successfully" });
+      res.status(200).json({ message: "Campaign queued for sending successfully" });
     } catch (emailError) {
       campaign.status = "failed";
       await campaign.save();
       res
         .status(500)
-        .json({ message: "Error sending emails", error: emailError.message });
+        .json({ message: "Error queueing campaign", error: emailError.message });
     }
   } catch (error) {
     res

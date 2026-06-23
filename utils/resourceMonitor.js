@@ -44,7 +44,7 @@ class ResourceMonitor {
     this.intervalMs = readPositiveNumber(env, "RESOURCE_LOG_INTERVAL_MS", 60_000, 5_000);
     this.memoryWarningMb = readPositiveNumber(env, "MEMORY_WARNING_MB", 768, 1);
     this.heapWarningPercent = readPositiveNumber(env, "HEAP_WARNING_PERCENT", 85, 1);
-    this.eventLoopWarningMs = readPositiveNumber(env, "EVENT_LOOP_WARNING_MS", 200, 1);
+    this.eventLoopWarningMs = readPositiveNumber(env, "EVENT_LOOP_WARNING_MS", 1000, 1);
     this.coreCount = Math.max(1, os.cpus().length);
     this.histogram = monitorEventLoopDelay({ resolution: 20 });
     this.previousCpu = process.cpuUsage();

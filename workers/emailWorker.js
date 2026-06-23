@@ -35,23 +35,54 @@ const emailWorker = new Worker(
         throw new Error("Template not found");
       }
 
-      // Send emails to registered users
+      // Step 1: Gather all emails we might need to lookup
+      const allEmails = new Set();
+      const users = userIds?.length ? await User.find({ _id: { $in: userIds } }) : [];
+      users.forEach(u => { if (u.email) allEmails.add(u.email); });
+      
+      const customEmailItems = isRefTimeZone && campaign.recipients.customEmails ? campaign.recipients.customEmails : [];
+      customEmailItems.forEach(item => {
+        const email = typeof item === 'string' ? item : item.email;
+        if (email) allEmails.add(email);
+      });
+
+      // Step 2: Batch fetch associated businesses once
+      const emailArray = Array.from(allEmails);
+      const businesses = await Business.find({
+        $or: [
+          { "contact.email": { $in: emailArray } },
+          { "contact.contactDetails.emails": { $in: emailArray } }
+        ]
+      })
+      .populate("category", "name")
+      .populate("subCategory", "name")
+      .select("businessName address website contact category subCategory")
+      .lean();
+
+      // Create a quick lookup map by email
+      const businessMap = new Map();
+      for (const biz of businesses) {
+        // Map top-level emails
+        if (biz.contact && Array.isArray(biz.contact.email)) {
+          for (const e of biz.contact.email) businessMap.set(e, biz);
+        }
+        // Map nested contact details emails
+        if (biz.contact && Array.isArray(biz.contact.contactDetails)) {
+          for (const cd of biz.contact.contactDetails) {
+            if (Array.isArray(cd.emails)) {
+              for (const e of cd.emails) businessMap.set(e, biz);
+            }
+          }
+        }
+      }
+
       let sentCount = 0;
-      const users = await User.find({ _id: { $in: userIds } });
 
+      // Send emails to registered users
       for (const user of users) {
-
-
-        const associatedBiz = await Business.findOne({
-          $or: [
-            { "contact.email": user.email },
-            { "contact.contactDetails.emails": user.email }
-          ]
-        })
-          .populate("category", "name")
-          .populate("subCategory", "name")
-          .select("businessName address website contact category subCategory");
-
+        if (!user.email) continue;
+        const associatedBiz = businessMap.get(user.email);
+        
         const html = applyEmailPlaceholders(templateDoc.body, {
           ...getBusinessPlaceholderData(associatedBiz),
           full_name: user.full_name || "User",
@@ -69,45 +100,36 @@ const emailWorker = new Worker(
       }
 
       // Send emails to customEmails
-      if (isRefTimeZone) {
-        for (const item of campaign.recipients.customEmails || []) {
-          const email = typeof item === 'string' ? item : item.email;
-          const associatedBiz = await Business.findOne({
-            $or: [
-              { "contact.email": email },
-              { "contact.contactDetails.emails": email },
-            ],
-          })
-            .populate("category", "name")
-            .populate("subCategory", "name")
-            .select("businessName address website contact category subCategory");
-          const businessData = getBusinessPlaceholderData(associatedBiz);
+      for (const item of customEmailItems) {
+        const email = typeof item === 'string' ? item : item.email;
+        if (!email) continue;
+        const associatedBiz = businessMap.get(email);
+        const businessData = getBusinessPlaceholderData(associatedBiz);
 
-          const html = applyEmailPlaceholders(templateDoc.body, {
-            full_name: "User",
-            email,
-            business_name: typeof item === 'string' ? businessData.business_name : (item.businessName || businessData.business_name),
-            address: typeof item === 'string' ? businessData.address : (item.address || businessData.address),
-            website: typeof item === 'string' ? businessData.website : (item.website || businessData.website),
-            phone: typeof item === 'string' ? businessData.phone : (item.phone || businessData.phone),
-            category: typeof item === 'string' ? businessData.category : (item.category || businessData.category),
-            subcategory: typeof item === 'string' ? businessData.subcategory : (item.subcategory || businessData.subcategory),
-            country: typeof item === 'string' ? businessData.country : (item.country || businessData.country),
-            listing_url: typeof item === 'string' ? businessData.listing_url : (item.listingUrl || item.listing_url || businessData.listing_url),
-          });
-          
-          const unsubscribeLink = `${process.env.FRONTEND_URL}/unsubscribe?email=${encodeURIComponent(email)}&campaignId=${campaign._id}`;
-          const result = await sendMail(fromEmail, email, templateDoc.subject, html, unsubscribeLink);
-          
-          if (result.success) sentCount++;
-        }
+        const html = applyEmailPlaceholders(templateDoc.body, {
+          full_name: "User",
+          email,
+          business_name: typeof item === 'string' ? businessData.business_name : (item.businessName || businessData.business_name),
+          address: typeof item === 'string' ? businessData.address : (item.address || businessData.address),
+          website: typeof item === 'string' ? businessData.website : (item.website || businessData.website),
+          phone: typeof item === 'string' ? businessData.phone : (item.phone || businessData.phone),
+          category: typeof item === 'string' ? businessData.category : (item.category || businessData.category),
+          subcategory: typeof item === 'string' ? businessData.subcategory : (item.subcategory || businessData.subcategory),
+          country: typeof item === 'string' ? businessData.country : (item.country || businessData.country),
+          listing_url: typeof item === 'string' ? businessData.listing_url : (item.listingUrl || item.listing_url || businessData.listing_url),
+        });
+        
+        const unsubscribeLink = `${process.env.FRONTEND_URL}/unsubscribe?email=${encodeURIComponent(email)}&campaignId=${campaign._id}`;
+        const result = await sendMail(fromEmail, email, templateDoc.subject, html, unsubscribeLink);
+        
+        if (result.success) sentCount++;
       }
 
       // Update campaign status
       if (sentCount > 0) {
         campaign.status = "sent";
         campaign.sentAt = new Date();
-      } else if (campaign.recipients.users.length + campaign.recipients.customEmails.length === 0) {
+      } else if ((campaign.recipients?.users?.length || 0) + (campaign.recipients?.customEmails?.length || 0) === 0) {
         campaign.status = "draft";
       } else {
         campaign.status = "failed";

@@ -155,27 +155,66 @@ function writeRestartState(stateFile, state) {
 
 function restartPm2Processes(config) {
   return new Promise((resolve, reject) => {
-    execFile(
+    const commandArgs = [
       config.pm2Command,
-      ["restart", "all"],
-      {
-        timeout: config.pm2TimeoutMs,
-        killSignal: "SIGTERM",
-        maxBuffer: 1024 * 1024,
-        windowsHide: true,
-      },
-      (error, stdout, stderr) => {
-        if (error) {
-          error.stdout = stdout;
-          error.stderr = stderr;
-          reject(error);
-          return;
-        }
-        resolve({ stdout, stderr });
+      "reload", // Use reload instead of restart for graceful restart
+      "business-listing-api", 
+      "--update-env"
+    ];
+    
+    const workerArgs = [
+      config.pm2Command,
+      "reload",
+      "business-listing-workers",
+      "--update-env"
+    ];
+
+    logger.warn("system.cpu_action", "Executing PM2 reload for API and workers", {
+      command: commandArgs.join(" "),
+    });
+
+    let apiSuccess = false;
+    let workerSuccess = false;
+    let errors = [];
+
+    const checkComplete = () => {
+      if (errors.length > 0) {
+        reject(new Error(errors.join("; ")));
+      } else if (apiSuccess && workerSuccess) {
+        resolve();
       }
-    );
+    };
+
+    execFile(commandArgs[0], commandArgs.slice(1), (error, stdout, stderr) => {
+      if (error) {
+        logger.error("system.cpu_action_failed", "Failed to reload API processes", { error, stderr });
+        errors.push("API reload failed");
+      } else {
+        logger.info("system.cpu_action_success", "PM2 API processes reloaded successfully", { stdout });
+        apiSuccess = true;
+      }
+      checkComplete();
+    });
+
+    execFile(workerArgs[0], workerArgs.slice(1), (error, stdout, stderr) => {
+      if (error) {
+        logger.error("system.cpu_action_failed", "Failed to reload worker processes", { error, stderr });
+        errors.push("Worker reload failed");
+      } else {
+        logger.info("system.cpu_action_success", "PM2 worker processes reloaded successfully", { stdout });
+        workerSuccess = true;
+      }
+      checkComplete();
+    });
   });
 }
+
+const defaultConfig = {
+  intervalMs: Number(process.env.CPU_MONITOR_INTERVAL_MS || 10_000),
+  cpuThreshold: Number(process.env.CPU_RESTART_THRESHOLD || 90), // Increased from 75 to 90
+  cooldownMs: Number(process.env.CPU_MONITOR_COOLDOWN_MS || 15 * 60_000),
+  pm2Command: process.env.PM2_COMMAND || "pm2",
+};
 
 function conciseOutput(value) {
   return value ? value.trim().slice(0, 2_000) : undefined;
@@ -335,25 +374,17 @@ class CpuMonitor {
 
     this.lastRestartAttemptAt = attemptedAt;
     this.restartInProgress = true;
-    this.logger.warn("pm2.restart_started", "Restarting all PM2 processes due to high CPU", {
+    this.logger.warn("pm2.restart_started", "Restarting API and worker PM2 processes due to high CPU", {
       cpuUsagePercent: Number(cpuUsage.toFixed(2)),
       thresholdPercent: this.config.restartThreshold,
-      command: `${this.config.pm2Command} restart all`,
     });
 
     try {
-      const result = await this.restartProcesses(this.config);
-      this.logger.info("pm2.restart_succeeded", "All PM2 processes restarted successfully", {
-        stdout: conciseOutput(result.stdout),
-        stderr: conciseOutput(result.stderr),
-      });
+      await this.restartProcesses(this.config);
+      this.logger.info("pm2.restart_succeeded", "All relevant PM2 processes reloaded successfully");
     } catch (error) {
-      this.logger.error("pm2.restart_failed", "Failed to restart all PM2 processes", {
+      this.logger.error("pm2.restart_failed", "Failed to reload PM2 processes", {
         error: error.message,
-        code: error.code,
-        signal: error.signal,
-        stdout: conciseOutput(error.stdout),
-        stderr: conciseOutput(error.stderr),
       });
     } finally {
       this.restartInProgress = false;
