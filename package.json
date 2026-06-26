@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
-    "test": "node --test scripts/*.test.js utils/*.test.js middlewares/*.test.js",
+    "test": "node --test scripts/*.test.js utils/*.test.js middlewares/*.test.js services/*.test.js",
     "test:cpu-monitor": "node --test scripts/cpuMonitor.test.js",
     "test:observability": "node --test utils/*.test.js middlewares/*.test.js",
     "start": "node server.js",

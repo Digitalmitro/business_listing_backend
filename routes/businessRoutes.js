@@ -17,7 +17,6 @@ const {
   updateSocialInfo,
   calculateProfileCompletionScore,
   updateBusinessStatus,
-  importBusinessFromCSV,
   downloadSampleCSV,
   downloadSampleExcel,
   searchBusinesses,
@@ -29,6 +28,11 @@ const {
   deleteOffer,
 } = require("../controllers/offerController");
 const { authMiddleware } = require("../middlewares/authMiddleware");
+const { businessImportUpload } = require("../config/businessImportUpload");
+const {
+  importBusinesses,
+  getBusinessImportBatch,
+} = require("../controllers/businessImportController");
 
 const router = express.Router();
 
@@ -103,9 +107,17 @@ router.post("/check-phone", checkPhoneExists);
 router.post(
   "/import-csv",
   authMiddleware,
-  upload.single("csvFile"),
-  importBusinessFromCSV
+  businessImportUpload,
+  importBusinesses
 );
+router.post(
+  "/import",
+  authMiddleware,
+  businessImportUpload,
+  importBusinesses
+);
+router.get("/import-batches/:batchId", authMiddleware, getBusinessImportBatch);
+router.get("/import-batches/:batchId/rows", authMiddleware, getBusinessImportBatch);
 
 router.post("/sync-geocoding", authMiddleware, async (req, res) => {
   try {

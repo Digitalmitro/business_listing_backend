@@ -27,6 +27,34 @@ Useful health checks:
 - `GET /health/live` — confirms the Node.js process is alive.
 - `GET /health/ready` — confirms MongoDB and Redis are ready.
 
+## Business CSV/XLSX imports
+
+Send one `.csv` or `.xlsx` file in the `file` or legacy `csvFile` multipart field:
+
+```text
+POST /api/business/import
+POST /api/business/import-csv
+```
+
+Both routes require authentication. The only required columns are `Business Name`,
+`Phone`, and `Email`. Optional columns are `Address`, `Website`, `Rating`,
+`Reviews`, `Latitude`, `Longitude`, `Category`, `Subcategory`, and `Country`.
+The response contains summary counts, failure counts by reason, and the first
+page of row-level results.
+
+Retrieve any result page later with:
+
+```text
+GET /api/business/import-batches/:batchId?page=1&limit=100
+GET /api/business/import-batches/:batchId/rows?page=1&limit=100
+```
+
+The import stores batch metadata and one audit record per file row. Processing
+is chunked and unordered business inserts allow valid rows to succeed even when
+other rows fail. Defaults are a 25 MB file limit, 100,000 rows, and 500 rows per
+chunk; these can be changed with `BUSINESS_IMPORT_MAX_FILE_BYTES`,
+`BUSINESS_IMPORT_MAX_ROWS`, and `BUSINESS_IMPORT_CHUNK_SIZE`.
+
 See `.env.observability.example` for all observability settings. Shell and PM2
 environment variables take precedence over `.env`.
 

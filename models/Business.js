@@ -81,6 +81,8 @@ const BusinessSchema = new Schema(
         ref: "SubCategory",
       },
     ],
+    importedCategory: { type: String, default: "" },
+    importedSubcategory: { type: String, default: "" },
     photos: {
       type: [String],
       default: ["https://images.unsplash.com/photo-1486406146926-c627a92ad1ab?q=80&w=1000&auto=format&fit=crop"]
@@ -167,6 +169,23 @@ const BusinessSchema = new Schema(
     geocodingError: {
       type: String,
       default: null,
+    },
+    importIdentityKey: {
+      type: String,
+      index: { unique: true, sparse: true },
+    },
+    importMetadata: {
+      batch: {
+        type: Schema.Types.ObjectId,
+        ref: "BusinessImportBatch",
+      },
+      row: {
+        type: Schema.Types.ObjectId,
+        ref: "BusinessImportRow",
+      },
+      rowNumber: { type: Number },
+      sourceFileName: { type: String },
+      importedAt: { type: Date },
     },
   },
   { timestamps: true }

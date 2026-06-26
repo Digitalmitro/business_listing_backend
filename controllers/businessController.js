@@ -853,10 +853,10 @@ exports.importBusinessFromCSV = async (req, res) => {
 exports.downloadSampleCSV = async (req, res) => {
   try {
     const csvContent = [
-      "Business Name,address,Website,Email,Phone,Category,Subcategory,Country",
-      'DigitalMitro,"123 Tech St; Salt Lake; Kolkata; West Bengal; 700091; India",https://digitalmitro.com,info@digitalmitro.com,9876543210,Marketing Agency,Digital Marketing,India',
-      'Urban Citations,"45 High St; Central; London; Greater London; WC1 1AA; United Kingdom",https://urbancitations.com,contact@urbancitations.com,+44207123456,Business Service,Local Listing,United Kingdom',
-      'Example Business,"789 Broadway; Manhattan; New York; NY; 10003; USA",https://example.com,hello@example.com,12125550199,Retail,Clothing,USA'
+      "Business Name,Phone,Email,Address,Website,Rating,Reviews,Latitude,Longitude,Category,Subcategory,Country",
+      'DigitalMitro,9876543210,info@digitalmitro.com,"123 Tech St; Salt Lake; Kolkata; West Bengal; 700091; India",https://digitalmitro.com,4.5,120,22.5726,88.3639,Marketing Agency,Digital Marketing,India',
+      'Urban Citations,+442071234567,contact@urbancitations.com,"45 High St; Central; London; Greater London; WC1 1AA; United Kingdom",https://urbancitations.com,4.2,80,51.5074,-0.1278,Business Service,Local Listing,United Kingdom',
+      'Example Business,12125550199,hello@example.com,"789 Broadway; Manhattan; New York; NY; 10003; United States",https://example.com,3.8,45,40.7282,-73.9942,Retail,Clothing,United States'
     ].join("\n");
 
     res.setHeader("Content-Type", "text/csv");
@@ -881,10 +881,10 @@ exports.downloadSampleExcel = async (req, res) => {
     // Define columns
     const columns = [
       { header: "Business Name", key: "Business Name", width: 30 },
-      { header: "address", key: "address", width: 60 },
-      { header: "Website", key: "Website", width: 35 },
-      { header: "Email", key: "Email", width: 30 },
       { header: "Phone", key: "Phone", width: 18 },
+      { header: "Email", key: "Email", width: 30 },
+      { header: "Address", key: "Address", width: 60 },
+      { header: "Website", key: "Website", width: 35 },
       { header: "Rating", key: "Rating", width: 10 },
       { header: "Reviews", key: "Reviews", width: 10 },
       { header: "Latitude", key: "Latitude", width: 14 },
@@ -909,10 +909,10 @@ exports.downloadSampleExcel = async (req, res) => {
     const examples = [
       {
         "Business Name": "DigitalMitro",
-        address: "123 Tech St; Salt Lake; Kolkata; West Bengal; 700091; India",
-        Website: "https://digitalmitro.com",
-        Email: "info@digitalmitro.com",
         Phone: "9876543210",
+        Email: "info@digitalmitro.com",
+        Address: "123 Tech St; Salt Lake; Kolkata; West Bengal; 700091; India",
+        Website: "https://digitalmitro.com",
         Rating: 4.5,
         Reviews: 120,
         Latitude: 22.5726,
@@ -923,10 +923,10 @@ exports.downloadSampleExcel = async (req, res) => {
       },
       {
         "Business Name": "Urban Citations",
-        address: "45 High St; Central; London; Greater London; WC1 1AA; United Kingdom",
-        Website: "https://urbancitations.com",
+        Phone: "+442071234567",
         Email: "contact@urbancitations.com",
-        Phone: "+44207123456",
+        Address: "45 High St; Central; London; Greater London; WC1 1AA; United Kingdom",
+        Website: "https://urbancitations.com",
         Rating: 4.2,
         Reviews: 80,
         Latitude: 51.5074,
@@ -937,10 +937,10 @@ exports.downloadSampleExcel = async (req, res) => {
       },
       {
         "Business Name": "Example Business",
-        address: "789 Broadway; Manhattan; New York; NY; 10003; USA",
-        Website: "https://example.com",
-        Email: "hello@example.com",
         Phone: "12125550199",
+        Email: "hello@example.com",
+        Address: "789 Broadway; Manhattan; New York; NY; 10003; United States",
+        Website: "https://example.com",
         Rating: 3.8,
         Reviews: 45,
         Latitude: 40.7282,
@@ -974,11 +974,15 @@ exports.downloadSampleExcel = async (req, res) => {
     ];
     instructions.addRows([
       { field: "Business Name", guidance: "Required." },
-      { field: "address", guidance: "Required unless separate city/state columns are used. Format: Street; Area; City; State; Pincode; Country." },
-      { field: "Category", guidance: "Required. A missing category will be created automatically." },
-      { field: "Subcategory", guidance: "Optional. Defaults to the category." },
-      { field: "Country", guidance: "Required. Common abbreviations such as US, USA, UK, and AU are accepted." },
-      { field: "Latitude / Longitude", guidance: "Optional. Businesses without coordinates are queued for geocoding." },
+      { field: "Phone", guidance: "Required. Use 7 to 15 digits; spaces, +, hyphens, and parentheses are accepted." },
+      { field: "Email", guidance: "Required. Must be a valid email address." },
+      { field: "Address", guidance: "Optional. Structured format supported: Street; Area; City; State; Pincode; Country." },
+      { field: "Website", guidance: "Optional. If present, it must be a valid web address." },
+      { field: "Rating", guidance: "Optional. Number from 0 to 5." },
+      { field: "Reviews", guidance: "Optional. Whole number 0 or greater." },
+      { field: "Latitude / Longitude", guidance: "Optional. If one is supplied, both must be supplied and within valid coordinate ranges." },
+      { field: "Category / Subcategory", guidance: "Optional. Values are mapped to category records when supplied." },
+      { field: "Country", guidance: "Optional. Common abbreviations such as US, USA, UK, and UAE are accepted." },
     ]);
     instructions.getRow(1).eachCell((cell) => {
       cell.font = { bold: true, color: { argb: "FFFFFFFF" } };
