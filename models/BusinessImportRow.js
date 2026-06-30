@@ -4,18 +4,18 @@ const mongoose = require("mongoose");
 
 const importedDataSchema = new mongoose.Schema(
   {
-    businessName: { type: String, default: "" },
-    phone: { type: String, default: "" },
-    email: { type: String, default: "" },
-    address: { type: String, default: "" },
-    website: { type: String, default: "" },
-    rating: { type: Number, default: null },
-    reviews: { type: Number, default: null },
-    latitude: { type: Number, default: null },
-    longitude: { type: Number, default: null },
-    category: { type: String, default: "" },
-    subcategory: { type: String, default: "" },
-    country: { type: String, default: "" },
+    businessName: { type: mongoose.Schema.Types.Mixed, default: "" },
+    phone: { type: mongoose.Schema.Types.Mixed, default: "" },
+    email: { type: mongoose.Schema.Types.Mixed, default: "" },
+    address: { type: mongoose.Schema.Types.Mixed, default: "" },
+    website: { type: mongoose.Schema.Types.Mixed, default: "" },
+    rating: { type: mongoose.Schema.Types.Mixed, default: null },
+    reviews: { type: mongoose.Schema.Types.Mixed, default: null },
+    latitude: { type: mongoose.Schema.Types.Mixed, default: null },
+    longitude: { type: mongoose.Schema.Types.Mixed, default: null },
+    category: { type: mongoose.Schema.Types.Mixed, default: "" },
+    subcategory: { type: mongoose.Schema.Types.Mixed, default: "" },
+    country: { type: mongoose.Schema.Types.Mixed, default: "" },
   },
   { _id: false }
 );

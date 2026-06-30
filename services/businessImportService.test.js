@@ -20,7 +20,7 @@ const requiredOnlyRow = {
   Email: "HELLO@EXAMPLE.COM",
 };
 
-test("only Business Name, Phone, and Email are required", () => {
+test("only Business Name and Phone are required (email can be blank too)", () => {
   const result = validateAndNormalizeRow(requiredOnlyRow);
 
   assert.equal(result.status, "valid");
@@ -30,6 +30,18 @@ test("only Business Name, Phone, and Email are required", () => {
   assert.equal(result.data.address, "");
   assert.equal(result.data.rating, null);
   assert.equal(result.data.latitude, null);
+});
+
+test("row with blank email is valid", () => {
+  const result = validateAndNormalizeRow({
+    "Business Name": "No Email Co",
+    Phone: "+91 98765-43210",
+  });
+
+  assert.equal(result.status, "valid");
+  assert.equal(result.data.businessName, "No Email Co");
+  assert.equal(result.data.phone, "+919876543210");
+  assert.equal(result.data.email, "");
 });
 
 test("common header aliases and a selected country are mapped", () => {
@@ -57,7 +69,6 @@ test("missing mandatory values are skipped with every exact reason", () => {
   assert.deepEqual(result.reasons, [
     "Missing Business Name",
     "Missing Phone",
-    "Missing Email",
   ]);
 });
 
@@ -165,7 +176,8 @@ test("CSV parsing streams data rows with spreadsheet row numbers", async (t) => 
   assert.equal(entries.length, 2);
   assert.deepEqual(entries.map((entry) => entry.rowNumber), [2, 3]);
   assert.equal(validateAndNormalizeRow(entries[0]).status, "valid");
-  assert.deepEqual(validateAndNormalizeRow(entries[1]).reasons, ["Missing Email"]);
+  assert.equal(validateAndNormalizeRow(entries[1]).status, "valid");
+  assert.equal(validateAndNormalizeRow(entries[1]).data.email, "");
 });
 
 test("XLSX parsing preserves empty rows and numeric phone cells", async (t) => {

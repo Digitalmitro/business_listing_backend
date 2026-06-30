@@ -36,8 +36,8 @@ POST /api/business/import
 POST /api/business/import-csv
 ```
 
-Both routes require authentication. The only required columns are `Business Name`,
-`Phone`, and `Email`. Optional columns are `Address`, `Website`, `Rating`,
+Both routes require authentication. The only required columns are `Business Name`
+and `Phone`. Optional columns are `Email`, `Address`, `Website`, `Rating`,
 `Reviews`, `Latitude`, `Longitude`, `Category`, `Subcategory`, and `Country`.
 The response contains summary counts, failure counts by reason, and the first
 page of row-level results.

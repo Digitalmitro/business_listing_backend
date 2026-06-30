@@ -975,7 +975,7 @@ exports.downloadSampleExcel = async (req, res) => {
     instructions.addRows([
       { field: "Business Name", guidance: "Required." },
       { field: "Phone", guidance: "Required. Use 7 to 15 digits; spaces, +, hyphens, and parentheses are accepted." },
-      { field: "Email", guidance: "Required. Must be a valid email address." },
+      { field: "Email", guidance: "Optional. If present, it must be a valid email address." },
       { field: "Address", guidance: "Optional. Structured format supported: Street; Area; City; State; Pincode; Country." },
       { field: "Website", guidance: "Optional. If present, it must be a valid web address." },
       { field: "Rating", guidance: "Optional. Number from 0 to 5." },

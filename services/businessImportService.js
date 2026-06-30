@@ -186,7 +186,7 @@ function validateAndNormalizeRow(entry, options = {}) {
   const malformedRow = Object.keys(values).some((header) => /^_\d+$/.test(header));
 
   const missingReasons = [];
-  for (const field of ["businessName", "phone", "email"]) {
+  for (const field of ["businessName", "phone"]) {
     if (!fields[field].present || isBlank(fields[field].value)) {
       missingReasons.push(`Missing ${FIELD_LABELS[field]}`);
     }
@@ -238,10 +238,14 @@ function validateAndNormalizeRow(entry, options = {}) {
     data.phone = normalizePhone(rawPhone);
   }
 
-  if (!validator.isEmail(data.email, { allow_utf8_local_part: false })) {
-    reasons.push("Invalid Email format");
+  if (data.email) {
+    if (!validator.isEmail(data.email, { allow_utf8_local_part: false })) {
+      reasons.push("Invalid Email format");
+    } else {
+      data.email = data.email.toLowerCase();
+    }
   } else {
-    data.email = data.email.toLowerCase();
+    data.email = "";
   }
 
   if (
@@ -261,8 +265,12 @@ function validateAndNormalizeRow(entry, options = {}) {
       return;
     }
     const parsed = Number(data[field]);
-    if (!Number.isFinite(parsed) || !predicate(parsed)) reasons.push(reason);
-    else data[field] = parsed;
+    if (!Number.isFinite(parsed) || !predicate(parsed)) {
+      reasons.push(reason);
+      data[field] = null;
+    } else {
+      data[field] = parsed;
+    }
   };
 
   parseOptionalNumber("rating", "Invalid Rating", (value) => value >= 0 && value <= 5);
@@ -494,8 +502,10 @@ function getExistingBusinessIdentityKeys(business) {
     ...(business.contact?.contactDetails || []).flatMap((contact) => contact.emails || []),
   ].map(normalizeIdentityPart).filter(Boolean));
   const keys = new Set();
-  for (const phone of phones) {
-    for (const email of emails) {
+  const phoneList = phones.size > 0 ? Array.from(phones) : [""];
+  const emailList = new Set([...emails, ""]);
+  for (const phone of phoneList) {
+    for (const email of emailList) {
       keys.add(buildIdentityKey({ businessName: business.businessName, phone, email }));
     }
   }
