@@ -21,26 +21,34 @@ const emailWorker = new Worker(
     } = job.data;
     try {
       const campaign = await EmailCampaign.findById(campaignId);
-      if (!campaign || (campaign.status !== "scheduled" && campaign.status !== "failed")) {
+      if (!campaign || !["scheduled", "processing", "failed"].includes(campaign.status)) {
         throw new Error("Campaign not found or invalid status");
       }
 
-      const sender = await SenderEmail.findOne({ email: fromEmail });
+      const senderEmail = fromEmail || campaign.fromEmail;
+      const sender = await SenderEmail.findOne({ email: senderEmail });
       if (!sender || !sender.isActive) {
         throw new Error("Sender email is invalid or inactive");
       }
 
-      const templateDoc = await EmailTemplate.findById(campaign.template);
+      const templateId = template || campaign.template;
+      const templateDoc = await EmailTemplate.findById(templateId);
       if (!templateDoc) {
         throw new Error("Template not found");
       }
 
       // Step 1: Gather all emails we might need to lookup
       const allEmails = new Set();
-      const users = userIds?.length ? await User.find({ _id: { $in: userIds } }) : [];
+      const fallbackUserIds = campaign.recipients?.users || [];
+      const effectiveUserIds = userIds?.length ? userIds : fallbackUserIds;
+      const users = effectiveUserIds.length ? await User.find({ _id: { $in: effectiveUserIds } }) : [];
       users.forEach(u => { if (u.email) allEmails.add(u.email); });
       
-      const customEmailItems = isRefTimeZone && campaign.recipients.customEmails ? campaign.recipients.customEmails : [];
+      const shouldIncludeCustomEmails =
+        typeof isRefTimeZone === "boolean" ? isRefTimeZone : true;
+      const customEmailItems = shouldIncludeCustomEmails && campaign.recipients.customEmails
+        ? campaign.recipients.customEmails
+        : [];
       customEmailItems.forEach(item => {
         const email = typeof item === 'string' ? item : item.email;
         if (email) allEmails.add(email);
@@ -90,7 +98,7 @@ const emailWorker = new Worker(
         });
         
         const unsubscribeLink = `${process.env.FRONTEND_URL}/unsubscribe?userId=${user._id}&campaignId=${campaign._id}`;
-        const result = await sendMail(fromEmail, user.email, templateDoc.subject, html, unsubscribeLink);
+        const result = await sendMail(senderEmail, user.email, templateDoc.subject, html, unsubscribeLink);
         
         if (!result.success) {
           console.error(`Failed to send email to ${user.email}: ${result.error.message}`);
@@ -120,7 +128,7 @@ const emailWorker = new Worker(
         });
         
         const unsubscribeLink = `${process.env.FRONTEND_URL}/unsubscribe?email=${encodeURIComponent(email)}&campaignId=${campaign._id}`;
-        const result = await sendMail(fromEmail, email, templateDoc.subject, html, unsubscribeLink);
+        const result = await sendMail(senderEmail, email, templateDoc.subject, html, unsubscribeLink);
         
         if (result.success) sentCount++;
       }

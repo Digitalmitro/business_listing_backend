@@ -52,6 +52,15 @@ const sockets = new Set();
 let server;
 let resourceMonitor;
 let shutdownPromise;
+let workerRuntime;
+
+function shouldStartInlineWorkers() {
+  if (process.env.INLINE_WORKERS === "true") return true;
+  if (process.env.INLINE_WORKERS === "false") return false;
+
+  const runningUnderPm2 = process.env.pm_id !== undefined || process.env.NODE_APP_INSTANCE !== undefined;
+  return !runningUnderPm2;
+}
 
 function configureTrustProxy(app) {
   const value = process.env.TRUST_PROXY;
@@ -168,6 +177,12 @@ async function startServer() {
   });
 
   await connectDB();
+  if (shouldStartInlineWorkers()) {
+    const { startWorkers } = require("./startWorker");
+    await startWorkers();
+    workerRuntime = { shutdown: require("./startWorker").shutdown };
+    logger.info("workers.inline_started", "Inline queue workers started with the API process");
+  }
   server = http.createServer(app);
   server.requestTimeout = Number(process.env.HTTP_REQUEST_TIMEOUT_MS || 120_000);
   server.headersTimeout = Number(process.env.HTTP_HEADERS_TIMEOUT_MS || 65_000);
@@ -233,6 +248,11 @@ async function shutdown(reason, { crash = false } = {}) {
 
     resourceMonitor?.stop();
     await closeHttpServer();
+
+    if (workerRuntime?.shutdown) {
+      await workerRuntime.shutdown("serverShutdown", { crash });
+      workerRuntime = null;
+    }
 
     const results = await Promise.allSettled([closeQueueConnections(), disconnectDB()]);
     const failures = results.filter((result) => result.status === "rejected");
