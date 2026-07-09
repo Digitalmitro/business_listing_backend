@@ -122,6 +122,8 @@ function createApp() {
   app.use("/api/subCategory", subCategoryRoutes);
   app.use("/api/business", businessRoutes);
   app.use("/api/notification", notificationRoutes);
+  app.use("/notification", notificationRoutes);
+  app.use("/message", notificationRoutes);
   app.use("/api", topCountryRoutes);
   app.use("/admin", adminRoutes);
   app.use("/api/plan", planRoutes);

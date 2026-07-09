@@ -22,6 +22,9 @@ npm install
 npm start
 ```
 
+Local `server.js` startup will run queue workers inline by default. If you need
+to disable that behavior, set `INLINE_WORKERS=false` in `.env`.
+
 Useful health checks:
 
 - `GET /health/live` — confirms the Node.js process is alive.
@@ -76,6 +79,10 @@ starts:
 - `business-listing-api`: two cluster instances by default, with zero-downtime reloads.
 - `business-listing-workers`: one graceful BullMQ worker process.
 - `business-listing-cpu-monitor`: one whole-machine CPU supervisor.
+
+PM2 uses the same `.env`, but the ecosystem explicitly forces
+`INLINE_WORKERS=false` for PM2-managed processes so the API does not start a
+second copy of the BullMQ workers.
 
 Override API concurrency with `WEB_CONCURRENCY`. Do not set it higher than the
 MongoDB connection capacity of the production environment.

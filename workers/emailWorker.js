@@ -4,6 +4,8 @@ const EmailCampaign = require("../models/EmailCampaign");
 const EmailTemplate = require("../models/EmailTemplate");
 const SenderEmail = require("../models/SenderEmail");
 const User = require("../models/User");
+require("../models/Category");
+require("../models/SubCategory");
 const Business = require("../models/Business");
 const { sendMail } = require("../utils/nodemailer");
 const { applyEmailPlaceholders, getBusinessPlaceholderData } = require("../utils/emailPlaceholders");

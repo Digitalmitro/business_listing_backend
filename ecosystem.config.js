@@ -36,12 +36,14 @@ module.exports = {
       max_memory_restart: "1500M",
       env: {
         NODE_ENV: "development",
+        INLINE_WORKERS: "false",
       },
       env_production: {
         NODE_ENV: "production",
         SERVICE_NAME: "business-listing-api",
         LOG_FORMAT: "json",
         LOG_LEVEL: "info",
+        INLINE_WORKERS: "false",
       },
       wait_ready: true,
       instance_var: "NODE_APP_INSTANCE",
@@ -63,6 +65,7 @@ module.exports = {
         SERVICE_NAME: "business-listing-workers",
         LOG_FORMAT: "json",
         LOG_LEVEL: "info",
+        INLINE_WORKERS: "false",
       },
     },
     {
