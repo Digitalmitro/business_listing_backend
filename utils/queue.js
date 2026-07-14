@@ -26,67 +26,86 @@ redisConnection.on('end', () => {
   logger.warn('redis.disconnected', 'Redis connection closed');
 });
 
+const defaultAttempts = parseInt(process.env.QUEUE_DEFAULT_ATTEMPTS, 10) || 3;
+const defaultDelay = parseInt(process.env.QUEUE_DEFAULT_DELAY, 10) || 1000;
+
 const emailQueue = new Queue('email-campaigns', {
   connection: redisConnection,
   defaultJobOptions: {
-    attempts: 3,
-    backoff: { type: 'exponential', delay: 1000 },
+    attempts: defaultAttempts,
+    backoff: { type: 'exponential', delay: defaultDelay },
   },
 });
 
 const welcomeQueue = new Queue('welcome-email', {
   connection: redisConnection,
   defaultJobOptions: {
-    attempts: 3,
-    backoff: { type: 'exponential', delay: 1000 },
+    attempts: defaultAttempts,
+    backoff: { type: 'exponential', delay: defaultDelay },
   },
 });
 
 const purchaseQueue = new Queue('purchase-email', {
   connection: redisConnection,
   defaultJobOptions: {
-    attempts: 3,
-    backoff: { type: 'exponential', delay: 1000 },
+    attempts: defaultAttempts,
+    backoff: { type: 'exponential', delay: defaultDelay },
   },
 });
 
 const claimQueue = new Queue('claim-email', {
   connection: redisConnection,
   defaultJobOptions: {
-    attempts: 3,
-    backoff: { type: 'exponential', delay: 1000 },
+    attempts: defaultAttempts,
+    backoff: { type: 'exponential', delay: defaultDelay },
   },
 });
 
 const kycQueue = new Queue('kyc-email', {
   connection: redisConnection,
   defaultJobOptions: {
-    attempts: 3,
-    backoff: { type: 'exponential', delay: 1000 },
+    attempts: defaultAttempts,
+    backoff: { type: 'exponential', delay: defaultDelay },
   },
 });
 
 const geocodingQueue = new Queue('geocoding-batch', {
   connection: redisConnection,
   defaultJobOptions: {
-    attempts: 5,
-    backoff: { type: 'exponential', delay: 2000 }, // More aggressive backoff for API limits
+    attempts: parseInt(process.env.GEOCODING_ATTEMPTS, 10) || 5,
+    backoff: { type: 'exponential', delay: parseInt(process.env.GEOCODING_DELAY, 10) || 2000 },
   },
 });
 
 const enquiryQueue = new Queue('enquiry-email', {
   connection: redisConnection,
   defaultJobOptions: {
-    attempts: 3,
-    backoff: { type: 'exponential', delay: 1000 },
+    attempts: defaultAttempts,
+    backoff: { type: 'exponential', delay: defaultDelay },
   },
 });
 
 const bookingQueue = new Queue('booking-email', {
   connection: redisConnection,
   defaultJobOptions: {
-    attempts: 3,
-    backoff: { type: 'exponential', delay: 1000 },
+    attempts: defaultAttempts,
+    backoff: { type: 'exponential', delay: defaultDelay },
+  },
+});
+
+const leadFollowUpQueue = new Queue('lead-follow-up', {
+  connection: redisConnection,
+  defaultJobOptions: {
+    attempts: defaultAttempts,
+    backoff: { type: 'exponential', delay: defaultDelay },
+  },
+});
+
+const scheduledSocialPostQueue = new Queue('scheduled-social-post', {
+  connection: redisConnection,
+  defaultJobOptions: {
+    attempts: defaultAttempts,
+    backoff: { type: 'exponential', delay: defaultDelay },
   },
 });
 
@@ -99,6 +118,8 @@ const queues = {
   'geocoding-batch': geocodingQueue,
   'enquiry-email': enquiryQueue,
   'booking-email': bookingQueue,
+  'lead-follow-up': leadFollowUpQueue,
+  'scheduled-social-post': scheduledSocialPostQueue,
 };
 
 /**
@@ -160,6 +181,8 @@ module.exports = {
   geocodingQueue,
   enquiryQueue,
   bookingQueue,
+  leadFollowUpQueue,
+  scheduledSocialPostQueue,
   redisConnection,
   addJob,
   closeQueueConnections,

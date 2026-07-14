@@ -13,6 +13,26 @@ const storage = multer.diskStorage({
 
 const upload = multer({ storage });
 
+// ── Email campaign attachment storage ────────────────────────────────────────
+// Files are stored in a dedicated sub-directory to keep them separate from
+// images and other uploaded assets.
+const attachmentStorage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, "public/uploads/attachments/");
+  },
+  filename: (req, file, cb) => {
+    // Sanitise the original name to avoid path traversal and special chars
+    const safeName = file.originalname.replace(/[^a-zA-Z0-9._-]/g, "_");
+    cb(null, `${Date.now()}-${safeName}`);
+  },
+});
+
+/** Use for campaign attachment uploads (max 5 files, 10 MB each). */
+const attachmentUpload = multer({
+  storage: attachmentStorage,
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10 MB hard limit at transport layer
+});
+
 const dynamicUpload = (req, res, next) => {
   const fields = [
     { name: "icon", maxCountCount: 1 },
@@ -37,4 +57,4 @@ const dynamicUpload = (req, res, next) => {
   upload.fields(fields)(req, res, next);
 };
 
-module.exports = { upload, dynamicUpload };
+module.exports = { upload, dynamicUpload, attachmentUpload };

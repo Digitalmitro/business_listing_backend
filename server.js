@@ -7,6 +7,7 @@ const http = require("node:http");
 const path = require("node:path");
 const express = require("express");
 const cors = require("cors");
+const helmet = require("helmet");
 const mongoose = require("mongoose");
 const logger = require("./utils/logger");
 
@@ -19,6 +20,7 @@ const { errorHandler, notFoundHandler } = require("./middlewares/errorHandler");
 const { installProcessHandlers } = require("./utils/processHandlers");
 const { ResourceMonitor } = require("./utils/resourceMonitor");
 const { closeQueueConnections, redisConnection } = require("./utils/queue");
+const { authLimiter, apiLimiter, webhookLimiter, crmWriteLimiter } = require("./middlewares/rateLimiter");
 
 const authRoutes = require("./routes/authRoutes.js");
 const categoryRoutes = require("./routes/categoryRoutes");
@@ -29,6 +31,7 @@ const businessRoutes = require("./routes/businessRoutes.js");
 const notificationRoutes = require("./routes/notificationRoutes.js");
 const topCountryRoutes = require("./routes/topCountryRoutes.js");
 const adminRoutes = require("./routes/adminRoutes.js");
+const adminCrmRoutes = require("./routes/adminCrmRoutes.js");
 const planRoutes = require("./routes/planRoutes.js");
 const reviewRoutes = require("./routes/reviewRoutes.js");
 const appointmentRoutes = require("./routes/appointmentRoutes.js");
@@ -45,6 +48,21 @@ const subscriptionRoutes = require("./routes/subscriptionRoutes");
 const homeRoutes = require("./routes/homeRoutes");
 const blogRoutes = require("./routes/blogRoutes");
 const popularSearchRoutes = require("./routes/popularSearchRoutes");
+const googleBusinessRoutes = require("./routes/googleBusinessRoutes");
+const socialIntegrationRoutes = require("./routes/socialIntegrationRoutes");
+const socialPostingRoutes = require("./routes/socialPostingRoutes");
+const crmContactRoutes = require("./routes/crmContactRoutes");
+const crmFollowUpRoutes = require("./routes/crmFollowUpRoutes");
+const crmReplyRoutes = require("./routes/crmReplyRoutes");
+const crmForecastRoutes = require("./routes/crmForecastRoutes");
+const crmScheduleRoutes = require("./routes/crmScheduleRoutes");
+const crmDashboardRoutes = require("./routes/crmDashboardRoutes");
+const crmLeadRoutes = require("./routes/crmLeadRoutes");
+// New routes added as part of production-ready implementation
+const crmAuditRoutes         = require("./routes/crmAuditRoutes");
+const crmConfigRoutes        = require("./routes/crmConfigRoutes");
+const crmLeadImportRoutes    = require("./routes/crmLeadImportRoutes");
+const unsubscribeRoutes      = require("./routes/unsubscribeRoutes");
 
 const PORT = Number(process.env.PORT || 5000);
 const SHUTDOWN_TIMEOUT_MS = Number(process.env.SHUTDOWN_TIMEOUT_MS || 10_000);
@@ -74,19 +92,62 @@ function createApp() {
   const app = express();
   configureTrustProxy(app);
   app.disable("x-powered-by");
+
+  // ── Security: Helmet (CSP, HSTS, X-Frame-Options, etc.) ───────────────────
+  app.use(helmet({
+    contentSecurityPolicy: process.env.NODE_ENV === "production" ? undefined : false,
+    crossOriginEmbedderPolicy: false, // Allow embedding in iframes for admin dashboard
+  }));
+
+  // ── CORS: whitelist from env (comma-separated origins) ─────────────────
+  const allowedOrigins = process.env.CORS_ORIGINS
+    ? process.env.CORS_ORIGINS.split(",").map(o => o.trim())
+    : [];
+
+  app.use(cors({
+    origin: allowedOrigins.length === 0
+      ? true  // Allow all in dev when no env is set
+      : (origin, callback) => {
+          if (!origin || allowedOrigins.includes(origin)) {
+            callback(null, true);
+          } else {
+            logger.warn("cors.rejected", "CORS blocked request from disallowed origin", { origin });
+            callback(new Error(`CORS policy: origin '${origin}' is not allowed`));
+          }
+        },
+    credentials: true,
+    methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization", "X-Webhook-Signature", "X-Hub-Signature-256"],
+  }));
+
   app.use(createRequestLogger());
   app.use(express.urlencoded({ extended: true }));
   app.use(
     express.json({
       limit: process.env.JSON_BODY_LIMIT || "2mb",
       verify: (req, _res, buffer) => {
-        if (req.originalUrl.startsWith("/api/subscription/razorpay-webhook")) {
+        // Store raw body for webhook signature validation
+        if (
+          req.originalUrl.startsWith("/api/subscription/razorpay-webhook") ||
+          req.originalUrl.startsWith("/api/crm/leads/replies/reply-webhook") ||
+          req.originalUrl.startsWith("/api/email-campaign/delivery-webhook")
+        ) {
           req.rawBody = buffer.toString();
         }
       },
     })
   );
-  app.use(cors());
+
+  // ── Rate limiting by route group ───────────────────────────────────
+  // Only apply in production or when explicitly enabled
+  if (process.env.NODE_ENV === "production" || process.env.ENABLE_RATE_LIMITING === "true") {
+    const { authLimiter, apiLimiter, webhookLimiter } = require("./middlewares/rateLimiter");
+    app.use("/api/auth", authLimiter);
+    app.use("/api/crm/leads/replies/reply-webhook", webhookLimiter);
+    app.use("/api/email-campaign/delivery-webhook", webhookLimiter);
+    app.use("/api", apiLimiter);
+    logger.info("rate_limit.enabled", "Rate limiting middleware active");
+  }
 
   const uploadDirectory = path.join(__dirname, "public/uploads");
   fs.mkdirSync(uploadDirectory, { recursive: true });
@@ -126,6 +187,7 @@ function createApp() {
   app.use("/message", notificationRoutes);
   app.use("/api", topCountryRoutes);
   app.use("/admin", adminRoutes);
+  app.use("/admin/crm", adminCrmRoutes);
   app.use("/api/plan", planRoutes);
   app.use("/api/review", reviewRoutes);
   app.use("/api", appointmentRoutes);
@@ -142,6 +204,23 @@ function createApp() {
   app.use("/api/home", homeRoutes);
   app.use("/api/blog", blogRoutes);
   app.use("/api/popular-search", popularSearchRoutes);
+  app.use("/api/google-business", googleBusinessRoutes);
+  app.use("/api/social-integrations", socialIntegrationRoutes);
+  app.use("/api/social-posting", socialPostingRoutes);
+  // ── CRM routes ────────────────────────────────────────────────────────────
+  app.use("/api/crm/contacts",           crmContactRoutes);
+  app.use("/api/crm/leads/followup",     crmFollowUpRoutes);
+  app.use("/api/crm/leads/replies",      crmReplyRoutes);
+  app.use("/api/crm/leads/import",       crmLeadImportRoutes);
+  app.use("/api/crm/leads",              crmLeadRoutes);
+  // Canonical singular paths (duplicates removed)
+  app.use("/api/crm/forecast",           crmForecastRoutes);
+  app.use("/api/crm/calendar",           crmScheduleRoutes);
+  app.use("/api/crm/dashboard",          crmDashboardRoutes);
+  app.use("/api/crm/audit",              crmAuditRoutes);
+  app.use("/api/crm/config",             crmConfigRoutes);
+  // Unsubscribe (public)
+  app.use("/api/unsubscribe",            unsubscribeRoutes);
 
   app.use(notFoundHandler);
   app.use(errorHandler);

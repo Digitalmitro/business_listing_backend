@@ -1,11 +1,12 @@
 "use strict";
 
-const test = require("node:test");
+const { test, after } = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const ExcelJS = require("exceljs");
+const { closeQueueConnections } = require("../utils/queue");
 
 const {
   buildIdentityKey,
@@ -203,4 +204,10 @@ test("XLSX parsing preserves empty rows and numeric phone cells", async (t) => {
   assert.deepEqual(entries.map((entry) => entry.rowNumber), [2, 3]);
   assert.deepEqual(validateAndNormalizeRow(entries[0]).reasons, ["Empty row"]);
   assert.equal(validateAndNormalizeRow(entries[1]).status, "valid");
+});
+
+after(async () => {
+  try {
+    await closeQueueConnections();
+  } catch (e) {}
 });

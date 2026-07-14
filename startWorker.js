@@ -18,6 +18,9 @@ const kycWorker = require("./workers/kycWorker");
 const geocodingWorker = require("./workers/geocodingWorker");
 const enquiryWorker = require("./workers/enquiryWorker");
 const bookingWorker = require("./workers/bookingWorker");
+const leadFollowUpWorker = require("./workers/leadFollowUpWorker");
+const scheduledSocialPostWorker = require("./workers/scheduledSocialPostWorker");
+const { startFollowUpScheduler } = require("./workers/leadFollowUpWorker");
 
 const workers = [
   emailWorker,
@@ -28,6 +31,8 @@ const workers = [
   geocodingWorker,
   enquiryWorker,
   bookingWorker,
+  leadFollowUpWorker,
+  scheduledSocialPostWorker,
 ];
 const workerNames = [
   "email-campaigns",
@@ -38,6 +43,8 @@ const workerNames = [
   "geocoding-batch",
   "enquiry-email",
   "booking-email",
+  "lead-followup-scheduler",
+  "scheduled-social-post",
 ];
 
 let resourceMonitor;
@@ -48,6 +55,7 @@ async function startWorkers() {
   await connectDB();
   resourceMonitor = new ResourceMonitor({ logger });
   resourceMonitor.start();
+  startFollowUpScheduler();
   logger.info("workers.ready", "Queue workers are ready", { workerNames });
   if (typeof process.send === "function") process.send("ready");
 }

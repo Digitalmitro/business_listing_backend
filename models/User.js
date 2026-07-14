@@ -2,6 +2,27 @@
 const mongoose = require("mongoose");
 const bcrypt = require("bcryptjs");
 
+const socialAccountSubSchema = new mongoose.Schema(
+  {
+    isConnected: { type: Boolean, default: false },
+    status: {
+      type: String,
+      enum: ["not_connected", "connected", "expired", "revoked"],
+      default: "not_connected",
+    },
+    platformUserId: { type: String },
+    platformUsername: { type: String },
+    profileName: { type: String },
+    profileImageUrl: { type: String },
+    accessToken: { type: String }, // Encrypted AES-256-GCM
+    refreshToken: { type: String }, // Encrypted AES-256-GCM
+    tokenExpiry: { type: Date },
+    connectedAt: { type: Date },
+    scopes: [{ type: String }],
+  },
+  { _id: false }
+);
+
 const userSchema = new mongoose.Schema(
   {
     full_name: { type: String, required: true, trim: true },
@@ -37,6 +58,24 @@ const userSchema = new mongoose.Schema(
     subscribedToEmails: { type: Boolean, default: true },
     timeZone: { type: String, default: "Asia/Kolkata" },
     country: { type: String, default: "India" },
+    googleBusinessProfile: {
+      isConnected: { type: Boolean, default: false },
+      googleAccountId: { type: String },
+      googleEmail: { type: String },
+      accessToken: { type: String }, // Encrypted AES-256-GCM
+      refreshToken: { type: String }, // Encrypted AES-256-GCM
+      tokenExpiry: { type: Date },
+      selectedProfileId: { type: String },
+      lastFetchedProfile: { type: mongoose.Schema.Types.Mixed },
+      connectedAt: { type: Date },
+    },
+    socialMediaAccounts: {
+      facebook: { type: socialAccountSubSchema, default: () => ({}) },
+      instagram: { type: socialAccountSubSchema, default: () => ({}) },
+      linkedin: { type: socialAccountSubSchema, default: () => ({}) },
+      twitter: { type: socialAccountSubSchema, default: () => ({}) },
+      pinterest: { type: socialAccountSubSchema, default: () => ({}) },
+    },
     createdAt: { type: Date, default: Date.now },
     updatedAt: { type: Date, default: Date.now },
   },

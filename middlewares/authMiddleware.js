@@ -1,32 +1,53 @@
 // backend/middlewares/authMiddleware.js
-const jwt = require("jsonwebtoken");
-const Admin = require("../models/Admin");
-const User = require("../models/User");
+"use strict";
 
+const jwt     = require("jsonwebtoken");
+const Admin   = require("../models/Admin");
+const User    = require("../models/User");
+const logger  = require("../utils/logger");
+
+/**
+ * JWT authentication middleware.
+ * Uses the `role` field embedded in the token payload to route the single DB
+ * lookup to either the User or Admin collection, avoiding the double query
+ * that previously ran on every authenticated request.
+ */
 const authMiddleware = async (req, res, next) => {
   try {
-    const token = req.header("Authorization")?.replace("Bearer ", "");
-
-    if (!token) {
+    const authHeader = req.header("Authorization");
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
       return res.status(401).json({ success: false, message: "No token, authorization denied" });
     }
+    const token = authHeader.replace("Bearer ", "").trim();
 
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    
-    // YE LINE ADD KAR DE — FULL USER FETCH KAREGA DB SE
-    const user = await User.findById(decoded.id).select("-password");
-    const admin = await Admin.findById(decoded.id).select("-password");
-    
-    if (!user && !admin) {
-      return res.status(401).json({ success: false, message: "User not found" });
+
+    // Use the role stored in the JWT to avoid a speculative dual-DB lookup.
+    // If role is missing (legacy tokens), fall back to checking both collections.
+    let principal = null;
+
+    if (decoded.role === "admin") {
+      principal = await Admin.findById(decoded.id).select("-password");
+    } else if (decoded.role === "user") {
+      principal = await User.findById(decoded.id).select("-password");
+    } else {
+      // Legacy fallback: try User first, then Admin
+      principal = await User.findById(decoded.id).select("-password")
+                  || await Admin.findById(decoded.id).select("-password");
     }
 
+    if (!principal) {
+      return res.status(401).json({ success: false, message: "User not found or account removed" });
+    }
 
-    req.user = user || admin; // ← AB FULL USER AAYEGA (full_name, email sab)
+    req.user = principal;
     next();
   } catch (error) {
-    console.error("Auth Middleware Error:", error);
-    res.status(401).json({ success: false, message: "Token is not valid" });
+    logger.warn("auth.middleware_error", "JWT validation failed", {
+      message: error.message,
+      requestId: req.requestId,
+    });
+    return res.status(401).json({ success: false, message: "Token is not valid" });
   }
 };
 

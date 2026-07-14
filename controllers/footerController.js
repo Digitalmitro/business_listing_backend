@@ -43,7 +43,14 @@ exports.getFooterLinks = async (req, res) => {
         about: footerData.about,
         discover: footerData.discover,
         business: footerData.business,
-        social: footerData.social || {},
+        social: footerData.social && Object.keys(footerData.social).length > 0 ? footerData.social : {
+          facebook: "https://www.facebook.com/urbancitationsusa/",
+          twitter: "https://x.com/urbarcitation",
+          instagram: "https://www.instagram.com/urbancitations/",
+          linkedin: "https://www.linkedin.com/company/urban-citations/",
+          pinterest: "https://www.pinterest.com/urbancitations/",
+          youtube: "https://www.youtube.com/@UrbanCitations",
+        },
         languages: footerData.languages || ["English"],
       },
     });

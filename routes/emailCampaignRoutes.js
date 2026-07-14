@@ -1,5 +1,7 @@
+// routes/emailCampaignRoutes.js
 const express = require("express");
-const router = express.Router();
+const router  = express.Router();
+
 const { authMiddleware } = require("../middlewares/authMiddleware");
 const {
   createTemplate,
@@ -8,6 +10,7 @@ const {
   updateTemplate,
   deleteTemplate,
   uploadTemplateImage,
+  uploadCampaignAttachments,
   addSenderEmail,
   getSenderEmails,
   markSenderEmailAsSpam,
@@ -25,9 +28,9 @@ const {
   downloadCampaignSampleExcel,
   sendTestEmail,
 } = require("../controllers/emailCampaignController");
-const { upload } = require("../config/multerConfig");
+const { upload, attachmentUpload } = require("../config/multerConfig");
 
-// Email Template Routes
+// ── Email Template Routes ────────────────────────────────────────────────────
 router.post("/templates", authMiddleware, createTemplate);
 router.post(
   "/templates/upload-image",
@@ -35,42 +38,66 @@ router.post(
   upload.single("image"),
   uploadTemplateImage
 );
-router.get("/templates", authMiddleware, getTemplates);
+// NOTE: send-test must come BEFORE /:id to prevent route shadowing
+router.post("/templates/send-test", authMiddleware, sendTestEmail);
+router.get("/templates",     authMiddleware, getTemplates);
 router.get("/templates/:id", authMiddleware, getTemplateById);
 router.put("/templates/:id", authMiddleware, updateTemplate);
 router.delete("/templates/:id", authMiddleware, deleteTemplate);
-router.post("/templates/send-test", authMiddleware, sendTestEmail);
 
-// Sender Email Routes
+// ── Sender Email Routes ──────────────────────────────────────────────────────
 router.post("/sender-emails", authMiddleware, addSenderEmail);
-router.get("/sender-emails", authMiddleware, getSenderEmails);
-router.patch(
-  "/toggle-sender-email-status/:id",
-  authMiddleware,
-  toggleSenderEmailStatus
-);
-router.patch("/sender-emails/:id", authMiddleware, markSenderEmailAsSpam); // Updated endpoint
+router.get("/sender-emails",  authMiddleware, getSenderEmails);
+router.patch("/toggle-sender-email-status/:id", authMiddleware, toggleSenderEmailStatus);
+router.patch("/sender-emails/:id",              authMiddleware, markSenderEmailAsSpam);
 
-// Email Campaign Routes
-router.post("/campaigns", authMiddleware, createCampaign);
+// ── Campaign Attachment Upload (standalone) ──────────────────────────────────
+// POST /email/campaigns/attachments
+// Accepts up to 5 files via multipart/form-data field name "attachments".
+// Returns stored attachment metadata for use in the subsequent campaign create/update call.
 router.post(
-  "/campaigns/process-excel",
+  "/campaigns/attachments",
+  authMiddleware,
+  attachmentUpload.array("attachments", 5),
+  uploadCampaignAttachments
+);
+
+// ── Email Campaign Routes ────────────────────────────────────────────────────
+// Campaign create — accepts both JSON body fields AND optional multipart attachments
+router.post(
+  "/campaigns",
+  authMiddleware,
+  attachmentUpload.array("attachments", 5),
+  createCampaign
+);
+
+// Named sub-routes must come before /:id
+router.post("/campaigns/process-excel",
   authMiddleware,
   upload.single("file"),
   processCampaignExcel
 );
 router.get("/campaigns/sample-excel", authMiddleware, downloadCampaignSampleExcel);
-router.get("/campaigns", authMiddleware, getCampaigns);
-router.get("/campaigns/:id", authMiddleware, getCampaignById);
-router.put("/campaigns/:id", authMiddleware, updateCampaign);
-router.delete("/campaigns/:id", authMiddleware, deleteCampaign);
-router.patch("/campaigns/:id/cancel", authMiddleware, cancelScheduledCampaign);
-router.post("/campaigns/:id/send", authMiddleware, sendCampaign);
 
-// User Routes
+router.get("/campaigns",     authMiddleware, getCampaigns);
+router.get("/campaigns/:id", authMiddleware, getCampaignById);
+
+// Campaign update — also accepts new attachment files alongside JSON fields
+router.put(
+  "/campaigns/:id",
+  authMiddleware,
+  attachmentUpload.array("attachments", 5),
+  updateCampaign
+);
+
+router.delete("/campaigns/:id",        authMiddleware, deleteCampaign);
+router.patch("/campaigns/:id/cancel",  authMiddleware, cancelScheduledCampaign);
+router.post("/campaigns/:id/send",     authMiddleware, sendCampaign);
+
+// ── User Routes ──────────────────────────────────────────────────────────────
 router.get("/users", authMiddleware, getUsers);
 
-// Unsubscribe Route (Public)
+// ── Unsubscribe Route (Public) ───────────────────────────────────────────────
 router.get("/unsubscribe", unsubscribe);
 
 module.exports = router;
