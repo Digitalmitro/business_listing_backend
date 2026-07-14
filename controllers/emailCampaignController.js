@@ -536,9 +536,6 @@ const updateCampaign = async (req, res) => {
         .status(404)
         .json({ message: "Campaign not found or unauthorized" });
     }
-    if (campaign.status === "sent") {
-      return res.status(400).json({ message: "Cannot update a sent campaign" });
-    }
 
     if (name) campaign.name = name;
     if (template) {
