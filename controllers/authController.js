@@ -1,5 +1,6 @@
 const bcrypt = require("bcryptjs");
 const User = require("../models/User.js");
+const Tenant = require("../models/Tenant.js");
 const sendMail = require("../services/sendMail.js");
 const { OAuth2Client } = require("google-auth-library");
 const jwt = require("jsonwebtoken");
@@ -54,6 +55,9 @@ exports.register = async (req, res) => {
       country: country || "Unknown",
     });
     await user.save();
+    const tenant = await Tenant.create({ ownerUserId: user._id, name: full_name });
+    user.tenantId = tenant._id;
+    await user.save();
 
     // Add welcome email job to queue
     await addJob("welcome-email", { userId: user._id });
@@ -85,7 +89,7 @@ exports.login = async (req, res) => {
     if (!isPasswordValid) {
       return res.status(401).json({ message: "Invalid email or password" });
     }
-    const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, {
+    const token = jwt.sign({ id: user._id, tenantId: user.tenantId }, process.env.JWT_SECRET, {
       expiresIn: "1d",
     });
     res.status(200).json({ message: "Login successful", token });

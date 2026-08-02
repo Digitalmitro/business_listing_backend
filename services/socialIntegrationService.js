@@ -1,447 +1,99 @@
 "use strict";
 
 const axios = require("axios");
+const crypto = require("node:crypto");
 const logger = require("../utils/logger");
 const { encrypt, decrypt } = require("../utils/cryptoUtils");
+const SocialConnection = require("../models/SocialConnection");
+const OAuthState = require("../models/OAuthState");
+const TenantSocialCredential = require("../models/TenantSocialCredential");
+const GoogleBusinessConnection = require("../models/GoogleBusinessConnection");
 
 const SUPPORTED_PLATFORMS = {
-  facebook: {
-    name: "Facebook",
-    authUrl: "https://www.facebook.com/v19.0/dialog/oauth",
-    tokenUrl: "https://graph.facebook.com/v19.0/oauth/access_token",
-    profileUrl: "https://graph.facebook.com/v19.0/me?fields=id,name,picture",
-    postUrl: "https://graph.facebook.com/v19.0/me/feed",
-    defaultScopes: ["pages_show_list", "pages_read_engagement", "pages_manage_posts"],
-  },
-  instagram: {
-    name: "Instagram",
-    authUrl: "https://api.instagram.com/oauth/authorize",
-    tokenUrl: "https://api.instagram.com/oauth/access_token",
-    profileUrl: "https://graph.instagram.com/me?fields=id,username",
-    postUrl: "https://graph.facebook.com/v19.0/{ig_user_id}/media_publish",
-    defaultScopes: ["instagram_basic", "instagram_content_publish"],
-  },
-  linkedin: {
-    name: "LinkedIn",
-    authUrl: "https://www.linkedin.com/oauth/v2/authorization",
-    tokenUrl: "https://www.linkedin.com/oauth/v2/accessToken",
-    profileUrl: "https://api.linkedin.com/v2/me",
-    postUrl: "https://api.linkedin.com/v2/ugcPosts",
-    defaultScopes: ["w_member_social", "r_liteprofile", "r_emailaddress"],
-  },
-  twitter: {
-    name: "Twitter/X",
-    authUrl: "https://twitter.com/i/oauth2/authorize",
-    tokenUrl: "https://api.twitter.com/2/oauth2/token",
-    profileUrl: "https://api.twitter.com/2/users/me?user.fields=profile_image_url,username",
-    postUrl: "https://api.twitter.com/2/tweets",
-    defaultScopes: ["tweet.read", "tweet.write", "users.read", "offline.access"],
-  },
-  pinterest: {
-    name: "Pinterest",
-    authUrl: "https://www.pinterest.com/oauth/",
-    tokenUrl: "https://api.pinterest.com/v5/oauth/token",
-    profileUrl: "https://api.pinterest.com/v5/user_account",
-    postUrl: "https://api.pinterest.com/v5/pins",
-    defaultScopes: ["boards:read", "pins:read", "pins:write", "user_accounts:read"],
-  },
+  facebook: { name: "Facebook Pages", client: "FACEBOOK", authUrl: "https://www.facebook.com/dialog/oauth", tokenUrl: "https://graph.facebook.com/oauth/access_token", scopes: ["pages_show_list", "pages_read_engagement", "pages_manage_posts"] },
+  instagram: { name: "Instagram", client: "INSTAGRAM", authUrl: "https://www.instagram.com/oauth/authorize", tokenUrl: "https://api.instagram.com/oauth/access_token", scopes: ["instagram_business_basic", "instagram_business_content_publish"] },
+  linkedin: { name: "LinkedIn", client: "LINKEDIN", authUrl: "https://www.linkedin.com/oauth/v2/authorization", tokenUrl: "https://www.linkedin.com/oauth/v2/accessToken", scopes: ["openid", "profile", "email", "w_member_social"] },
+  twitter: { name: "Twitter/X", client: "TWITTER", authUrl: "https://x.com/i/oauth2/authorize", tokenUrl: "https://api.x.com/2/oauth2/token", scopes: ["tweet.read", "tweet.write", "users.read", "offline.access"] },
+  pinterest: { name: "Pinterest", client: "PINTEREST", authUrl: "https://www.pinterest.com/oauth/", tokenUrl: "https://api.pinterest.com/v5/oauth/token", scopes: ["user_accounts:read", "boards:read", "pins:read", "pins:write"] },
 };
 
-class RevokedPermissionError extends Error {
-  constructor(platform, message) {
-    super(`Permissions for ${platform} have been revoked or expired: ${message}`);
-    this.name = "RevokedPermissionError";
-    this.platform = platform;
-    this.status = "revoked";
-  }
+const BUFFER_MS = 5 * 60 * 1000;
+const LINKEDIN_API_VERSION = "202601";
+class RevokedPermissionError extends Error { constructor(platform, message) { super(`Permissions for ${platform} have been revoked or expired: ${message}`); this.name = "RevokedPermissionError"; this.platform = platform; this.status = "revoked"; } }
+function getPlatformConfig(platform) { const p = String(platform || "").toLowerCase(); if (!SUPPORTED_PLATFORMS[p]) throw new Error(`Unsupported social media platform: '${platform}'`); return { ...SUPPORTED_PLATFORMS[p], platform: p }; }
+function tenantIdForUser(user) { const tenantId = user?.tenantId || user?._id; if (!tenantId) throw new Error("Tenant context is required"); return tenantId; }
+async function credentials(tenantId, config) {
+  const stored = await TenantSocialCredential.findOne({ tenantId, platform: config.platform, enabled: true }).select("+clientId +clientSecret");
+  if (!stored) throw new Error(`${config.name} is not configured for this tenant`);
+  const id = decrypt(stored.clientId); const secret = decrypt(stored.clientSecret); const redirectUri = stored.redirectUri;
+  if (!id || !secret || !redirectUri) throw new Error(`${config.name} has incomplete OAuth configuration`);
+  if (!/^https:\/\//i.test(redirectUri) && process.env.NODE_ENV === "production") throw new Error(`${config.platform} redirect URI must use HTTPS in production`);
+  return { id, secret, redirectUri };
 }
-
-/**
- * Validates if the requested platform is supported.
- * @param {string} platform - Platform ID (e.g. 'facebook', 'instagram').
- * @returns {Object} Platform config.
- */
-function getPlatformConfig(platform) {
-  const normalized = String(platform || "").toLowerCase();
-  const config = SUPPORTED_PLATFORMS[normalized];
-  if (!config) {
-    throw new Error(`Unsupported social media platform: '${platform}'. Supported platforms are: ${Object.keys(SUPPORTED_PLATFORMS).join(", ")}`);
-  }
-  return config;
+async function getAuthUrl(platform, state, tenantId, redirectUri) {
+  const config = getPlatformConfig(platform); const c = await credentials(tenantId, config);
+  if (!state) throw new Error("OAuth state is required");
+  if (redirectUri && redirectUri !== c.redirectUri) throw new Error("redirect URI cannot be overridden");
+  const params = new URLSearchParams({ client_id: c.id, redirect_uri: c.redirectUri, response_type: "code", scope: config.scopes.join(config.platform === "pinterest" ? "," : " "), state });
+  return `${config.authUrl}?${params}`;
 }
-
-/**
- * Generates the exact OAuth authorization URL for connecting the specified social media account.
- * @param {string} platform - Target platform.
- * @param {string} state - State string (e.g., userId and CSRF token).
- * @param {string} redirectUri - Optional override redirect URI.
- * @returns {string} Fully qualified authorization URL.
- */
-function getAuthUrl(platform, state = "", redirectUri = "") {
-  const config = getPlatformConfig(platform);
-  const clientId = process.env[`${platform.toUpperCase()}_CLIENT_ID`] || `mock_${platform}_client_id`;
-  const callbackUrl = redirectUri || process.env[`${platform.toUpperCase()}_REDIRECT_URI`] || `http://localhost:5000/api/social-integrations/callback/${platform}`;
-  const scopes = config.defaultScopes.join(" ");
-
-  const params = new URLSearchParams({
-    client_id: clientId,
-    redirect_uri: callbackUrl,
-    response_type: "code",
-    scope: scopes,
-    state,
-  });
-
-  return `${config.authUrl}?${params.toString()}`;
+function pkce() { const verifier = crypto.randomBytes(32).toString("base64url"); const challenge = crypto.createHash("sha256").update(verifier).digest("base64url"); return { verifier, challenge }; }
+function redact(connection) { const providerData = connection.providerData || {}; return { platform: connection.platform, status: connection.status, providerAccountId: connection.providerAccountId, providerUsername: connection.providerUsername, profileName: connection.profileName, profileImageUrl: connection.profileImageUrl, scopes: connection.scopes, connectedAt: connection.connectedAt, tokenExpiresAt: connection.tokenExpiresAt, providerData: { pages: (providerData.pages || []).map((p) => ({ id: p.id, name: p.name, image: p.picture?.data?.url || "" })), boards: providerData.boards || [] } }; }
+async function createAuthorizationRequest(user, platform, returnTo) {
+  const config = getPlatformConfig(platform); const tenantId = tenantIdForUser(user); const c = await credentials(tenantId, config); const state = crypto.randomBytes(32).toString("hex"); const stateHash = crypto.createHash("sha256").update(state).digest("hex"); const x = config.platform === "twitter" ? pkce() : { verifier: null, challenge: null };
+  await OAuthState.create({ userId: user._id, tenantId, platform: config.platform, stateHash, codeVerifier: x.verifier, redirectUri: c.redirectUri, returnTo: returnTo || process.env.FRONTEND_URL || "/", expiresAt: new Date(Date.now() + 10 * 60 * 1000) });
+  let url = await getAuthUrl(config.platform, state, tenantId);
+  if (x.challenge) url += `&code_challenge=${encodeURIComponent(x.challenge)}&code_challenge_method=S256`;
+  return url;
 }
-
-/**
- * Exchanges authorization code for tokens, retrieves profile metadata, encrypts tokens, and structures the account object.
- * @param {string} platform - Target platform.
- * @param {string} code - OAuth code from callback.
- * @param {string} redirectUri - Redirect URI used in initial authorization.
- * @returns {Promise<Object>} Structured account metadata suitable for User.socialMediaAccounts[platform].
- */
-async function exchangeCodeAndFetchProfile(platform, code, redirectUri = "") {
-  const config = getPlatformConfig(platform);
-  if (!code) {
-    throw new Error("Authorization code is required for token exchange");
-  }
-
-  const clientId = process.env[`${platform.toUpperCase()}_CLIENT_ID`] || `mock_${platform}_client_id`;
-  const clientSecret = process.env[`${platform.toUpperCase()}_CLIENT_SECRET`] || `mock_${platform}_client_secret`;
-  const callbackUrl = redirectUri || process.env[`${platform.toUpperCase()}_REDIRECT_URI`] || `http://localhost:5000/api/social-integrations/callback/${platform}`;
-
-  let accessToken = `mock_access_${platform}_${code}`;
-  let refreshToken = `mock_refresh_${platform}_${code}`;
-  let expiresIn = 3600;
-  let platformUserId = `user_${platform}_12345`;
-  let platformUsername = `urban_${platform}_user`;
-  let profileName = `UrbanCitations ${config.name} Page`;
-  let profileImageUrl = "https://img.icons8.com/color/96/000000/share.png";
-
-  // If live credentials exist, exchange against real token and profile endpoints
-  if (clientId !== `mock_${platform}_client_id` && clientSecret !== `mock_${platform}_client_secret`) {
-    try {
-      const tokenRes = await axios.post(
-        config.tokenUrl,
-        new URLSearchParams({
-          client_id: clientId,
-          client_secret: clientSecret,
-          code,
-          redirect_uri: callbackUrl,
-          grant_type: "authorization_code",
-        }).toString(),
-        { headers: { "Content-Type": "application/x-www-form-urlencoded" } }
-      );
-
-      accessToken = tokenRes.data?.access_token || accessToken;
-      refreshToken = tokenRes.data?.refresh_token || refreshToken;
-      expiresIn = Number(tokenRes.data?.expires_in || 3600);
-
-      // Fetch user info
-      const profileRes = await axios.get(config.profileUrl, {
-        headers: { Authorization: `Bearer ${accessToken}` },
-      });
-
-      if (profileRes.data) {
-        platformUserId = String(profileRes.data.id || profileRes.data.data?.id || platformUserId);
-        platformUsername = profileRes.data.username || profileRes.data.data?.username || platformUsername;
-        profileName = profileRes.data.name || profileRes.data.data?.name || profileName;
-        profileImageUrl = profileRes.data.picture?.data?.url || profileRes.data.data?.profile_image_url || profileImageUrl;
-      }
-    } catch (err) {
-      logger.error(`OAuth token exchange failed for ${platform}`, { error: err.message });
-      if (err.response?.status === 401 || err.response?.status === 403 || err.response?.data?.error === "invalid_grant") {
-        throw new RevokedPermissionError(platform, "Invalid or expired authorization code");
-      }
-      throw new Error(`Failed to exchange token with ${config.name}: ${err.message}`);
-    }
-  }
-
-  const tokenExpiry = new Date(Date.now() + expiresIn * 1000);
-
-  return {
-    isConnected: true,
-    status: "connected",
-    platformUserId,
-    platformUsername,
-    profileName,
-    profileImageUrl,
-    accessToken: encrypt(accessToken),
-    refreshToken: refreshToken ? encrypt(refreshToken) : null,
-    tokenExpiry,
-    connectedAt: new Date(),
-    scopes: config.defaultScopes,
-  };
+async function consumeState(platform, state) {
+  if (!state) throw new Error("Missing OAuth state"); const stateHash = crypto.createHash("sha256").update(state).digest("hex"); const record = await OAuthState.findOneAndDelete({ platform, stateHash, expiresAt: { $gt: new Date() } }); if (!record) throw new Error("Invalid or expired OAuth state"); return record;
 }
-
-/**
- * Retrieves a valid decrypted access token for the specified platform.
- * Automatically refreshes the token if expired. If permission is revoked or refresh fails with 401/invalid_grant,
- * marks account status as 'revoked' on the user model and throws a RevokedPermissionError.
- * @param {Object} user - Mongoose User document containing `socialMediaAccounts`.
- * @param {string} platform - Target platform (`facebook`, `instagram`, `linkedin`, `twitter`, `pinterest`).
- * @returns {Promise<string>} Valid decrypted access token.
- */
+async function tokenRequest(config, body, codeVerifier, c) {
+  const params = new URLSearchParams({ ...body, client_id: c.id }); if (body.grant_type === "authorization_code") params.set("redirect_uri", c.redirectUri); if (codeVerifier) params.set("code_verifier", codeVerifier);
+  const headers = { "Content-Type": "application/x-www-form-urlencoded" }; if (config.platform === "pinterest" || config.platform === "twitter") headers.Authorization = `Basic ${Buffer.from(`${c.id}:${c.secret}`).toString("base64")}`; else params.set("client_secret", c.secret);
+  const response = await axios.post(config.tokenUrl, params.toString(), { headers, timeout: 15000 }); return response.data;
+}
+async function apiGet(url, token, params) { return (await axios.get(url, { headers: { Authorization: `Bearer ${token}` }, params, timeout: 15000 })).data; }
+async function profileFor(config, token) {
+  if (config.platform === "linkedin") { const p = await apiGet("https://api.linkedin.com/v2/userinfo", token); return { id: p.sub, username: p.email || "", name: p.name, image: p.picture }; }
+  if (config.platform === "twitter") { const p = await apiGet("https://api.x.com/2/users/me", token, { "user.fields": "profile_image_url,username,name" }); return { id: p.data.id, username: p.data.username, name: p.data.name, image: p.data.profile_image_url }; }
+  if (config.platform === "pinterest") { const p = await apiGet("https://api.pinterest.com/v5/user_account", token); return { id: p.username, username: p.username, name: p.business_name || p.username, image: p.profile_image }; }
+  if (config.platform === "instagram") { const p = await apiGet("https://graph.instagram.com/me", token, { fields: "user_id,username,name,profile_picture_url" }); return { id: p.user_id || p.id, username: p.username, name: p.name || p.username, image: p.profile_picture_url }; }
+  const [me, p] = await Promise.all([apiGet("https://graph.facebook.com/me", token, { fields: "id,name" }), apiGet("https://graph.facebook.com/me/accounts", token, { fields: "id,name,access_token,picture", limit: 100 })]); return { id: String(me.id || ""), username: "", name: me.name || "", image: "", pages: p.data || [] };
+}
+async function exchangeCodeAndFetchProfile(platform, code, redirectUri, codeVerifier, tenantId) {
+  const config = getPlatformConfig(platform); const c = await credentials(tenantId, config); if (redirectUri && redirectUri !== c.redirectUri) throw new Error("redirect URI cannot be overridden"); if (!code) throw new Error("Authorization code is required");
+  const data = await tokenRequest(config, { code, grant_type: "authorization_code" }, codeVerifier, c); if (!data.access_token) throw new Error(`${config.name} did not return an access token`); const profile = await profileFor(config, data.access_token);
+  const expires = data.expires_in ? new Date(Date.now() + Number(data.expires_in) * 1000) : null; const refreshExpires = data.refresh_token_expires_in ? new Date(Date.now() + Number(data.refresh_token_expires_in) * 1000) : null;
+  return { status: "connected", providerAccountId: profile.id, providerUsername: profile.username || "", profileName: profile.name || "", profileImageUrl: profile.image || "", accessToken: encrypt(data.access_token), refreshToken: data.refresh_token ? encrypt(data.refresh_token) : null, tokenExpiresAt: expires, refreshTokenExpiresAt: refreshExpires, connectedAt: new Date(), scopes: String(data.scope || config.scopes.join(" ")).split(/[ ,]+/).filter(Boolean), providerData: { pages: (profile.pages || []).map((page) => ({ ...page, access_token: encrypt(page.access_token) })) } };
+}
+async function connectFromCallback(platform, code, state) { const config = getPlatformConfig(platform); const tx = await consumeState(config.platform, state); const account = await exchangeCodeAndFetchProfile(config.platform, code, tx.redirectUri, tx.codeVerifier, tx.tenantId); const saved = await SocialConnection.findOneAndUpdate({ tenantId: tx.tenantId, userId: tx.userId, platform: config.platform }, { ...account, tenantId: tx.tenantId, userId: tx.userId, platform: config.platform, lastError: null }, { upsert: true, new: true, setDefaultsOnInsert: true }); if (config.platform === "pinterest") { try { const boards = await apiGet("https://api.pinterest.com/v5/boards", decrypt(saved.accessToken)); saved.providerData = { ...(saved.providerData || {}), boards: (boards.items || []).map((b) => ({ id: b.id, name: b.name })) }; await saved.save(); } catch (error) { logger.warn("pinterest.boards.fetch.failed", { userId: tx.userId, tenantId: tx.tenantId, error: error.message }); } } return { userId: tx.userId, tenantId: tx.tenantId, account: saved, returnTo: tx.returnTo }; }
+async function findConnection(user, platform) { const p = getPlatformConfig(platform).platform; const tenantId = tenantIdForUser(user); if (SocialConnection.db.readyState !== 1) throw new Error("Database connection is required for social integrations"); return SocialConnection.findOne({ tenantId, userId: user._id, platform: p }).select("+accessToken +refreshToken +providerData"); }
+async function saveConnection(connection) { if (connection && typeof connection.save === "function") await connection.save(); }
 async function getValidAccessToken(user, platform) {
-  const normalized = platform.toLowerCase();
-  getPlatformConfig(normalized); // validate platform name
-
-  if (!user || !user.socialMediaAccounts || !user.socialMediaAccounts[normalized] || !user.socialMediaAccounts[normalized].isConnected) {
-    throw new Error(`User has not connected their ${normalized} account.`);
-  }
-
-  const account = user.socialMediaAccounts[normalized];
-  if (account.status === "revoked") {
-    throw new RevokedPermissionError(normalized, "Account permissions previously revoked by user or platform.");
-  }
-
-  const now = new Date();
-  const expiry = account.tokenExpiry ? new Date(account.tokenExpiry) : new Date(0);
-
-  // If token is still valid (> 5 minutes buffer)
-  if (account.accessToken && expiry.getTime() - now.getTime() > 5 * 60 * 1000) {
-    const decryptedAccess = decrypt(account.accessToken);
-    if (decryptedAccess) return decryptedAccess;
-  }
-
-  // Needs refresh
-  if (!account.refreshToken) {
-    account.status = "expired";
-    if (typeof user.save === "function") await user.save();
-    throw new Error(`Access token for ${normalized} has expired and no refresh token exists. Please reconnect account.`);
-  }
-
-  const decryptedRefresh = decrypt(account.refreshToken);
-  if (!decryptedRefresh) {
-    account.status = "revoked";
-    if (typeof user.save === "function") await user.save();
-    throw new RevokedPermissionError(normalized, "Could not decrypt refresh token");
-  }
-
-  const config = getPlatformConfig(normalized);
-  const clientId = process.env[`${normalized.toUpperCase()}_CLIENT_ID`] || `mock_${normalized}_client_id`;
-  const clientSecret = process.env[`${normalized.toUpperCase()}_CLIENT_SECRET`] || `mock_${normalized}_client_secret`;
-
-  // If using mock secrets in dev, return refreshed mock token safely
-  if (clientId === `mock_${normalized}_client_id`) {
-    const newMockAccess = `mock_refreshed_access_${normalized}_${Date.now()}`;
-    account.accessToken = encrypt(newMockAccess);
-    account.tokenExpiry = new Date(Date.now() + 3600 * 1000);
-    account.status = "connected";
-    if (typeof user.save === "function") await user.save();
-    return newMockAccess;
-  }
-
-  try {
-    const refreshRes = await axios.post(
-      config.tokenUrl,
-      new URLSearchParams({
-        client_id: clientId,
-        client_secret: clientSecret,
-        refresh_token: decryptedRefresh,
-        grant_type: "refresh_token",
-      }).toString(),
-      { headers: { "Content-Type": "application/x-www-form-urlencoded" } }
-    );
-
-    const newAccessToken = refreshRes.data.access_token;
-    const newRefresh = refreshRes.data.refresh_token || decryptedRefresh;
-    const newExpiry = new Date(Date.now() + (refreshRes.data.expires_in || 3600) * 1000);
-
-    account.accessToken = encrypt(newAccessToken);
-    account.refreshToken = encrypt(newRefresh);
-    account.tokenExpiry = newExpiry;
-    account.status = "connected";
-
-    if (typeof user.save === "function") {
-      await user.save();
-      logger.info(`Successfully refreshed access token for ${normalized}`, { userId: user._id });
-    }
-
-    return newAccessToken;
-  } catch (err) {
-    logger.error(`Token refresh failed for ${normalized}`, { error: err.message, userId: user._id });
-    if (err.response?.status === 401 || err.response?.status === 403 || err.response?.data?.error === "invalid_grant") {
-      account.status = "revoked";
-      if (typeof user.save === "function") await user.save();
-      throw new RevokedPermissionError(normalized, "Platform rejected refresh token (revoked or expired)");
-    }
-    throw new Error(`Failed to refresh token with ${config.name}: ${err.message}`);
-  }
+  const config = getPlatformConfig(platform); const account = await findConnection(user, config.platform); if (!account || account.status !== "connected") throw new Error(`Account ${config.name} is not connected`);
+  const expiry = account.tokenExpiresAt || account.tokenExpiry; if (account.accessToken && expiry && new Date(expiry).getTime() - Date.now() > BUFFER_MS) return decrypt(account.accessToken);
+  if (!account.refreshToken && config.platform !== "instagram") { account.status = "expired"; await saveConnection(account); throw new Error(`Access token for ${config.name} expired; reconnect is required`); }
+  try { const refresh = account.refreshToken ? decrypt(account.refreshToken) : decrypt(account.accessToken); const c = await credentials(tenantIdForUser(user), config); const data = config.platform === "instagram" ? (await axios.get("https://graph.instagram.com/refresh_access_token", { params: { grant_type: "ig_refresh_token", access_token: refresh }, timeout: 15000 })).data : await tokenRequest(config, { grant_type: "refresh_token", refresh_token: refresh }, null, c); if (!data.access_token) throw new Error("refresh response missing access token"); account.accessToken = encrypt(data.access_token); if (data.refresh_token) account.refreshToken = encrypt(data.refresh_token); account.tokenExpiresAt = new Date(Date.now() + Number(data.expires_in || 3600) * 1000); account.status = "connected"; account.lastError = null; await saveConnection(account); return data.access_token; }
+  catch (err) { account.status = /401|403|invalid_grant|Authentication failed/i.test(err.message) ? "revoked" : "expired"; account.lastError = err.message; await saveConnection(account); throw new RevokedPermissionError(config.platform, "refresh failed; reconnect is required"); }
 }
-
-/**
- * Disconnects a social media account and sets status to 'not_connected'.
- * @param {Object} user - User document.
- * @param {string} platform - Target platform.
- */
-async function disconnectAccount(user, platform) {
-  const normalized = platform.toLowerCase();
-  getPlatformConfig(normalized); // validate
-
-  if (!user || !user.socialMediaAccounts) return;
-
-  user.socialMediaAccounts[normalized] = {
-    isConnected: false,
-    status: "not_connected",
-    platformUserId: "",
-    platformUsername: "",
-    profileName: "",
-    profileImageUrl: "",
-    accessToken: null,
-    refreshToken: null,
-    tokenExpiry: null,
-    connectedAt: null,
-    scopes: [],
-  };
-
-  if (typeof user.save === "function") {
-    await user.save();
-    logger.info(`Disconnected social media account ${normalized} cleanly`, { userId: user._id });
-  }
-}
-
-/**
- * Verifies that the user has a valid connected account and executes/verifies a post ONLY against supported official endpoints.
- * @param {Object} user - User document.
- * @param {string} platform - Target platform (`facebook`, `instagram`, `linkedin`, `twitter`, `pinterest`).
- * @param {Object} postData - Post payload (`{ text, imageUrl, linkUrl }`).
- * @returns {Promise<Object>} Verification and publication result.
- */
+async function disconnectAccount(user, platform) { const config = getPlatformConfig(platform); const tenantId = tenantIdForUser(user); if (SocialConnection.db.readyState !== 1) throw new Error("Database connection is required for social integrations"); await SocialConnection.deleteOne({ tenantId, userId: user._id, platform: config.platform }); }
+async function listAccounts(user) { const result = {}; for (const p of Object.keys(SUPPORTED_PLATFORMS)) { const c = await findConnection(user, p); result[p] = c ? redact(c) : { platform: p, status: "not_connected" }; } return result; }
+async function listTenantCredentials(user) { const tenantId = tenantIdForUser(user); const rows = await TenantSocialCredential.find({ tenantId }).select("platform redirectUri enabled updatedAt").lean(); const byPlatform = new Map(rows.map((row) => [row.platform, row])); return [ ...Object.keys(SUPPORTED_PLATFORMS), "google_business" ].map((platform) => { const row = byPlatform.get(platform); return { platform, configured: Boolean(row?.enabled), redirectUri: row?.redirectUri || null, updatedAt: row?.updatedAt || null }; }); }
+async function saveTenantCredential(user, platform, input = {}) { const tenantId = tenantIdForUser(user); const normalized = platform === "google" ? "google_business" : String(platform || "").toLowerCase(); const config = normalized === "google_business" ? { name: "Google Business Profile", platform: normalized } : getPlatformConfig(normalized); const clientId = String(input.clientId || "").trim(); const clientSecret = String(input.clientSecret || "").trim(); const redirectUri = String(input.redirectUri || "").trim(); if (!clientId || !clientSecret || !redirectUri) throw new Error("clientId, clientSecret, and redirectUri are required"); let parsed; try { parsed = new URL(redirectUri); } catch { throw new Error("redirectUri must be a valid absolute URL"); } if (process.env.NODE_ENV === "production" && parsed.protocol !== "https:") throw new Error("redirectUri must use HTTPS in production"); return TenantSocialCredential.findOneAndUpdate({ tenantId, platform: normalized }, { tenantId, platform: normalized, clientId: encrypt(clientId), clientSecret: encrypt(clientSecret), redirectUri, enabled: true, createdBy: user._id, updatedBy: user._id }, { upsert: true, new: true, setDefaultsOnInsert: true }).select("platform redirectUri enabled updatedAt"); }
+async function deleteTenantCredential(user, platform) { const tenantId = tenantIdForUser(user); const normalized = platform === "google" ? "google_business" : String(platform || "").toLowerCase(); if (![...Object.keys(SUPPORTED_PLATFORMS), "google_business"].includes(normalized)) throw new Error("Unsupported integration platform"); await TenantSocialCredential.deleteOne({ tenantId, platform: normalized }); await OAuthState.deleteMany({ tenantId, platform: normalized }); if (normalized === "google_business") { await GoogleBusinessConnection.deleteMany({ tenantId }); return; } await SocialConnection.deleteMany({ tenantId, platform: normalized }); }
+function retryable(err) { return [408, 429, 500, 502, 503, 504].includes(err.response?.status); }
+async function requestWithRetry(fn, attempts = 3) { let last; for (let i = 0; i < attempts; i += 1) { try { return await fn(); } catch (err) { last = err; if (!retryable(err) || i === attempts - 1) throw err; await new Promise((resolve) => setTimeout(resolve, 250 * 2 ** i)); } } throw last; }
 async function verifyOrPostToPlatform(user, platform, postData = {}) {
-  const normalized = platform.toLowerCase();
-  const config = getPlatformConfig(normalized);
-
-  if (!user || !user.socialMediaAccounts || !user.socialMediaAccounts[normalized]) {
-    throw new Error(`Account ${config.name} is not connected`);
-  }
-
-  const account = user.socialMediaAccounts[normalized];
-  if (account.status === "revoked") {
-    throw new RevokedPermissionError(normalized, "Account permissions previously revoked by user or platform.");
-  }
-  if (account.status !== "connected") {
-    throw new Error(`Account ${config.name} is not in 'connected' status (current status: ${account.status})`);
-  }
-
-  const accessToken = await getValidAccessToken(user, normalized);
-
-  if (!postData.text && !postData.imageUrl) {
-    throw new Error("Post payload must contain at least 'text' or 'imageUrl'");
-  }
-
-  // Check if live or mock execution
-  const clientId = process.env[`${normalized.toUpperCase()}_CLIENT_ID`] || `mock_${normalized}_client_id`;
-  if (clientId === `mock_${normalized}_client_id`) {
-    logger.info(`Mock post execution verified against official supported endpoint: ${config.postUrl}`, {
-      platform: normalized,
-      userId: user._id,
-      postData,
-    });
-    return {
-      success: true,
-      platform: normalized,
-      platformName: config.name,
-      endpointUsed: config.postUrl,
-      postId: `${normalized}_post_${Date.now()}`,
-      status: "published",
-      message: `Post successfully validated and sent to ${config.name} official API endpoint (${config.postUrl})`,
-    };
-  }
-
-  // Live API publishing to official supported endpoints
+  const config = getPlatformConfig(platform); const account = await findConnection(user, config.platform); const token = await getValidAccessToken(user, config.platform); const text = String(postData.text || "").trim(); if (!text && !postData.imageUrl && !postData.videoUrl) throw new Error("Post must contain text or supported media"); let response;
   try {
-    let res;
-    if (normalized === "facebook") {
-      res = await axios.post(
-        config.postUrl,
-        { message: postData.text, link: postData.linkUrl },
-        { headers: { Authorization: `Bearer ${accessToken}` } }
-      );
-    } else if (normalized === "twitter") {
-      res = await axios.post(
-        config.postUrl,
-        { text: postData.text },
-        { headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" } }
-      );
-    } else if (normalized === "linkedin") {
-      res = await axios.post(
-        config.postUrl,
-        {
-          author: `urn:li:person:${account.platformUserId}`,
-          lifecycleState: "PUBLISHED",
-          specificContent: {
-            "com.linkedin.ugc.ShareContent": {
-              shareCommentary: { text: postData.text },
-              shareMediaCategory: "NONE",
-            },
-          },
-          visibility: { "com.linkedin.ugc.MemberNetworkVisibility": "PUBLIC" },
-        },
-        { headers: { Authorization: `Bearer ${accessToken}`, "X-Restli-Protocol-Version": "2.0.0" } }
-      );
-    } else if (normalized === "pinterest") {
-      res = await axios.post(
-        config.postUrl,
-        {
-          title: postData.text.slice(0, 100),
-          description: postData.text,
-          board_id: postData.boardId || account.platformUserId,
-          media_source: { source_type: "image_url", url: postData.imageUrl || "https://example.com/pin.jpg" },
-        },
-        { headers: { Authorization: `Bearer ${accessToken}` } }
-      );
-    } else if (normalized === "instagram") {
-      // Instagram requires two-step container creation + publish
-      // Step 1: Create media container
-      const containerRes = await axios.post(
-        `https://graph.facebook.com/v${process.env.FACEBOOK_API_VERSION || "19.0"}/${account.platformUserId}/media`,
-        { image_url: postData.imageUrl, caption: postData.text, access_token: accessToken },
-        { headers: { Authorization: `Bearer ${accessToken}` } }
-      );
-      const containerId = containerRes.data?.id;
-      if (!containerId) {
-        throw new Error("Instagram container creation succeeded but no container ID was returned");
-      }
-      // Step 2: Publish the container (mandatory – without this call the post is never published)
-      res = await axios.post(
-        `https://graph.facebook.com/v${process.env.FACEBOOK_API_VERSION || "19.0"}/${account.platformUserId}/media_publish`,
-        { creation_id: containerId, access_token: accessToken },
-        { headers: { Authorization: `Bearer ${accessToken}` } }
-      );
-      logger.info("Instagram two-step publish completed", { userId: user._id, containerId, publishedId: res.data?.id });
-    } else {
-      throw new Error(`Posting for ${normalized} is not configured against official endpoints`);
-    }
-
-    return {
-      success: true,
-      platform: normalized,
-      platformName: config.name,
-      endpointUsed: config.postUrl,
-      postId: res?.data?.id || res?.data?.data?.id || `${normalized}_post_live_${Date.now()}`,
-      status: "published",
-      message: `Successfully posted to ${config.name}`,
-    };
-  } catch (err) {
-    logger.error(`Error posting to ${normalized}`, { error: err.message, response: err.response?.data });
-    if (err.response?.status === 401 || err.response?.status === 403 || err.response?.data?.error === "invalid_grant") {
-      account.status = "revoked";
-      if (typeof user.save === "function") await user.save();
-      throw new RevokedPermissionError(normalized, "Permission revoked or unauthorized when attempting to publish post");
-    }
-    throw new Error(`Failed to publish post to ${config.name}: ${err.message}`);
-  }
+    if (config.platform === "facebook") { const page = (account.providerData?.pages || []).find((x) => String(x.id) === String(postData.pageId)); if (!page?.access_token) throw new Error("Select a connected Facebook Page before posting"); response = await requestWithRetry(() => axios.post(`https://graph.facebook.com/${page.id}/feed`, { message: text, link: postData.linkUrl }, { params: { access_token: decrypt(page.access_token) }, timeout: 15000 })); }
+    else if (config.platform === "instagram") { if (!postData.imageUrl && !postData.videoUrl) throw new Error("Instagram publishing requires a public image or video URL"); const container = await requestWithRetry(() => axios.post(`https://graph.instagram.com/${account.providerAccountId}/media`, { image_url: postData.imageUrl, video_url: postData.videoUrl, caption: text, media_type: postData.videoUrl ? "VIDEO" : "IMAGE", access_token: token }, { timeout: 15000 })); response = await requestWithRetry(() => axios.post(`https://graph.instagram.com/${account.providerAccountId}/media_publish`, { creation_id: container.data.id, access_token: token }, { timeout: 15000 })); }
+    else if (config.platform === "linkedin") { response = await requestWithRetry(() => axios.post("https://api.linkedin.com/rest/posts", { author: `urn:li:person:${account.providerAccountId}`, commentary: text, visibility: "PUBLIC", distribution: { feedDistribution: "MAIN_FEED", targetEntities: [], thirdPartyDistributionChannels: [] }, lifecycleState: "PUBLISHED" }, { headers: { Authorization: `Bearer ${token}`, "LinkedIn-Version": LINKEDIN_API_VERSION, "X-Restli-Protocol-Version": "2.0.0", "Content-Type": "application/json" }, timeout: 15000 })); }
+    else if (config.platform === "twitter") { if (postData.imageUrl || postData.videoUrl) throw new Error("Twitter/X media publishing is not enabled because the official media upload flow is separate; text-only posts are supported"); response = await requestWithRetry(() => axios.post("https://api.x.com/2/tweets", { text }, { headers: { Authorization: `Bearer ${token}` }, timeout: 15000 })); }
+    else if (config.platform === "pinterest") { if (!postData.boardId || !postData.imageUrl) throw new Error("Pinterest publishing requires a user-selected boardId and public imageUrl"); response = await requestWithRetry(() => axios.post("https://api.pinterest.com/v5/pins", { board_id: postData.boardId, description: text, media_source: { source_type: "image_url", url: postData.imageUrl } }, { headers: { Authorization: `Bearer ${token}` }, timeout: 15000 })); }
+    return { success: true, platform: config.platform, platformName: config.name, postId: response.data?.id || response.headers?.["x-restli-id"], status: "published" };
+  } catch (err) { logger.error("social.publish.failed", { userId: user?._id, platform: config.platform, status: err.response?.status, error: err.message }); if ([401, 403].includes(err.response?.status)) { account.status = "revoked"; await saveConnection(account); throw new RevokedPermissionError(config.platform, "provider rejected the request"); } throw new Error(`Failed to publish to ${config.name}: ${err.message}`); }
 }
-
-module.exports = {
-  SUPPORTED_PLATFORMS,
-  RevokedPermissionError,
-  getPlatformConfig,
-  getAuthUrl,
-  exchangeCodeAndFetchProfile,
-  getValidAccessToken,
-  disconnectAccount,
-  verifyOrPostToPlatform,
-};
+module.exports = { SUPPORTED_PLATFORMS, RevokedPermissionError, getPlatformConfig, getAuthUrl, createAuthorizationRequest, connectFromCallback, exchangeCodeAndFetchProfile, getValidAccessToken, disconnectAccount, listAccounts, listTenantCredentials, saveTenantCredential, deleteTenantCredential, verifyOrPostToPlatform, redact };

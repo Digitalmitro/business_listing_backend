@@ -1,0 +1,6 @@
+"use strict";
+const service = require("../services/socialIntegrationService");
+const logger = require("../utils/logger");
+exports.list = async (req, res) => { try { return res.json({ success: true, credentials: await service.listTenantCredentials(req.user) }); } catch (error) { logger.error("social.credentials.list.failed", { tenantId: req.tenantId, error: error.message }); return res.status(500).json({ success: false, message: "Unable to load integration configuration" }); } };
+exports.save = async (req, res) => { try { const credential = await service.saveTenantCredential(req.user, req.params.platform, req.body); return res.status(200).json({ success: true, credential: { platform: credential.platform, configured: true, redirectUri: credential.redirectUri, updatedAt: credential.updatedAt } }); } catch (error) { logger.error("social.credentials.save.failed", { tenantId: req.tenantId, platform: req.params.platform, error: error.message }); return res.status(400).json({ success: false, message: error.message }); } };
+exports.remove = async (req, res) => { try { await service.deleteTenantCredential(req.user, req.params.platform); return res.json({ success: true }); } catch (error) { return res.status(400).json({ success: false, message: error.message }); } };

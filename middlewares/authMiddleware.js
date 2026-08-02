@@ -5,6 +5,7 @@ const jwt     = require("jsonwebtoken");
 const Admin   = require("../models/Admin");
 const User    = require("../models/User");
 const logger  = require("../utils/logger");
+const Tenant  = require("../models/Tenant");
 
 /**
  * JWT authentication middleware.
@@ -39,6 +40,17 @@ const authMiddleware = async (req, res, next) => {
     if (!principal) {
       return res.status(401).json({ success: false, message: "User not found or account removed" });
     }
+
+    if (!principal.tenantId) {
+      const tenant = await Tenant.findOneAndUpdate(
+        { ownerUserId: principal._id },
+        { $setOnInsert: { ownerUserId: principal._id, name: principal.full_name || principal.email || "Tenant" } },
+        { upsert: true, new: true, setDefaultsOnInsert: true }
+      );
+      principal.tenantId = tenant._id;
+      await principal.save();
+    }
+    req.tenantId = principal.tenantId;
 
     req.user = principal;
     next();

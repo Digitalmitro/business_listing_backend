@@ -10,11 +10,11 @@ const { addJob } = require("../utils/queue");
 /**
  * Publishes content immediately across selected social media platforms.
  * Handles partial posting failures by recording exact per-platform outcomes without aborting other broadcasts.
- * @param {Object} user - User document containing connected `socialMediaAccounts`.
+ * @param {Object} user - Authenticated user; connections are loaded by user ID from SocialConnection.
  * @param {Object} payload - Payload with `{ caption, media, platforms }`.
  * @returns {Promise<Object>} Created SocialPostHistory record and summary.
  */
-async function publishUnifiedPost(user, { caption = "", media = [], platforms = [] } = {}) {
+async function publishUnifiedPost(user, { caption = "", media = [], platforms = [], platformOptions = {} } = {}) {
   if (!user || !user._id) {
     throw new Error("User authentication required for publishing social media posts");
   }
@@ -59,6 +59,7 @@ async function publishUnifiedPost(user, { caption = "", media = [], platforms = 
         text: captionStr,
         imageUrl,
         videoUrl,
+        ...(platformOptions[platform] || {}),
       });
 
       results.push({
@@ -89,6 +90,7 @@ async function publishUnifiedPost(user, { caption = "", media = [], platforms = 
 
   const docData = {
     userId: user._id,
+    tenantId: user.tenantId || user._id,
     platforms: normalizedPlatforms,
     content: captionStr,
     media: normalizedMedia,
@@ -123,7 +125,9 @@ async function publishUnifiedPost(user, { caption = "", media = [], platforms = 
  * @param {Object} options - Pagination options `{ page, limit }`.
  * @returns {Promise<Object>} Paginated history list.
  */
-async function getUserPostingHistory(userId, { page = 1, limit = 20 } = {}) {
+async function getUserPostingHistory(userOrId, { page = 1, limit = 20 } = {}) {
+  const userId = userOrId?._id || userOrId;
+  const tenantId = userOrId?.tenantId || userId;
   if (!userId) {
     throw new Error("User ID is required to fetch posting history");
   }
@@ -132,8 +136,8 @@ async function getUserPostingHistory(userId, { page = 1, limit = 20 } = {}) {
   const limitNum = Math.min(100, Math.max(1, Number(limit) || 20));
 
   if (mongoose.connection && mongoose.connection.readyState === 1) {
-    const total = await SocialPostHistory.countDocuments({ userId });
-    const history = await SocialPostHistory.find({ userId })
+    const total = await SocialPostHistory.countDocuments({ userId, tenantId });
+    const history = await SocialPostHistory.find({ userId, tenantId })
       .sort({ postedAt: -1 })
       .skip((pageNum - 1) * limitNum)
       .limit(limitNum)
@@ -154,7 +158,7 @@ async function getUserPostingHistory(userId, { page = 1, limit = 20 } = {}) {
 /**
  * Schedules a unified post to be published across selected platforms at a future time.
  */
-async function scheduleUnifiedPost(user, { caption = "", media = [], platforms = [], scheduledFor } = {}) {
+async function scheduleUnifiedPost(user, { caption = "", media = [], platforms = [], platformOptions = {}, scheduledFor } = {}) {
   if (!user || !user._id) {
     throw new Error("User authentication required for scheduling posts");
   }
@@ -194,9 +198,11 @@ async function scheduleUnifiedPost(user, { caption = "", media = [], platforms =
 
   const docData = {
     userId: user._id,
+    tenantId: user.tenantId || user._id,
     caption: captionStr,
     media: mediaUrls,
     platforms: normalizedPlatforms,
+    platformOptions,
     scheduledFor: scheduleDate,
     status: "scheduled",
   };
@@ -222,13 +228,15 @@ async function scheduleUnifiedPost(user, { caption = "", media = [], platforms =
 /**
  * Retrieves paginated scheduled posts for a user.
  */
-async function getScheduledPosts(userId, { page = 1, limit = 20, status = "scheduled" } = {}) {
+async function getScheduledPosts(userOrId, { page = 1, limit = 20, status = "scheduled" } = {}) {
+  const userId = userOrId?._id || userOrId;
+  const tenantId = userOrId?.tenantId || userId;
   if (!userId) throw new Error("User ID required");
   const pageNum = Math.max(1, Number(page) || 1);
   const limitNum = Math.min(100, Math.max(1, Number(limit) || 20));
 
   if (mongoose.connection && mongoose.connection.readyState === 1) {
-    const filter = { userId };
+    const filter = { userId, tenantId };
     if (status && status !== "all") filter.status = status;
 
     const [total, scheduledPosts] = await Promise.all([
@@ -247,11 +255,13 @@ async function getScheduledPosts(userId, { page = 1, limit = 20, status = "sched
 /**
  * Cancels a scheduled post if it has not been processed yet.
  */
-async function cancelScheduledPost(userId, scheduledPostId) {
+async function cancelScheduledPost(userOrId, scheduledPostId) {
+  const userId = userOrId?._id || userOrId;
+  const tenantId = userOrId?.tenantId || userId;
   if (!userId || !scheduledPostId) throw new Error("User ID and Scheduled Post ID required");
 
   if (mongoose.connection && mongoose.connection.readyState === 1) {
-    const post = await ScheduledSocialPost.findOne({ _id: scheduledPostId, userId });
+    const post = await ScheduledSocialPost.findOne({ _id: scheduledPostId, userId, tenantId });
     if (!post) throw new Error("Scheduled post not found or unauthorized");
     if (post.status !== "scheduled") {
       throw new Error(`Cannot cancel post with status '${post.status}'`);
@@ -270,6 +280,3 @@ module.exports = {
   getScheduledPosts,
   cancelScheduledPost,
 };
-
-
-

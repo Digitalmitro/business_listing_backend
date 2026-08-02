@@ -1,218 +1,26 @@
 "use strict";
 
 const logger = require("../utils/logger");
-const socialIntegrationService = require("../services/socialIntegrationService");
+const service = require("../services/socialIntegrationService");
 
-/**
- * GET /api/social-integrations/auth-url?platform=:platform
- * Generates the OAuth authorization URL for the target social media platform.
- */
 exports.getAuthUrl = async (req, res) => {
-  try {
-    const platform = req.query.platform || req.params.platform;
-    if (!platform) {
-      return res.status(400).json({ success: false, message: "platform parameter is required" });
-    }
-
-    const state = req.user && req.user._id ? String(req.user._id) : "";
-    const redirectUri = req.query.redirectUri || "";
-    const url = socialIntegrationService.getAuthUrl(platform, state, redirectUri);
-
-    return res.status(200).json({ success: true, platform: platform.toLowerCase(), url });
-  } catch (error) {
-    logger.error("Error generating social media auth URL", { error: error.message });
-    return res.status(error.message.includes("Unsupported social media platform") ? 400 : 500).json({
-      success: false,
-      message: error.message,
-    });
-  }
+  try { const platform = String(req.query.platform || "").toLowerCase(); const url = await service.createAuthorizationRequest(req.user, platform, req.query.returnTo); return res.json({ success: true, platform, url }); }
+  catch (error) { logger.error("social.oauth.start.failed", { userId: req.user?._id, error: error.message }); return res.status(400).json({ success: false, message: error.message }); }
 };
 
-/**
- * POST /api/social-integrations/connect
- * Exchanges authorization code for tokens, retrieves profile metadata, encrypts tokens, and saves to user.
- */
-exports.connectAccount = async (req, res) => {
+exports.handleCallback = async (req, res) => {
+  const frontend = (process.env.FRONTEND_URL || "").replace(/\/$/, "");
   try {
-    const { platform, code, redirectUri } = req.body;
-    if (!platform || !code) {
-      return res.status(400).json({ success: false, message: "platform and code parameters are required" });
-    }
-
-    if (!req.user) {
-      return res.status(401).json({ success: false, message: "User not authenticated" });
-    }
-
-    const accountData = await socialIntegrationService.exchangeCodeAndFetchProfile(platform, code, redirectUri);
-
-    req.user.socialMediaAccounts = req.user.socialMediaAccounts || {};
-    req.user.socialMediaAccounts[platform.toLowerCase()] = accountData;
-
-    await req.user.save();
-    logger.info("User connected social media account successfully", {
-      userId: req.user._id,
-      platform: platform.toLowerCase(),
-    });
-
-    return res.status(200).json({
-      success: true,
-      message: `${socialIntegrationService.getPlatformConfig(platform).name} account connected successfully`,
-      account: {
-        isConnected: true,
-        status: "connected",
-        platformUserId: accountData.platformUserId,
-        platformUsername: accountData.platformUsername,
-        profileName: accountData.profileName,
-        profileImageUrl: accountData.profileImageUrl,
-        connectedAt: accountData.connectedAt,
-        tokenExpiry: accountData.tokenExpiry,
-        scopes: accountData.scopes,
-      },
-    });
-  } catch (error) {
-    logger.error("Error connecting social media account", { error: error.message });
-    return res.status(error.message.includes("Unsupported social media platform") ? 400 : 500).json({
-      success: false,
-      message: "Failed to connect social media account: " + error.message,
-    });
-  }
+    if (req.query.error) throw new Error(req.query.error_description || req.query.error);
+    if (!req.query.code || !req.query.state) throw new Error("OAuth callback requires code and state");
+    const result = await service.connectFromCallback(req.params.platform, req.query.code, req.query.state);
+    const target = result.returnTo.startsWith("/") ? `${frontend}${result.returnTo}` : result.returnTo;
+    const url = new URL(target || frontend || "http://localhost"); url.searchParams.set("social", "connected"); url.searchParams.set("platform", req.params.platform); return res.redirect(url.toString());
+  } catch (error) { logger.error("social.oauth.callback.failed", { platform: req.params.platform, error: error.message }); const target = frontend || "http://localhost"; const url = new URL(target); url.searchParams.set("social", "error"); url.searchParams.set("platform", req.params.platform); url.searchParams.set("reason", "oauth_failed"); return res.redirect(url.toString()); }
 };
 
-/**
- * POST /api/social-integrations/disconnect
- * Disconnects the specified social media account by clearing credentials locally.
- */
-exports.disconnectAccount = async (req, res) => {
-  try {
-    const platform = req.body.platform || req.params.platform;
-    if (!platform) {
-      return res.status(400).json({ success: false, message: "platform parameter is required" });
-    }
-
-    if (!req.user) {
-      return res.status(401).json({ success: false, message: "User not authenticated" });
-    }
-
-    await socialIntegrationService.disconnectAccount(req.user, platform);
-
-    return res.status(200).json({
-      success: true,
-      message: `${platform} account disconnected successfully`,
-    });
-  } catch (error) {
-    logger.error("Error disconnecting social media account", { error: error.message });
-    return res.status(500).json({ success: false, message: error.message });
-  }
-};
-
-/**
- * GET /api/social-integrations/accounts
- * Lists connection status and profile details for all supported social media platforms.
- * Tokens are strictly redacted.
- */
-exports.getAccounts = async (req, res) => {
-  try {
-    if (!req.user) {
-      return res.status(401).json({ success: false, message: "User not authenticated" });
-    }
-
-    const accounts = {};
-    for (const [platformKey, config] of Object.entries(socialIntegrationService.SUPPORTED_PLATFORMS)) {
-      const stored = req.user.socialMediaAccounts?.[platformKey];
-      if (stored && stored.isConnected) {
-        accounts[platformKey] = {
-          name: config.name,
-          isConnected: true,
-          status: stored.status || "connected",
-          platformUserId: stored.platformUserId || "",
-          platformUsername: stored.platformUsername || "",
-          profileName: stored.profileName || "",
-          profileImageUrl: stored.profileImageUrl || "",
-          connectedAt: stored.connectedAt || null,
-          tokenExpiry: stored.tokenExpiry || null,
-          scopes: stored.scopes || config.defaultScopes,
-        };
-      } else {
-        accounts[platformKey] = {
-          name: config.name,
-          isConnected: false,
-          status: "not_connected",
-          platformUserId: "",
-          platformUsername: "",
-          profileName: "",
-          profileImageUrl: "",
-          connectedAt: null,
-          tokenExpiry: null,
-          scopes: config.defaultScopes,
-        };
-      }
-    }
-
-    return res.status(200).json({ success: true, accounts });
-  } catch (error) {
-    logger.error("Error fetching connected social media accounts", { error: error.message });
-    return res.status(500).json({ success: false, message: "Failed to fetch accounts: " + error.message });
-  }
-};
-
-/**
- * POST /api/social-integrations/refresh
- * Proactively refreshes or verifies the access token for the specified platform.
- */
-exports.refreshAccountToken = async (req, res) => {
-  try {
-    const { platform } = req.body;
-    if (!platform) {
-      return res.status(400).json({ success: false, message: "platform parameter is required" });
-    }
-
-    if (!req.user) {
-      return res.status(401).json({ success: false, message: "User not authenticated" });
-    }
-
-    await socialIntegrationService.getValidAccessToken(req.user, platform);
-    const updatedStatus = req.user.socialMediaAccounts?.[platform.toLowerCase()]?.status || "connected";
-
-    return res.status(200).json({
-      success: true,
-      message: `Successfully verified and refreshed ${platform} access token`,
-      status: updatedStatus,
-    });
-  } catch (error) {
-    logger.error("Error refreshing social media token", { error: error.message });
-    const isRevoked = error.name === "RevokedPermissionError" || error.message.includes("revoked");
-    return res.status(isRevoked ? 403 : 500).json({
-      success: false,
-      status: isRevoked ? "revoked" : "error",
-      message: error.message,
-    });
-  }
-};
-
-/**
- * POST /api/social-integrations/verify-post
- * Verifies account readiness and allows posting exclusively through official supported endpoints.
- */
-exports.verifyOrPost = async (req, res) => {
-  try {
-    const { platform, postData } = req.body;
-    if (!platform || !postData) {
-      return res.status(400).json({ success: false, message: "platform and postData are required" });
-    }
-
-    if (!req.user) {
-      return res.status(401).json({ success: false, message: "User not authenticated" });
-    }
-
-    const result = await socialIntegrationService.verifyOrPostToPlatform(req.user, platform, postData);
-    return res.status(200).json({ success: true, result });
-  } catch (error) {
-    logger.error("Error verifying or posting to social media platform", { error: error.message });
-    const isRevoked = error.name === "RevokedPermissionError" || error.message.includes("revoked");
-    return res.status(isRevoked ? 403 : 500).json({
-      success: false,
-      status: isRevoked ? "revoked" : "error",
-      message: error.message,
-    });
-  }
-};
+exports.connectAccount = (_req, res) => res.status(410).json({ success: false, message: "Direct code exchange is disabled; start OAuth with GET /auth-url and follow the provider callback" });
+exports.disconnectAccount = async (req, res) => { try { await service.disconnectAccount(req.user, req.body.platform || req.params.platform); return res.json({ success: true }); } catch (error) { logger.error("social.disconnect.failed", { userId: req.user?._id, error: error.message }); return res.status(400).json({ success: false, message: error.message }); } };
+exports.getAccounts = async (req, res) => { try { return res.json({ success: true, accounts: await service.listAccounts(req.user) }); } catch (error) { return res.status(500).json({ success: false, message: "Could not list social connections" }); } };
+exports.refreshAccountToken = async (req, res) => { try { await service.getValidAccessToken(req.user, req.body.platform); const accounts = await service.listAccounts(req.user); return res.json({ success: true, account: accounts[String(req.body.platform).toLowerCase()] }); } catch (error) { return res.status(error.name === "RevokedPermissionError" ? 403 : 400).json({ success: false, status: error.status || "error", message: error.message }); } };
+exports.verifyOrPost = async (req, res) => { try { return res.json({ success: true, result: await service.verifyOrPostToPlatform(req.user, req.body.platform, req.body.postData) }); } catch (error) { return res.status(error.name === "RevokedPermissionError" ? 403 : 400).json({ success: false, message: error.message }); } };

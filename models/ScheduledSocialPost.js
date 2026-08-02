@@ -11,6 +11,7 @@ const scheduledSocialPostSchema = new mongoose.Schema(
       required: true,
       index: true,
     },
+    tenantId: { type: mongoose.Schema.Types.ObjectId, ref: "Tenant", required: true, index: true },
     caption: {
       type: String,
       default: "",
@@ -23,6 +24,7 @@ const scheduledSocialPostSchema = new mongoose.Schema(
       type: [String],
       required: true,
     },
+    platformOptions: { type: mongoose.Schema.Types.Mixed, default: {} },
     scheduledFor: {
       type: Date,
       required: true,

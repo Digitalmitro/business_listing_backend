@@ -5,6 +5,7 @@ const User = require("../models/User");
 const Business = require("../models/Business");
 const logger = require("../utils/logger");
 const googleBusinessService = require("../services/googleBusinessService");
+const GoogleConnection = require("../models/GoogleBusinessConnection");
 
 /**
  * GET /api/google-business/auth-url
@@ -12,8 +13,7 @@ const googleBusinessService = require("../services/googleBusinessService");
  */
 exports.getAuthUrl = async (req, res) => {
   try {
-    const state = req.user && req.user._id ? String(req.user._id) : "";
-    const url = googleBusinessService.getAuthUrl(state);
+    const url = await googleBusinessService.createAuthorizationRequest(req.user, req.query.returnTo);
     return res.status(200).json({ success: true, url });
   } catch (error) {
     logger.error("Error generating Google Business Profile auth URL", { error: error.message });
@@ -35,7 +35,7 @@ exports.handleCallback = async (req, res) => {
   const frontendUrl = (process.env.FRONTEND_URL || "http://localhost:5173").replace(/\/$/, "");
   const successRedirect = `${frontendUrl}/businessEdit?gmb=connected`;
 
-  const { code, state: userId, error: oauthError } = req.query;
+  const { code, state, error: oauthError } = req.query;
 
   // Google returns `error=access_denied` when the user cancels or denies permission
   if (oauthError) {
@@ -48,43 +48,26 @@ exports.handleCallback = async (req, res) => {
     return res.redirect(`${frontendUrl}/businessEdit?gmb=error&reason=missing_code`);
   }
 
-  if (!userId) {
-    logger.error("Google OAuth callback: state (userId) missing from callback");
+  if (!state) {
+    logger.error("Google OAuth callback: state missing from callback");
     return res.redirect(`${frontendUrl}/businessEdit?gmb=error&reason=missing_state`);
   }
 
   try {
-    const user = await User.findById(userId);
-    if (!user) {
-      logger.error("Google OAuth callback: user not found for state", { userId });
-      return res.redirect(`${frontendUrl}/businessEdit?gmb=error&reason=user_not_found`);
-    }
-
-    const tokenData = await googleBusinessService.exchangeCodeForTokens(code);
-
-    user.googleBusinessProfile = {
-      isConnected: true,
-      googleAccountId: tokenData.googleAccountId,
-      googleEmail: tokenData.googleEmail,
-      accessToken: tokenData.accessToken,
-      refreshToken: tokenData.refreshToken,
-      tokenExpiry: tokenData.tokenExpiry,
-      connectedAt: new Date(),
-    };
-
-    await user.save();
-    logger.info("Google OAuth callback: account connected successfully", { userId: user._id, googleEmail: tokenData.googleEmail });
+    const result = await googleBusinessService.connectFromCallback(code, state);
+    logger.info("Google OAuth callback: account connected successfully", { userId: result.userId });
 
     // Best-effort prefetch profiles so the UI loads instantly
     try {
-      await googleBusinessService.fetchAllProfilesForUser(user);
+      const user = await User.findById(result.userId);
+      if (user) await googleBusinessService.fetchAllProfilesForUser(user);
     } catch (fetchErr) {
       logger.warn("Google OAuth callback: could not prefetch profiles", { error: fetchErr.message });
     }
 
     return res.redirect(successRedirect);
   } catch (error) {
-    logger.error("Google OAuth callback: token exchange failed", { error: error.message, userId });
+    logger.error("Google OAuth callback: token exchange failed", { error: error.message });
     return res.redirect(`${frontendUrl}/businessEdit?gmb=error&reason=${encodeURIComponent(error.message)}`);
   }
 };
@@ -94,51 +77,7 @@ exports.handleCallback = async (req, res) => {
  * Exchanges authorization code for tokens, encrypts them, and saves to user profile.
  */
 exports.connectAccount = async (req, res) => {
-  try {
-    const code = req.body.code || req.query.code;
-    if (!code) {
-      return res.status(400).json({ success: false, message: "Authorization code is required" });
-    }
-
-    if (!req.user) {
-      return res.status(401).json({ success: false, message: "User not authenticated" });
-    }
-
-    const tokenData = await googleBusinessService.exchangeCodeForTokens(code);
-
-    req.user.googleBusinessProfile = {
-      isConnected: true,
-      googleAccountId: tokenData.googleAccountId,
-      googleEmail: tokenData.googleEmail,
-      accessToken: tokenData.accessToken,
-      refreshToken: tokenData.refreshToken,
-      tokenExpiry: tokenData.tokenExpiry,
-      connectedAt: new Date(),
-    };
-
-    await req.user.save();
-    logger.info("User connected Google Business Profile account successfully", { userId: req.user._id });
-
-    // Fetch initial profiles right after connection
-    let profiles = [];
-    try {
-      profiles = await googleBusinessService.fetchAllProfilesForUser(req.user);
-    } catch (fetchErr) {
-      logger.warn("Could not fetch profiles immediately after connect", { error: fetchErr.message });
-    }
-
-    return res.status(200).json({
-      success: true,
-      message: "Google account connected successfully",
-      profiles,
-    });
-  } catch (error) {
-    logger.error("Error connecting Google account", { error: error.message });
-    return res.status(500).json({
-      success: false,
-      message: "Failed to connect Google account: " + error.message,
-    });
-  }
+  return res.status(410).json({ success: false, message: "Direct code exchange is disabled; start OAuth with GET /api/google-business/auth-url" });
 };
 
 /**
@@ -151,11 +90,7 @@ exports.disconnectAccount = async (req, res) => {
       return res.status(401).json({ success: false, message: "User not authenticated" });
     }
 
-    req.user.googleBusinessProfile = {
-      isConnected: false,
-    };
-
-    await req.user.save();
+    await GoogleConnection.deleteOne({ tenantId: req.user.tenantId || req.user._id, userId: req.user._id });
     logger.info("User disconnected Google Business Profile account", { userId: req.user._id });
 
     return res.status(200).json({
@@ -174,7 +109,7 @@ exports.disconnectAccount = async (req, res) => {
  */
 exports.getProfiles = async (req, res) => {
   try {
-    if (!req.user || !req.user.googleBusinessProfile?.isConnected) {
+    if (!req.user || !(await googleBusinessService.connection(req.user))) {
       return res.status(401).json({ success: false, message: "Google account not connected" });
     }
 
@@ -206,15 +141,16 @@ exports.selectProfile = async (req, res) => {
       return res.status(400).json({ success: false, message: "locationName or businessId is required" });
     }
 
-    if (!req.user || !req.user.googleBusinessProfile?.isConnected) {
+    if (!req.user || !(await googleBusinessService.connection(req.user))) {
       return res.status(401).json({ success: false, message: "Google account not connected" });
     }
 
     const profile = await googleBusinessService.fetchProfileByLocationName(req.user, targetLocationId);
 
-    req.user.googleBusinessProfile.selectedProfileId = targetLocationId;
-    req.user.googleBusinessProfile.lastFetchedProfile = profile;
-    await req.user.save();
+    const googleConnection = await googleBusinessService.connection(req.user);
+    googleConnection.selectedProfileId = targetLocationId;
+    googleConnection.lastFetchedProfile = profile;
+    await googleConnection.save();
 
     logger.info("Selected Google Business Profile location for user", {
       userId: req.user._id,
@@ -241,20 +177,21 @@ exports.selectProfile = async (req, res) => {
  */
 exports.getSelectedProfile = async (req, res) => {
   try {
-    if (!req.user || !req.user.googleBusinessProfile?.isConnected) {
+    const googleConnection = req.user && (await googleBusinessService.connection(req.user));
+    if (!googleConnection) {
       return res.status(401).json({ success: false, message: "Google account not connected" });
     }
 
-    const selectedId = req.user.googleBusinessProfile.selectedProfileId;
+    const selectedId = googleConnection.selectedProfileId;
     if (!selectedId) {
       return res.status(404).json({ success: false, message: "No Google Business Profile selected yet" });
     }
 
-    let profile = req.user.googleBusinessProfile.lastFetchedProfile;
+    let profile = googleConnection.lastFetchedProfile;
     if (!profile || !profile.businessId) {
       profile = await googleBusinessService.fetchProfileByLocationName(req.user, selectedId);
-      req.user.googleBusinessProfile.lastFetchedProfile = profile;
-      await req.user.save();
+      googleConnection.lastFetchedProfile = profile;
+      await googleConnection.save();
     }
 
     return res.status(200).json({
@@ -277,11 +214,12 @@ exports.getSelectedProfile = async (req, res) => {
  */
 exports.populateProfile = async (req, res) => {
   try {
-    if (!req.user || !req.user.googleBusinessProfile?.isConnected) {
+    const googleConnection = req.user && (await googleBusinessService.connection(req.user));
+    if (!googleConnection) {
       return res.status(401).json({ success: false, message: "Google account not connected" });
     }
 
-    const selectedId = req.user.googleBusinessProfile.selectedProfileId;
+    const selectedId = googleConnection.selectedProfileId;
     if (!selectedId) {
       return res.status(400).json({
         success: false,
@@ -289,11 +227,11 @@ exports.populateProfile = async (req, res) => {
       });
     }
 
-    let profile = req.user.googleBusinessProfile.lastFetchedProfile;
+    let profile = googleConnection.lastFetchedProfile;
     if (!profile || !profile.businessId) {
       profile = await googleBusinessService.fetchProfileByLocationName(req.user, selectedId);
-      req.user.googleBusinessProfile.lastFetchedProfile = profile;
-      await req.user.save();
+      googleConnection.lastFetchedProfile = profile;
+      await googleConnection.save();
     }
 
     const target = (req.body.target || "both").toLowerCase();

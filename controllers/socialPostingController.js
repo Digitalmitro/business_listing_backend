@@ -13,12 +13,12 @@ exports.publishPost = async (req, res) => {
       return res.status(401).json({ success: false, message: "User not authenticated" });
     }
 
-    const { caption, media, platforms } = req.body;
+    const { caption, media, platforms, platformOptions } = req.body;
     if (!Array.isArray(platforms) || platforms.length === 0) {
       return res.status(400).json({ success: false, message: "platforms array is required and must not be empty" });
     }
 
-    const result = await socialPostingService.publishUnifiedPost(req.user, { caption, media, platforms });
+    const result = await socialPostingService.publishUnifiedPost(req.user, { caption, media, platforms, platformOptions });
 
     return res.status(result.success ? 200 : 400).json({
       success: result.success,
@@ -46,7 +46,7 @@ exports.getHistory = async (req, res) => {
     }
 
     const { page, limit } = req.query;
-    const historyData = await socialPostingService.getUserPostingHistory(req.user._id, { page, limit });
+    const historyData = await socialPostingService.getUserPostingHistory(req.user, { page, limit });
 
     return res.status(200).json({
       success: true,
@@ -71,7 +71,7 @@ exports.schedulePost = async (req, res) => {
       return res.status(401).json({ success: false, message: "User not authenticated" });
     }
 
-    const { caption, media, platforms, scheduledFor } = req.body;
+    const { caption, media, platforms, platformOptions, scheduledFor } = req.body;
     if (!Array.isArray(platforms) || platforms.length === 0) {
       return res.status(400).json({ success: false, message: "platforms array is required and must not be empty" });
     }
@@ -79,7 +79,7 @@ exports.schedulePost = async (req, res) => {
       return res.status(400).json({ success: false, message: "scheduledFor timestamp is required" });
     }
 
-    const result = await socialPostingService.scheduleUnifiedPost(req.user, { caption, media, platforms, scheduledFor });
+    const result = await socialPostingService.scheduleUnifiedPost(req.user, { caption, media, platforms, platformOptions, scheduledFor });
     return res.status(201).json(result);
   } catch (error) {
     logger.error("Error scheduling unified social media post", { error: error.message });
@@ -98,7 +98,7 @@ exports.getScheduledPosts = async (req, res) => {
     }
 
     const { page, limit, status } = req.query;
-    const data = await socialPostingService.getScheduledPosts(req.user._id, { page, limit, status });
+    const data = await socialPostingService.getScheduledPosts(req.user, { page, limit, status });
     return res.status(200).json({ success: true, ...data });
   } catch (error) {
     logger.error("Error fetching scheduled social media posts", { error: error.message });
@@ -116,7 +116,7 @@ exports.cancelScheduledPost = async (req, res) => {
       return res.status(401).json({ success: false, message: "User not authenticated" });
     }
 
-    const result = await socialPostingService.cancelScheduledPost(req.user._id, req.params.id);
+    const result = await socialPostingService.cancelScheduledPost(req.user, req.params.id);
     return res.status(200).json(result);
   } catch (error) {
     logger.error("Error cancelling scheduled post", { error: error.message });

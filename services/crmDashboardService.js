@@ -3,6 +3,8 @@
 
 const mongoose = require("mongoose");
 const User = require("../models/User");
+const SocialConnection = require("../models/SocialConnection");
+const GoogleBusinessConnection = require("../models/GoogleBusinessConnection");
 // ── FIX: was previously importing the module object (CrmLead), not the Mongoose model
 const { CrmLead } = require("../models/CrmLead");
 const SocialPostHistory = require("../models/SocialPostHistory");
@@ -42,20 +44,26 @@ exports.getDashboardSummary = async (ownerId) => {
     const prevPeriodStart = new Date(now.getTime() - DASHBOARD_CALENDAR_PREVIEW_DAYS * 24 * 60 * 60 * 1000);
 
     // 1. Fetch User Social Accounts
-    const user = await User.findById(ownerId).select("socialMediaAccounts googleBusinessProfile").lean();
+    const user = await User.findById(ownerId).select("_id").lean();
+    const tenantId = user?.tenantId || ownerId;
+    const [socialConnections, googleConnection] = await Promise.all([
+      SocialConnection.find({ tenantId, userId: ownerId }).select("platform status profileName providerUsername connectedAt").lean(),
+      GoogleBusinessConnection.findOne({ tenantId, userId: ownerId }).select("status googleEmail selectedProfileId").lean(),
+    ]);
     const connectedSocialAccounts = [];
     const platforms = SOCIAL_PLATFORMS;
 
-    if (user && user.socialMediaAccounts) {
+    if (user) {
+      const byPlatform = new Map(socialConnections.map((connection) => [connection.platform, connection]));
       for (const platform of platforms) {
-        const acc = user.socialMediaAccounts[platform];
-        if (acc && (acc.isConnected || acc.status === "connected")) {
+        const acc = byPlatform.get(platform);
+        if (acc && acc.status === "connected") {
           connectedSocialAccounts.push({
             platform,
             isConnected: true,
             status: acc.status || "connected",
             profileName: acc.profileName || `${platform.toUpperCase()} Account`,
-            accountHandle: acc.accountHandle || "",
+            accountHandle: acc.providerUsername || "",
             connectedAt: acc.connectedAt || acc.updatedAt || null,
           });
         } else {
@@ -74,18 +82,18 @@ exports.getDashboardSummary = async (ownerId) => {
       }
     }
 
-    if (user && user.googleBusinessProfile && user.googleBusinessProfile.isConnected) {
+    if (googleConnection && googleConnection.status === "connected") {
       connectedSocialAccounts.push({
         platform: "googleBusiness",
         isConnected: true,
         status: "connected",
-        profileName: user.googleBusinessProfile.googleEmail || "Google Business Profile",
-        accountHandle: user.googleBusinessProfile.selectedProfileId || "",
+        profileName: googleConnection.googleEmail || "Google Business Profile",
+        accountHandle: googleConnection.selectedProfileId || "",
       });
     }
 
     // 2. Fetch Recent Social Posts
-    const recentPosts = await SocialPostHistory.find({ userId: ownerId })
+    const recentPosts = await SocialPostHistory.find({ tenantId, userId: ownerId })
       .sort({ createdAt: -1 })
       .limit(DASHBOARD_RECENT_POSTS_LIMIT)
       .lean();

@@ -19,6 +19,7 @@ const socialPostHistorySchema = new mongoose.Schema(
       required: true,
       index: true,
     },
+    tenantId: { type: mongoose.Schema.Types.ObjectId, ref: "Tenant", required: true, index: true },
     platforms: [
       {
         type: String,
@@ -27,7 +28,8 @@ const socialPostHistorySchema = new mongoose.Schema(
     ],
     content: {
       type: String,
-      required: true,
+      required: false,
+      default: "",
     },
     media: [
       {

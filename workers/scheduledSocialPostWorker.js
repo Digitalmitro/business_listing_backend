@@ -41,6 +41,7 @@ const scheduledSocialPostWorker = new Worker(
         caption: scheduledPost.caption,
         media: scheduledPost.media,
         platforms: scheduledPost.platforms,
+        platformOptions: scheduledPost.platformOptions,
       });
 
       scheduledPost.status = result.success ? "published" : "failed";
