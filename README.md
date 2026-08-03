@@ -1,5 +1,7 @@
 # UrbanCitations business listing backend
 
+For the complete route-by-route HTTP reference, see [API_README.md](./API_README.md).
+
 ## Production observability
 
 The backend emits structured, correlation-aware logs for application lifecycle,
@@ -216,7 +218,7 @@ The application includes a fully configuration-driven, production-ready CRM suit
 ### Key Architectural Highlights:
 1. **Configuration-Driven Engine (`CrmConfig`)**: Pipeline stages (`Lead`, `Contact Made`, `Meeting Scheduled`, etc.), probability weights for revenue forecasting, event types, reply classification keywords (`Warm Lead`, `Cold Lead`), and scheduler frequency are stored dynamically in MongoDB and managed via the Admin CRM Panel (`/crm`). No hardcoded status rules or intervals.
 2. **Automated Cadence Dispatcher (`leadFollowUpWorker.js`)**: Background worker powered by Redis/BullMQ that checks `CrmFollowUpConfig` settings (`intervalDays`, `maxFollowUps`) and queues automated follow-up touches without blocking main API request threads. Uses distributed Redis locking (`acquireLock`) to prevent concurrent duplicate runs across multi-instance clusters.
-3. **AI Reply Sentiment & Classification (`CrmReplyLog`)**: Inbound webhooks (`/api/crm/leads/replies/reply-webhook`) and manual overrides classify replies (`Warm Lead`, `Cold Lead`, `Pending Follow-Up`) with strict keyword precedence, automatically adjusting pipeline status and logging full audit trails.
+3. **AI Reply Sentiment & Classification (`CrmReplyLog`)**: Inbound webhooks (`/api/crm/leads/replies/reply-webhook`) and manual overrides classify replies (`Warm Lead`, `Cold Lead`, `Pending Follow-Up`) with strict keyword precedence, automatically adjusting pipeline status and logging full audit trails. The inbound route is rate-limited in production but is currently unsigned; see the API reference's exposure notes.
 4. **CRM Audit Logs & CSV Import/Export (`CrmAuditLog`)**: Immutable audit tracking (`create_lead`, `convert_contact`, `send_followup`, `receive_reply`, `import_leads`) with CSV export capabilities, plus batch CSV/Excel spreadsheet upload (`/api/crm/leads/import`) supporting custom fields and status fallbacks.
 5. **Admin CRM Panel (`business_listing_admin/src/views/CRM/`)**: A modern 7-tab CoreUI suite (`CrmPanel.jsx`) providing an Executive Dashboard, Kanban Pipeline board, Contact Directory (with 1-click `Convert to Lead`), Cadence Automation Settings, AI Reply Logs, Scheduled Events Calendar, and System Audit Logs.
 
@@ -226,7 +228,7 @@ The application includes a fully configuration-driven, production-ready CRM suit
 - `GET/POST /api/crm/contacts` — Contact directory management & conversion (`/:id/convert`).
 - `GET/PUT /api/crm/leads/followup/config` — Configuration-driven automated cadence settings.
 - `POST /api/crm/leads/followup/process` — Manually trigger background follow-up sweep.
-- `POST /api/crm/leads/replies/reply-webhook` — Public HMAC-verified/rate-limited webhook for inbound email tracking.
+- `POST /api/crm/leads/replies/reply-webhook` — Public, production-rate-limited webhook for inbound email tracking; signature middleware is not currently mounted.
 - `GET /api/crm/forecast` — Weighted probability revenue forecasting.
 - `GET /api/crm/audit` & `/export` — Filtered audit logs and CSV export.
 - `GET/PUT /api/crm/config/stages` — Dynamic stage ordering & probabilities.
