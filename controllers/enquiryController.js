@@ -2,11 +2,23 @@ const Enquiry = require("../models/Enquiry");
 const Business = require("../models/Business");
 const { notifyAdmins, createNotification } = require("../helpers/notificationHelper");
 const { addJob } = require("../utils/queue");
+const {
+  PhoneNumberValidationError,
+  normalizePhoneNumber,
+} = require("../utils/phoneNumber");
 
 // CREATE ENQUIRY
 exports.createEnquiry = async (req, res) => {
   try {
-    const { name, phone, interest, location, businessId, userId: providedUserId } = req.body;
+    const {
+      name,
+      phone,
+      country,
+      interest,
+      location,
+      businessId,
+      userId: providedUserId,
+    } = req.body;
 
     if (
       !name ||
@@ -21,13 +33,7 @@ exports.createEnquiry = async (req, res) => {
       });
     }
 
-    const cleanPhone = phone.toString().replace(/\D/g, "");
-    if (cleanPhone.length < 7 || cleanPhone.length > 15) {
-      return res.status(400).json({
-        success: false,
-        message: "Please enter a valid phone number.",
-      });
-    }
+    const cleanPhone = normalizePhoneNumber(phone, { country });
 
     const cleanedInterests = interest
       .map((i) => i.toString().trim())
@@ -89,6 +95,13 @@ exports.createEnquiry = async (req, res) => {
       enquiry: newEnquiry,
     });
   } catch (error) {
+    if (error instanceof PhoneNumberValidationError) {
+      return res.status(400).json({
+        success: false,
+        message: error.message,
+        code: error.code,
+      });
+    }
     console.error("Create Enquiry Error:", error);
     return res.status(500).json({
       success: false,

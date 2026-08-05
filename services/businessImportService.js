@@ -7,13 +7,13 @@ const csv = require("csv-parser");
 const ExcelJS = require("exceljs");
 const XLSX = require("xlsx");
 const mongoose = require("mongoose");
-const validator = require("validator");
 
 const Business = require("../models/Business");
 const BusinessImportBatch = require("../models/BusinessImportBatch");
 const BusinessImportRow = require("../models/BusinessImportRow");
 const Category = require("../models/Category");
 const SubCategory = require("../models/SubCategory");
+const { validatePhoneNumber } = require("../utils/phoneNumber");
 
 function positiveInteger(value, fallback, maximum = Number.MAX_SAFE_INTEGER) {
   const parsed = Number.parseInt(value, 10);
@@ -21,20 +21,33 @@ function positiveInteger(value, fallback, maximum = Number.MAX_SAFE_INTEGER) {
 }
 
 const IMPORT_CHUNK_SIZE = positiveInteger(process.env.BUSINESS_IMPORT_CHUNK_SIZE, 500, 5_000);
-const MAX_IMPORT_ROWS = positiveInteger(process.env.BUSINESS_IMPORT_MAX_ROWS, 100_000, 1_000_000);
+const MAX_IMPORT_ROWS = positiveInteger(process.env.BUSINESS_IMPORT_MAX_ROWS, 1_000_000, 5_000_000);
 const MAX_CELL_LENGTH = positiveInteger(process.env.BUSINESS_IMPORT_MAX_CELL_LENGTH, 5_000, 100_000);
-const MAX_RAW_COLUMNS = 100;
-const MAX_RAW_CELL_LENGTH = positiveInteger(
-  process.env.BUSINESS_IMPORT_MAX_RAW_CELL_LENGTH,
-  1_000,
-  10_000
-);
 const CATEGORY_RESOLUTION_CONCURRENCY = positiveInteger(
   process.env.BUSINESS_IMPORT_CATEGORY_CONCURRENCY,
   10,
   50
 );
+const MAX_AUDIT_ROWS = positiveInteger(process.env.BUSINESS_IMPORT_MAX_AUDIT_ROWS, 5_000, 100_000);
+const MAX_SUCCESS_AUDIT_ROWS = Math.min(
+  MAX_AUDIT_ROWS,
+  positiveInteger(process.env.BUSINESS_IMPORT_SUCCESS_PREVIEW_ROWS, 100, 5_000)
+);
+const AUDIT_RETENTION_HOURS = positiveInteger(
+  process.env.BUSINESS_IMPORT_AUDIT_RETENTION_HOURS,
+  24,
+  24 * 30
+);
 let importIndexPromise;
+
+class ImportRowLimitError extends Error {
+  constructor(limit) {
+    super(`The file exceeds the configured maximum of ${limit.toLocaleString("en-US")} business rows.`);
+    this.name = "ImportRowLimitError";
+    this.code = "IMPORT_ROW_LIMIT";
+    this.limit = limit;
+  }
+}
 
 const HEADER_ALIASES = {
   businessName: ["Business Name", "businessName", "business_name", "Name", "Company Name"],
@@ -51,21 +64,6 @@ const HEADER_ALIASES = {
   country: ["Country"],
 };
 
-const FIELD_LABELS = {
-  businessName: "Business Name",
-  phone: "Phone",
-  email: "Email",
-  address: "Address",
-  website: "Website",
-  rating: "Rating",
-  reviews: "Reviews",
-  latitude: "Latitude",
-  longitude: "Longitude",
-  category: "Category",
-  subcategory: "Subcategory",
-  country: "Country",
-};
-
 const TEXT_FIELDS = new Set([
   "businessName",
   "email",
@@ -75,7 +73,6 @@ const TEXT_FIELDS = new Set([
   "subcategory",
   "country",
 ]);
-const NUMERIC_FIELDS = new Set(["rating", "reviews", "latitude", "longitude"]);
 
 function normalizeHeader(header) {
   return String(header || "")
@@ -89,18 +86,17 @@ function normalizeIdentityPart(value) {
   return String(value || "").trim().toLowerCase().replace(/\s+/g, " ");
 }
 
-function normalizePhone(value) {
+function normalizePhone(value, country = "IN") {
   const trimmed = String(value || "").trim();
+  if (!trimmed) return "";
+  const result = validatePhoneNumber(trimmed, { country });
+  if (result.valid) return result.e164;
   const digits = trimmed.replace(/\D/g, "");
   return trimmed.startsWith("+") ? `+${digits}` : digits;
 }
 
 function buildIdentitySource(data) {
-  return [
-    normalizeIdentityPart(data.businessName),
-    normalizePhone(data.phone),
-    normalizeIdentityPart(data.email),
-  ].join("|");
+  return normalizePhone(data.phone, data.country || "IN");
 }
 
 function buildIdentityKey(data) {
@@ -113,22 +109,6 @@ function isBlank(value) {
 
 function isEmptyRawRow(values) {
   return Object.values(values || {}).every(isBlank);
-}
-
-function sanitizeRawData(values) {
-  const sanitized = {};
-  for (const [key, value] of Object.entries(values || {}).slice(0, MAX_RAW_COLUMNS)) {
-    if (key.startsWith("__")) continue;
-    const safeKey = String(key).slice(0, 200).replace(/[.$]/g, "_") || "unnamed_column";
-    if (value === null || value === undefined) {
-      sanitized[safeKey] = "";
-    } else if (["string", "number", "boolean"].includes(typeof value)) {
-      sanitized[safeKey] = String(value).slice(0, MAX_RAW_CELL_LENGTH);
-    } else {
-      sanitized[safeKey] = "[unsupported data type]";
-    }
-  }
-  return sanitized;
 }
 
 function createRowReader(values) {
@@ -155,43 +135,21 @@ function valueAsString(value) {
   return "";
 }
 
-function hasUnsupportedType(field, readResult, unsupportedHeaders) {
-  if (!readResult.present || isBlank(readResult.value)) return false;
-  if (unsupportedHeaders.has(readResult.key)) return true;
-  if (field === "phone") return !["string", "number"].includes(typeof readResult.value);
-  if (TEXT_FIELDS.has(field)) return typeof readResult.value !== "string";
-  if (NUMERIC_FIELDS.has(field)) return !["string", "number"].includes(typeof readResult.value);
-  return false;
-}
-
 function validateAndNormalizeRow(entry, options = {}) {
   const values = entry?.values || entry || {};
-  const unsupportedHeaders = new Set(
-    (entry?.unsupportedFields || []).map((header) => normalizeHeader(header))
-  );
   const normalizeCountry = options.normalizeCountry || ((country) => country);
 
   if (isEmptyRawRow(values)) {
     return {
       status: "skipped",
-      reasons: ["Empty row"],
+      reasons: ["Missing Phone"],
       data: {},
-      rawData: sanitizeRawData(values),
     };
   }
 
   const reader = createRowReader(values);
   const fields = {};
   for (const field of Object.keys(HEADER_ALIASES)) fields[field] = reader.read(field);
-  const malformedRow = Object.keys(values).some((header) => /^_\d+$/.test(header));
-
-  const missingReasons = [];
-  for (const field of ["businessName", "phone"]) {
-    if (!fields[field].present || isBlank(fields[field].value)) {
-      missingReasons.push(`Missing ${FIELD_LABELS[field]}`);
-    }
-  }
-
   const data = {};
   for (const field of Object.keys(HEADER_ALIASES)) {
     data[field] = valueAsString(fields[field].value);
@@ -200,101 +158,65 @@ function validateAndNormalizeRow(entry, options = {}) {
   if (!data.country && options.selectedCountry) data.country = String(options.selectedCountry).trim();
   if (data.country) data.country = normalizeCountry(data.country);
 
-  if (missingReasons.length > 0) {
+  if (
+    !fields.phone.present ||
+    isBlank(fields.phone.value) ||
+    !["string", "number"].includes(typeof fields.phone.value)
+  ) {
     return {
       status: "skipped",
-      reasons: missingReasons,
+      reasons: ["Missing Phone"],
       data,
-      rawData: sanitizeRawData(values),
     };
   }
 
   const reasons = [];
-  if (malformedRow) reasons.push("Malformed row");
-  for (const field of Object.keys(HEADER_ALIASES)) {
-    if (hasUnsupportedType(field, fields[field], unsupportedHeaders)) {
-      reasons.push(`Unsupported data type: ${FIELD_LABELS[field]}`);
-    }
-  }
 
-  if (reasons.length > 0) {
-    return {
-      status: "rejected",
-      reasons,
-      data,
-      rawData: sanitizeRawData(values),
-    };
-  }
-
-  if (data.businessName.length > 300) reasons.push("Invalid Business Name");
-
-  const rawPhone = data.phone;
-  const phoneDigits = rawPhone.replace(/\D/g, "");
-  const validPhoneCharacters = /^[+\d\s().-]+$/.test(rawPhone);
-  const plusIsValid = !rawPhone.includes("+") || /^\+[^+]*$/.test(rawPhone);
-  if (!validPhoneCharacters || !plusIsValid || phoneDigits.length < 7 || phoneDigits.length > 15) {
-    reasons.push("Invalid Phone format");
+  const phoneResult = validatePhoneNumber(data.phone, {
+    country: data.country || options.selectedCountry || "IN",
+  });
+  if (!phoneResult.valid) {
+    reasons.push(phoneResult.message);
   } else {
-    data.phone = normalizePhone(rawPhone);
+    data.phone = phoneResult.e164;
   }
 
-  if (data.email) {
-    if (!validator.isEmail(data.email, { allow_utf8_local_part: false })) {
-      reasons.push("Invalid Email format");
-    } else {
-      data.email = data.email.toLowerCase();
-    }
-  } else {
-    data.email = "";
+  // Phone is the only mandatory and validating field. Optional cells are kept
+  // when usable, ignored when they cannot be represented, and never reject a row.
+  data.businessName = (data.businessName || "Unnamed Business").slice(0, 300);
+  for (const field of TEXT_FIELDS) {
+    if (field !== "businessName") data[field] = data[field].slice(0, MAX_CELL_LENGTH);
   }
 
-  if (
-    data.website &&
-    !validator.isURL(data.website, {
-      protocols: ["http", "https"],
-      require_protocol: false,
-      require_valid_protocol: true,
-    })
-  ) {
-    reasons.push("Invalid Website format");
-  }
-
-  const parseOptionalNumber = (field, reason, predicate) => {
+  const parseOptionalNumber = (field, predicate) => {
     if (!data[field]) {
       data[field] = null;
       return;
     }
     const parsed = Number(data[field]);
     if (!Number.isFinite(parsed) || !predicate(parsed)) {
-      reasons.push(reason);
       data[field] = null;
     } else {
       data[field] = parsed;
     }
   };
 
-  parseOptionalNumber("rating", "Invalid Rating", (value) => value >= 0 && value <= 5);
-  parseOptionalNumber("reviews", "Invalid Reviews", (value) => Number.isInteger(value) && value >= 0);
-  parseOptionalNumber("latitude", "Invalid Latitude", (value) => value >= -90 && value <= 90);
-  parseOptionalNumber("longitude", "Invalid Longitude", (value) => value >= -180 && value <= 180);
+  parseOptionalNumber("rating", (value) => value >= 0 && value <= 5);
+  parseOptionalNumber("reviews", (value) => Number.isInteger(value) && value >= 0);
+  parseOptionalNumber("latitude", (value) => value >= -90 && value <= 90);
+  parseOptionalNumber("longitude", (value) => value >= -180 && value <= 180);
 
   const hasLatitude = data.latitude !== null;
   const hasLongitude = data.longitude !== null;
   if (hasLatitude !== hasLongitude) {
-    reasons.push("Latitude and Longitude must be provided together");
-  }
-
-  for (const field of ["address", "website", "category", "subcategory", "country"]) {
-    if (data[field] && data[field].length > MAX_CELL_LENGTH) {
-      reasons.push(`Invalid ${FIELD_LABELS[field]}`);
-    }
+    data.latitude = null;
+    data.longitude = null;
   }
 
   return {
     status: reasons.length > 0 ? "rejected" : "valid",
     reasons,
     data,
-    rawData: sanitizeRawData(values),
     identityKey: reasons.length > 0 ? null : buildIdentityKey(data),
   };
 }
@@ -343,7 +265,7 @@ async function readCsvInChunks(filePath, onChunk) {
   for await (const values of parser) {
     rowNumber += 1;
     if (rowNumber - 1 > MAX_IMPORT_ROWS) {
-      throw new Error(`The file exceeds the maximum of ${MAX_IMPORT_ROWS} business rows.`);
+      throw new ImportRowLimitError(MAX_IMPORT_ROWS);
     }
     chunk.push({ rowNumber, values, unsupportedFields: [] });
     if (chunk.length >= IMPORT_CHUNK_SIZE) {
@@ -370,7 +292,7 @@ async function readExcelWithExcelJs(filePath, onChunk) {
 
   const finalRow = worksheet.rowCount;
   if (Math.max(0, finalRow - 1) > MAX_IMPORT_ROWS) {
-    throw new Error(`The file exceeds the maximum of ${MAX_IMPORT_ROWS} business rows.`);
+    throw new ImportRowLimitError(MAX_IMPORT_ROWS);
   }
 
   let chunk = [];
@@ -409,7 +331,7 @@ async function readExcelWithSheetJs(filePath, onChunk) {
   const headers = (matrix[0] || []).map((header) => valueAsString(header).replace(/^\uFEFF/, ""));
   assertUsableHeaders(headers);
   if (Math.max(0, matrix.length - 1) > MAX_IMPORT_ROWS) {
-    throw new Error(`The file exceeds the maximum of ${MAX_IMPORT_ROWS} business rows.`);
+    throw new ImportRowLimitError(MAX_IMPORT_ROWS);
   }
 
   let chunk = [];
@@ -446,7 +368,9 @@ async function readImportFile(file, onChunk) {
   } catch (excelJsError) {
     // Do not replay already processed rows. ExcelJS failures during initial workbook
     // loading are safe to retry; processing errors must be surfaced as-is.
-    if (excelJsError.importRowsProcessed) throw excelJsError;
+    if (excelJsError.importRowsProcessed || excelJsError.code === "IMPORT_ROW_LIMIT") {
+      throw excelJsError;
+    }
     await readExcelWithSheetJs(file.path, onChunk);
   }
 }
@@ -455,6 +379,36 @@ function incrementReasonCounts(reasonCounts, reasons) {
   for (const reason of reasons) {
     reasonCounts[reason] = (reasonCounts[reason] || 0) + 1;
   }
+}
+
+const ENCODED_REASON_PREFIX = "b64_";
+
+function encodeReasonKey(reason) {
+  return `${ENCODED_REASON_PREFIX}${Buffer.from(String(reason), "utf8").toString("base64url")}`;
+}
+
+function decodeReasonKey(key) {
+  const value = String(key);
+  if (!value.startsWith(ENCODED_REASON_PREFIX)) return value;
+  try {
+    const decoded = Buffer.from(value.slice(ENCODED_REASON_PREFIX.length), "base64url").toString("utf8");
+    return encodeReasonKey(decoded) === value ? decoded : value;
+  } catch {
+    return value;
+  }
+}
+
+function encodeReasonCounts(reasonCounts = {}) {
+  return Object.fromEntries(
+    Object.entries(reasonCounts).map(([reason, count]) => [encodeReasonKey(reason), count])
+  );
+}
+
+function decodeReasonCounts(reasonCounts = {}) {
+  const entries = reasonCounts instanceof Map
+    ? Array.from(reasonCounts.entries())
+    : Object.entries(reasonCounts);
+  return Object.fromEntries(entries.map(([reason, count]) => [decodeReasonKey(reason), count]));
 }
 
 async function ensureImportIndexes() {
@@ -480,6 +434,10 @@ async function ensureImportIndexes() {
         { batch: 1, status: 1, rowNumber: 1 },
         { name: "batch_1_status_1_rowNumber_1" }
       ),
+      BusinessImportRow.collection.createIndex(
+        { expiresAt: 1 },
+        { expireAfterSeconds: 0, name: "expiresAt_1" }
+      ),
     ]).catch((error) => {
       importIndexPromise = null;
       throw error;
@@ -493,24 +451,14 @@ function escapeRegex(value) {
 }
 
 function getExistingBusinessIdentityKeys(business) {
+  const country = business.address?.country || "IN";
   const phones = new Set([
     ...(business.contact?.mobile || []),
+    ...(business.contact?.whatsapp || []),
     ...(business.contact?.contactDetails || []).flatMap((contact) => contact.mobileNumbers || []),
-  ].map(normalizePhone).filter(Boolean));
-  const emails = new Set([
-    ...(business.contact?.email || []),
-    ...(business.contact?.contactDetails || []).flatMap((contact) => contact.emails || []),
-  ].map(normalizeIdentityPart).filter(Boolean));
-  const keys = new Set();
-  const phoneList = phones.size > 0 ? Array.from(phones) : [""];
-  const emailList = new Set([...emails, ""]);
-  for (const phone of phoneList) {
-    for (const email of emailList) {
-      keys.add(buildIdentityKey({ businessName: business.businessName, phone, email }));
-    }
-  }
-  if (business.importIdentityKey) keys.add(business.importIdentityKey);
-  return keys;
+    ...(business.contact?.contactDetails || []).flatMap((contact) => contact.whatsappNumbers || []),
+  ].map((phone) => normalizePhone(phone, country)).filter(Boolean));
+  return new Set(Array.from(phones, (phone) => buildIdentityKey({ phone, country })));
 }
 
 function parseAddress(data) {
@@ -527,7 +475,7 @@ function parseAddress(data) {
 }
 
 function buildBusinessDocument(candidate, category, subcategory, batch, fileName) {
-  const { data, identityKey, rowId, businessId, rowNumber } = candidate;
+  const { data, identityKey, businessId, rowNumber } = candidate;
   const hasCoordinates = data.latitude !== null && data.longitude !== null;
   const address = parseAddress(data);
 
@@ -566,7 +514,6 @@ function buildBusinessDocument(candidate, category, subcategory, batch, fileName
     importIdentityKey: identityKey,
     importMetadata: {
       batch: batch._id,
-      row: rowId,
       rowNumber,
       sourceFileName: fileName,
       importedAt: new Date(),
@@ -670,37 +617,93 @@ async function mapWithConcurrency(items, concurrency, worker) {
   return results;
 }
 
-function makeAuditDocument(batchId, entry, validation, overrides = {}) {
+function compactAuditData(data, status) {
+  if (status !== "imported") return { ...(data || {}) };
   return {
-    _id: overrides.rowId || new mongoose.Types.ObjectId(),
+    businessName: data?.businessName || "",
+    phone: data?.phone || "",
+    email: data?.email || "",
+  };
+}
+
+function createAuditState() {
+  return {
+    storedRows: 0,
+    omittedRows: 0,
+    successfulRowsStored: 0,
+    maxStoredRows: MAX_AUDIT_ROWS,
+    maxSuccessfulRows: MAX_SUCCESS_AUDIT_ROWS,
+    expiresAt: new Date(Date.now() + AUDIT_RETENTION_HOURS * 60 * 60 * 1000),
+  };
+}
+
+function reserveAuditRow(audit, status) {
+  const isSuccessful = status === "imported";
+  const hasCapacity = audit.storedRows < audit.maxStoredRows;
+  const hasSuccessCapacity = !isSuccessful || audit.successfulRowsStored < audit.maxSuccessfulRows;
+  if (!hasCapacity || !hasSuccessCapacity) {
+    audit.omittedRows += 1;
+    return false;
+  }
+  audit.storedRows += 1;
+  if (isSuccessful) audit.successfulRowsStored += 1;
+  return true;
+}
+
+function makeAuditDocument(batchId, entry, validation, overrides = {}) {
+  const status = overrides.status || validation.status;
+  return {
+    _id: new mongoose.Types.ObjectId(),
     batch: batchId,
     rowNumber: entry.rowNumber,
-    status: overrides.status || validation.status,
+    status,
     reason: overrides.reasons?.[0] || validation.reasons?.[0] || null,
     reasons: overrides.reasons || validation.reasons || [],
-    rawData: validation.rawData,
-    data: validation.data,
+    data: compactAuditData(validation.data, status),
     business: overrides.businessId || null,
-    processedAt: overrides.status === "processing" ? null : new Date(),
+    processedAt: status === "processing" ? null : new Date(),
+    expiresAt: overrides.expiresAt || new Date(Date.now() + AUDIT_RETENTION_HOURS * 60 * 60 * 1000),
   };
+}
+
+function queueAuditDocument(target, context, entry, validation, overrides = {}) {
+  const status = overrides.status || validation.status;
+  if (!reserveAuditRow(context.audit, status)) return;
+  target.push(
+    makeAuditDocument(context.batch._id, entry, validation, {
+      ...overrides,
+      expiresAt: context.audit.expiresAt,
+    })
+  );
 }
 
 async function findDuplicateKeys(candidates) {
   if (candidates.length === 0) return new Set();
   const identityKeys = candidates.map((candidate) => candidate.identityKey);
-  const businessNames = [...new Set(candidates.map((candidate) => candidate.data.businessName))];
+  const phoneValues = [...new Set(candidates.flatMap((candidate) => {
+    const phone = candidate.data.phone;
+    const digits = phone.replace(/\D/g, "");
+    const validation = validatePhoneNumber(phone, { country: candidate.data.country });
+    const nationalDigits = validation.valid ? validation.national.replace(/\D/g, "") : "";
+    return [phone, digits, nationalDigits].filter(Boolean);
+  }))];
   const existingBusinesses = await Business.find({
     $or: [
       { importIdentityKey: { $in: identityKeys } },
-      { businessName: { $in: businessNames } },
+      { "contact.mobile": { $in: phoneValues } },
+      { "contact.whatsapp": { $in: phoneValues } },
+      { "contact.contactDetails.mobileNumbers": { $in: phoneValues } },
+      { "contact.contactDetails.whatsappNumbers": { $in: phoneValues } },
     ],
   })
-    .collation({ locale: "en", strength: 2 })
-    .select("businessName importIdentityKey contact.mobile contact.email contact.contactDetails")
+    .select("importIdentityKey address.country contact.mobile contact.whatsapp contact.contactDetails")
     .lean();
 
   const existingKeys = new Set();
   for (const business of existingBusinesses) {
+    if (identityKeys.includes(business.importIdentityKey)) {
+      existingKeys.add(business.importIdentityKey);
+    }
     for (const identityKey of getExistingBusinessIdentityKeys(business)) existingKeys.add(identityKey);
   }
   return existingKeys;
@@ -721,15 +724,15 @@ async function processChunk(entries, context) {
     if (validation.status !== "valid") {
       counters[validation.status] += 1;
       incrementReasonCounts(reasonCounts, validation.reasons);
-      auditDocuments.push(makeAuditDocument(batch._id, entry, validation));
+      queueAuditDocument(auditDocuments, context, entry, validation);
       continue;
     }
 
     if (seenIdentityKeys.has(validation.identityKey)) {
-      const reasons = ["Duplicate record"];
+      const reasons = ["Duplicate phone number"];
       counters.rejected += 1;
       incrementReasonCounts(reasonCounts, reasons);
-      auditDocuments.push(makeAuditDocument(batch._id, entry, validation, { status: "rejected", reasons }));
+      queueAuditDocument(auditDocuments, context, entry, validation, { status: "rejected", reasons });
       continue;
     }
 
@@ -738,7 +741,6 @@ async function processChunk(entries, context) {
       ...validation,
       entry,
       rowNumber: entry.rowNumber,
-      rowId: new mongoose.Types.ObjectId(),
       businessId: new mongoose.Types.ObjectId(),
     });
   }
@@ -748,16 +750,13 @@ async function processChunk(entries, context) {
   const importCandidates = [];
   for (const candidate of validCandidates) {
     if (duplicateKeys.has(candidate.identityKey)) {
-      const reasons = ["Duplicate record"];
+      const reasons = ["Duplicate phone number"];
       counters.rejected += 1;
       incrementReasonCounts(reasonCounts, reasons);
-      auditDocuments.push(
-        makeAuditDocument(batch._id, candidate.entry, candidate, {
-          rowId: candidate.rowId,
-          status: "rejected",
-          reasons,
-        })
-      );
+      queueAuditDocument(auditDocuments, context, candidate.entry, candidate, {
+        status: "rejected",
+        reasons,
+      });
       continue;
     }
     categoryCandidates.push(candidate);
@@ -780,23 +779,14 @@ async function processChunk(entries, context) {
     const candidate = categoryCandidates[index];
     if (categoryResults[index].status === "fulfilled") {
       importCandidates.push(candidate);
-      auditDocuments.push(
-        makeAuditDocument(batch._id, candidate.entry, candidate, {
-          rowId: candidate.rowId,
-          status: "processing",
-        })
-      );
     } else {
       const reasons = ["Database error"];
       counters.rejected += 1;
       incrementReasonCounts(reasonCounts, reasons);
-      auditDocuments.push(
-        makeAuditDocument(batch._id, candidate.entry, candidate, {
-          rowId: candidate.rowId,
-          status: "rejected",
-          reasons,
-        })
-      );
+      queueAuditDocument(auditDocuments, context, candidate.entry, candidate, {
+        status: "rejected",
+        reasons,
+      });
     }
   }
 
@@ -829,28 +819,18 @@ async function processChunk(entries, context) {
     }
   }
 
-  const rowUpdates = [];
+  const resultAuditDocuments = [];
   for (let index = 0; index < importCandidates.length; index += 1) {
     const candidate = importCandidates[index];
     const writeError = failedIndexes.get(index);
     if (writeError) {
       const duplicate = writeError.code === 11000 || writeError.err?.code === 11000;
-      const reason = duplicate ? "Duplicate record" : "Database error";
+      const reason = duplicate ? "Duplicate phone number" : "Database error";
       counters.rejected += 1;
       incrementReasonCounts(reasonCounts, [reason]);
-      rowUpdates.push({
-        updateOne: {
-          filter: { _id: candidate.rowId },
-          update: {
-            $set: {
-              status: "rejected",
-              reason,
-              reasons: [reason],
-              business: null,
-              processedAt: new Date(),
-            },
-          },
-        },
+      queueAuditDocument(resultAuditDocuments, context, candidate.entry, candidate, {
+        status: "rejected",
+        reasons: [reason],
       });
     } else {
       counters.imported += 1;
@@ -858,23 +838,16 @@ async function processChunk(entries, context) {
       if (importedCountry && importedCountry !== "Unknown Country") {
         context.affectedCountries.add(importedCountry);
       }
-      rowUpdates.push({
-        updateOne: {
-          filter: { _id: candidate.rowId },
-          update: {
-            $set: {
-              status: "imported",
-              reason: null,
-              reasons: [],
-              business: candidate.businessId,
-              processedAt: new Date(),
-            },
-          },
-        },
+      queueAuditDocument(resultAuditDocuments, context, candidate.entry, candidate, {
+        status: "imported",
+        reasons: [],
+        businessId: candidate.businessId,
       });
     }
   }
-  await BusinessImportRow.bulkWrite(rowUpdates, { ordered: false });
+  if (resultAuditDocuments.length > 0) {
+    await BusinessImportRow.insertMany(resultAuditDocuments, { ordered: true });
+  }
 }
 
 async function createBatch({ file, user, selectedCountry }) {
@@ -893,7 +866,7 @@ async function createBatch({ file, user, selectedCountry }) {
   });
 }
 
-async function finalizeBatch(batch, counters, reasonCounts, fatalError = null, fatalKind = null) {
+async function finalizeBatch(batch, counters, reasonCounts, audit, fatalError = null, fatalKind = null) {
   const hasRowErrors = counters.skipped > 0 || counters.rejected > 0;
   const status = fatalError
     ? counters.found > 0 || counters.imported > 0
@@ -909,7 +882,14 @@ async function finalizeBatch(batch, counters, reasonCounts, fatalError = null, f
       $set: {
         status,
         totals: counters,
-        reasonCounts,
+        reasonCounts: encodeReasonCounts(reasonCounts),
+        audit: {
+          storedRows: audit.storedRows,
+          omittedRows: audit.omittedRows,
+          successfulRowsStored: audit.successfulRowsStored,
+          maxStoredRows: audit.maxStoredRows,
+          expiresAt: audit.expiresAt,
+        },
         failureReason: fatalError ? `${fatalKind}: ${fatalError.message}` : null,
         completedAt: new Date(),
       },
@@ -920,6 +900,13 @@ async function finalizeBatch(batch, counters, reasonCounts, fatalError = null, f
     status,
     totals: { ...counters },
     reasonCounts: { ...reasonCounts },
+    audit: {
+      storedRows: audit.storedRows,
+      omittedRows: audit.omittedRows,
+      successfulRowsStored: audit.successfulRowsStored,
+      maxStoredRows: audit.maxStoredRows,
+      expiresAt: audit.expiresAt,
+    },
     failureReason: fatalError ? `${fatalKind}: ${fatalError.message}` : null,
   };
 }
@@ -937,6 +924,7 @@ async function runBusinessImport({ file, user, selectedCountry = "", normalizeCo
     affectedCountries: new Set(),
     categoryResolver: createCategoryResolver(),
     normalizeCountry: normalizeCountry || ((country) => country),
+    audit: createAuditState(),
   };
   let fatalError = null;
 
@@ -951,7 +939,11 @@ async function runBusinessImport({ file, user, selectedCountry = "", normalizeCo
     });
   } catch (error) {
     fatalError = error;
-    const reason = error.importRowsProcessed ? "Import processing error" : "File parsing error";
+    const reason = error.code === "IMPORT_ROW_LIMIT"
+      ? "Import row limit exceeded"
+      : error.importRowsProcessed
+        ? "Import processing error"
+        : "File parsing error";
     incrementReasonCounts(reasonCounts, [reason]);
   } finally {
     try {
@@ -961,8 +953,19 @@ async function runBusinessImport({ file, user, selectedCountry = "", normalizeCo
     }
   }
 
-  const fatalKind = fatalError?.importRowsProcessed ? "Import processing error" : "File parsing error";
-  const finalState = await finalizeBatch(batch, counters, reasonCounts, fatalError, fatalKind);
+  const fatalKind = fatalError?.code === "IMPORT_ROW_LIMIT"
+    ? "Import row limit exceeded"
+    : fatalError?.importRowsProcessed
+      ? "Import processing error"
+      : "File parsing error";
+  const finalState = await finalizeBatch(
+    batch,
+    counters,
+    reasonCounts,
+    context.audit,
+    fatalError,
+    fatalKind
+  );
   return {
     batchId: batch._id,
     fileReference: batch.file.reference,
@@ -975,10 +978,18 @@ async function runBusinessImport({ file, user, selectedCountry = "", normalizeCo
 
 module.exports = {
   HEADER_ALIASES,
+  MAX_IMPORT_ROWS,
   buildIdentityKey,
+  compactAuditData,
+  createAuditState,
+  decodeReasonCounts,
+  encodeReasonCounts,
+  getExistingBusinessIdentityKeys,
+  makeAuditDocument,
   normalizeHeader,
   normalizePhone,
   readImportFile,
+  reserveAuditRow,
   runBusinessImport,
   validateAndNormalizeRow,
 };

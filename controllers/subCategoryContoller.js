@@ -109,9 +109,10 @@ exports.getSubCategoriesByCategoryIds = async (req, res) => {
       .select("-__v -createdAt -updatedAt");
 
     if (!subCategories || subCategories.length === 0) {
-      return res
-        .status(404)
-        .json({ message: "No subcategories found for given categories" });
+      // An empty category selection is a valid result for newly imported
+      // categories. Returning 404 makes the admin treat the empty state as a
+      // transport failure and show a misleading error toast.
+      return res.status(200).json({ data: {} });
     }
 
     // Optional: Group by category

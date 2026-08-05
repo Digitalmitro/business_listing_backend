@@ -6,6 +6,10 @@ const path = require("path");
 const mongoose = require("mongoose");
 const { addJob } = require("../utils/queue");
 const { notifyAdmins } = require("../helpers/notificationHelper");
+const {
+  PhoneNumberValidationError,
+  normalizeBusinessContact,
+} = require("../utils/phoneNumber");
 
 const submitClaim = async (req, res) => {
   try {
@@ -30,6 +34,9 @@ const submitClaim = async (req, res) => {
       categories,
       subCategories,
     } = businessData;
+    const normalizedContact = normalizeBusinessContact(contact, address?.country, {
+      requireMobile: true,
+    });
 
     // ✅ Validate business exists
     const existingBusiness = await Business.findById(businessId);
@@ -96,7 +103,7 @@ const submitClaim = async (req, res) => {
       userId: new mongoose.Types.ObjectId(userId),
       businessName,
       address,
-      contact,
+      contact: normalizedContact,
       businessTiming,
       categories,
       subCategories,
@@ -122,6 +129,9 @@ const submitClaim = async (req, res) => {
     });
   } catch (error) {
     console.error("Error submitting claim:", error);
+    if (error instanceof PhoneNumberValidationError) {
+      return res.status(400).json({ message: error.message, code: error.code });
+    }
     res.status(500).json({ message: "Failed to submit claim", error: error.message });
   }
 };

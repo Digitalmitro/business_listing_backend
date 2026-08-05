@@ -5,7 +5,10 @@ const mongoose = require("mongoose");
 
 const BusinessImportBatch = require("../models/BusinessImportBatch");
 const BusinessImportRow = require("../models/BusinessImportRow");
-const { runBusinessImport } = require("../services/businessImportService");
+const {
+  decodeReasonCounts,
+  runBusinessImport,
+} = require("../services/businessImportService");
 
 const configuredPreviewLimit = Number.parseInt(process.env.BUSINESS_IMPORT_PREVIEW_LIMIT, 10);
 const PREVIEW_LIMIT =
@@ -27,8 +30,7 @@ function normalizeImportCountry(country) {
 }
 
 function normalizeReasonCounts(reasonCounts) {
-  if (reasonCounts instanceof Map) return Object.fromEntries(reasonCounts);
-  return reasonCounts || {};
+  return decodeReasonCounts(reasonCounts || {});
 }
 
 function formatSummary(totals = {}, reasonCounts = {}) {
@@ -49,7 +51,6 @@ function formatRow(row) {
     reason: row.reason,
     reasons: row.reasons || [],
     data: row.data || {},
-    rawData: row.rawData || {},
     businessId: row.business || null,
     processedAt: row.processedAt,
     createdAt: row.createdAt,
@@ -69,6 +70,7 @@ function formatBatch(batch) {
     startedAt: batch.startedAt,
     completedAt: batch.completedAt,
     createdAt: batch.createdAt,
+    audit: batch.audit || {},
   };
 }
 
@@ -147,6 +149,7 @@ exports.importBusinesses = async (req, res, next) => {
         failureReason: result.failureReason,
       },
       summary,
+      audit: result.audit,
       rows: rowResult.rows,
       pagination: rowResult.pagination,
       resultsEndpoint: `/api/business/import-batches/${result.batchId}`,
@@ -194,6 +197,7 @@ exports.getBusinessImportBatch = async (req, res, next) => {
       success: true,
       batch: formatBatch(batch),
       summary: formatSummary(batch.totals, batch.reasonCounts),
+      audit: batch.audit || {},
       rows: rowResult.rows,
       pagination: rowResult.pagination,
     });

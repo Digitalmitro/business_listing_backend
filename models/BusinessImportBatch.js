@@ -35,6 +35,13 @@ const BusinessImportBatchSchema = new mongoose.Schema(
       default: {},
     },
     selectedCountry: { type: String, default: "" },
+    audit: {
+      storedRows: { type: Number, default: 0, min: 0 },
+      omittedRows: { type: Number, default: 0, min: 0 },
+      successfulRowsStored: { type: Number, default: 0, min: 0 },
+      maxStoredRows: { type: Number, default: 0, min: 0 },
+      expiresAt: { type: Date, default: null },
+    },
     failureReason: { type: String, default: null },
     startedAt: { type: Date, default: Date.now },
     completedAt: { type: Date, default: null },

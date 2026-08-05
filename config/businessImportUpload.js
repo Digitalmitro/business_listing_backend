@@ -9,8 +9,8 @@ const multer = require("multer");
 const configuredMaxFileBytes = Number.parseInt(process.env.BUSINESS_IMPORT_MAX_FILE_BYTES, 10);
 const MAX_IMPORT_FILE_BYTES =
   Number.isInteger(configuredMaxFileBytes) && configuredMaxFileBytes > 0
-    ? Math.min(configuredMaxFileBytes, 100 * 1024 * 1024)
-    : 25 * 1024 * 1024;
+    ? Math.min(configuredMaxFileBytes, 500 * 1024 * 1024)
+    : 100 * 1024 * 1024;
 const ALLOWED_EXTENSIONS = new Set([".csv", ".xlsx"]);
 
 const storage = multer.diskStorage({

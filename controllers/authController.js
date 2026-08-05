@@ -13,6 +13,10 @@ const Business = require("../models/Business");
 const { addJob } = require("../utils/queue");
 const geocodingService = require("../services/geocodingService");
 const { getTemplate } = require("../helpers/emailHelper");
+const {
+  PhoneNumberValidationError,
+  normalizePhoneNumber,
+} = require("../utils/phoneNumber");
 
 function generateOTPWithExpiration() {
   const otp = Math.floor(100000 + Math.random() * 900000).toString();
@@ -30,9 +34,10 @@ exports.register = async (req, res) => {
           "Please provide full name, email, password, and agree to terms",
       });
     }
-    if (phone && !/^\+?[1-9]\d{1,14}$/.test(phone)) {
-      return res.status(400).json({ message: "Invalid phone number format" });
-    }
+    const normalizedPhone = normalizePhoneNumber(phone, {
+      country,
+      required: false,
+    });
     if (timeZone && !momentTz.tz.names().includes(timeZone)) {
       return res.status(400).json({ message: "Invalid time zone" });
     }
@@ -47,7 +52,7 @@ exports.register = async (req, res) => {
       full_name,
       email,
       password,
-      phone,
+      phone: normalizedPhone,
       isAgree,
       subscribedToEmails: true,
       timeZone: timeZone || "UTC",
@@ -60,6 +65,9 @@ exports.register = async (req, res) => {
 
     res.status(201).json({ message: "User registered successfully" });
   } catch (error) {
+    if (error instanceof PhoneNumberValidationError) {
+      return res.status(400).json({ message: error.message, code: error.code });
+    }
     if (error.name === "ValidationError") {
       return res.status(400).json({ message: "Invalid data provided" });
     }
@@ -261,6 +269,17 @@ exports.updateUserProfile = async (req, res) => {
   try {
     const updates = req.body;
 
+    if (Object.prototype.hasOwnProperty.call(updates, "phone")) {
+      const currentUser = await User.findById(userId).select("country");
+      if (!currentUser) {
+        return res.status(404).json({ message: "User not found" });
+      }
+      updates.phone = normalizePhoneNumber(updates.phone, {
+        country: updates.country || currentUser.country,
+        required: false,
+      });
+    }
+
     if (req.files && req.files.image) {
       const iconUpload = req.files.image[0];
       updates.userImage = iconUpload.filename;
@@ -279,6 +298,9 @@ exports.updateUserProfile = async (req, res) => {
       user: updatedUser,
     });
   } catch (error) {
+    if (error instanceof PhoneNumberValidationError) {
+      return res.status(400).json({ message: error.message, code: error.code });
+    }
     res.status(500).json({
       message: "An error occurred while updating the profile",
       error: error.message,

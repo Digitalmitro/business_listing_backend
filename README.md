@@ -39,8 +39,11 @@ POST /api/business/import
 POST /api/business/import-csv
 ```
 
-Both routes require authentication. The only required columns are `Business Name`
-and `Phone`. Optional columns are `Email`, `Address`, `Website`, `Rating`,
+Both routes require authentication. The only required column is `Phone`, which is
+validated and normalized to E.164. Duplicate detection uses only that normalized
+phone, so the same business name can be imported with different phone numbers.
+All other columns are optional and do not reject a row; missing business names
+are stored as `Unnamed Business`. Optional columns are `Business Name`, `Email`, `Address`, `Website`, `Rating`,
 `Reviews`, `Latitude`, `Longitude`, `Category`, `Subcategory`, and `Country`.
 The response contains summary counts, failure counts by reason, and the first
 page of row-level results.
@@ -52,11 +55,21 @@ GET /api/business/import-batches/:batchId?page=1&limit=100
 GET /api/business/import-batches/:batchId/rows?page=1&limit=100
 ```
 
-The import stores batch metadata and one audit record per file row. Processing
-is chunked and unordered business inserts allow valid rows to succeed even when
-other rows fail. Defaults are a 25 MB file limit, 100,000 rows, and 500 rows per
-chunk; these can be changed with `BUSINESS_IMPORT_MAX_FILE_BYTES`,
-`BUSINESS_IMPORT_MAX_ROWS`, and `BUSINESS_IMPORT_CHUNK_SIZE`.
+The import stores permanent batch totals, but bounds temporary row-level details
+so large spreadsheets do not duplicate the entire file in MongoDB. By default it
+retains up to 5,000 row details (including up to 100 successful-row previews) for
+24 hours; all rows still contribute to the permanent summary and failure-reason
+counts. Tune these limits with `BUSINESS_IMPORT_MAX_AUDIT_ROWS`,
+`BUSINESS_IMPORT_SUCCESS_PREVIEW_ROWS`, and
+`BUSINESS_IMPORT_AUDIT_RETENTION_HOURS`.
+
+Processing is chunked and unordered business inserts allow valid rows to succeed
+even when other rows fail. Defaults are a 100 MB file limit, 1,000,000 rows, and
+500 rows per chunk; these can be changed with `BUSINESS_IMPORT_MAX_FILE_BYTES`,
+`BUSINESS_IMPORT_MAX_ROWS`, and `BUSINESS_IMPORT_CHUNK_SIZE` (with hard safety
+ceilings of 500 MB and 5,000,000 rows). Geocoding cache
+entries expire after seven days by default; change this with
+`GEOCODE_CACHE_TTL_DAYS`.
 
 See `.env.observability.example` for all observability settings. Shell and PM2
 environment variables take precedence over `.env`.

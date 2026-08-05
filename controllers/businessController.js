@@ -14,6 +14,11 @@ const XLSX = require("xlsx");
 const fs = require("fs");
 const { addJob } = require("../utils/queue");
 const { notifyAdmins } = require("../helpers/notificationHelper");
+const {
+  PhoneNumberValidationError,
+  normalizeBusinessContact,
+  normalizePhoneNumber,
+} = require("../utils/phoneNumber");
 
 const VALID_COUNTRIES = [
   "Afghanistan", "Albania", "Algeria", "Andorra", "Angola", "Antigua and Barbuda", "Argentina", "Armenia", "Australia", "Austria", "Azerbaijan",
@@ -156,18 +161,22 @@ exports.createBusiness = async (req, res) => {
 
     // Initialize and validate contact object
     const contact = businessData.contact || {};
-    const { mobile, whatsapp, email, contactDetails } = contact;
+    const normalizedCountry = normalizeCountry(businessData.address?.country);
+    const normalizedContact = normalizeBusinessContact(contact, normalizedCountry, {
+      requireMobile: true,
+    });
+    const { mobile, whatsapp, email, contactDetails } = normalizedContact;
 
     // Handle contactDetails
     const validatedContactDetails =
       contactDetails && Array.isArray(contactDetails)
-        ? contactDetails.map((contact) => ({
-            title: contact.title || "Mr",
-            name: contact.name || "Default Name",
-            designation: contact.designation || "",
-            mobileNumbers: mobile?.filter((num) => num.trim()) || [""],
-            whatsappNumbers: whatsapp?.filter((num) => num.trim()) || [""],
-            emails: email?.filter((em) => em.trim()) || [""],
+        ? contactDetails.map((detail) => ({
+            title: detail.title || "Mr",
+            name: detail.name || "Default Name",
+            designation: detail.designation || "",
+            mobileNumbers: detail.mobileNumbers?.length ? detail.mobileNumbers : mobile,
+            whatsappNumbers: detail.whatsappNumbers?.length ? detail.whatsappNumbers : whatsapp,
+            emails: detail.emails?.filter((em) => em.trim()) || email?.filter((em) => em.trim()) || [],
           }))
         : [
             {
@@ -188,7 +197,7 @@ exports.createBusiness = async (req, res) => {
         streetName: businessData.address?.streetName,
         area: businessData.address?.area,
         state: businessData.address?.state,
-        country: normalizeCountry(businessData.address?.country),
+        country: normalizedCountry,
         landmark: businessData.address?.landmark || "",
         pincode: businessData.address?.pincode,
         city: businessData.address?.city,
@@ -200,8 +209,8 @@ exports.createBusiness = async (req, res) => {
       },
       contact: {
         contactDetails: validatedContactDetails,
-        mobile: mobile?.filter((num) => num.trim()) || [],
-        whatsapp: whatsapp?.filter((num) => num.trim()) || [],
+        mobile,
+        whatsapp,
         email: email?.filter((em) => em.trim()) || [],
       },
       businessTiming: {
@@ -253,6 +262,13 @@ exports.createBusiness = async (req, res) => {
     });
   } catch (error) {
     console.error("Error creating business:", error);
+    if (error instanceof PhoneNumberValidationError) {
+      return res.status(400).json({
+        success: false,
+        message: error.message,
+        code: error.code,
+      });
+    }
     res.status(400).json({
       success: false,
       message: error._message || error.message || "Failed to create business",
@@ -973,14 +989,14 @@ exports.downloadSampleExcel = async (req, res) => {
       { header: "Guidance", key: "guidance", width: 80 },
     ];
     instructions.addRows([
-      { field: "Business Name", guidance: "Required." },
-      { field: "Phone", guidance: "Required. Use 7 to 15 digits; spaces, +, hyphens, and parentheses are accepted." },
-      { field: "Email", guidance: "Optional. If present, it must be a valid email address." },
+      { field: "Business Name", guidance: "Optional. Missing values are stored as Unnamed Business." },
+      { field: "Phone", guidance: "Required and must be a valid number for its country. Duplicate phone numbers are rejected." },
+      { field: "Email", guidance: "Optional. Imported as provided." },
       { field: "Address", guidance: "Optional. Structured format supported: Street; Area; City; State; Pincode; Country." },
-      { field: "Website", guidance: "Optional. If present, it must be a valid web address." },
-      { field: "Rating", guidance: "Optional. Number from 0 to 5." },
-      { field: "Reviews", guidance: "Optional. Whole number 0 or greater." },
-      { field: "Latitude / Longitude", guidance: "Optional. If one is supplied, both must be supplied and within valid coordinate ranges." },
+      { field: "Website", guidance: "Optional. Imported as provided." },
+      { field: "Rating", guidance: "Optional. Unsupported values are ignored." },
+      { field: "Reviews", guidance: "Optional. Unsupported values are ignored." },
+      { field: "Latitude / Longitude", guidance: "Optional. Unsupported or incomplete coordinates are ignored." },
       { field: "Category / Subcategory", guidance: "Optional. Values are mapped to category records when supplied." },
       { field: "Country", guidance: "Optional. Common abbreviations such as US, USA, UK, and UAE are accepted." },
     ]);
@@ -1214,8 +1230,10 @@ exports.getBusinessById = async (req, res) => {
     );
 
     // Provide the expected shape to the frontend without the DB write storm
+    // `.lean()` returns a plain object, so calling Mongoose document methods such
+    // as `toObject()` here makes every admin/public business-detail request fail.
     const businessDataForClient = {
-      ...business.toObject({ flattenMaps: true }),
+      ...business,
       profileCompletionScore,
       enquiryCount,
       offerCount: offersWithService.length,
@@ -1285,19 +1303,22 @@ exports.updateBusinessContactDetails = async (req, res) => {
       });
     }
 
+    const normalizedContact = normalizeBusinessContact(
+      contact,
+      business.address?.country,
+    );
+
     // Initialize contactDetails if it doesn't exist
     if (!business.contact) business.contact = {};
     if (!business.contact.contactDetails) business.contact.contactDetails = [];
 
     // Update contactDetails
-    business.contact.contactDetails = contact.contactDetails.map((detail) => ({
+    business.contact.contactDetails = normalizedContact.contactDetails.map((detail) => ({
       title: detail.title || "Mr",
       name: detail.name?.trim() || "",
       designation: detail.designation?.trim() || "",
-      mobileNumbers: detail.mobileNumbers?.filter((num) => num?.trim()) || [""],
-      whatsappNumbers: detail.whatsappNumbers?.filter((num) => num?.trim()) || [
-        "",
-      ],
+      mobileNumbers: detail.mobileNumbers,
+      whatsappNumbers: detail.whatsappNumbers,
       emails: detail.emails?.filter(
         (email) => email?.trim() && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
       ) || [""],
@@ -1312,6 +1333,13 @@ exports.updateBusinessContactDetails = async (req, res) => {
     });
   } catch (err) {
     console.error("Error updating contact details:", err);
+    if (err instanceof PhoneNumberValidationError) {
+      return res.status(400).json({
+        success: false,
+        message: err.message,
+        code: err.code,
+      });
+    }
     return res.status(500).json({
       success: false,
       message: "Internal server error",
@@ -1563,39 +1591,22 @@ exports.updateBusiness = async (req, res) => {
       }
     }
 
-    // Handle contact.contactDetails specifically
-    if (
-      parsedData.contact?.contactDetails &&
-      Array.isArray(parsedData.contact.contactDetails)
-    ) {
-      updates.contact = updates.contact || {};
-      updates.contact.contactDetails = parsedData.contact.contactDetails.map(
-        (contact) => ({
-          title: contact.title || "Mr",
-          name: contact.name || "",
-          designation: contact.designation || "",
-          mobileNumbers: contact.mobileNumbers?.filter((num) => num.trim()) || [
-            "",
-          ],
-          whatsappNumbers: contact.whatsappNumbers?.filter((num) =>
-            num.trim()
-          ) || [""],
-          emails: contact.emails?.filter((email) => email.trim()) || [""],
-        })
+    if (parsedData.contact) {
+      updates.contact = normalizeBusinessContact(
+        parsedData.contact,
+        updates.address?.country || business.address?.country,
       );
-      // Sync top-level contact fields if provided
-      if (parsedData.contact.mobile)
-        updates.contact.mobile = parsedData.contact.mobile.filter((num) =>
-          num.trim()
-        );
-      if (parsedData.contact.whatsapp)
-        updates.contact.whatsapp = parsedData.contact.whatsapp.filter((num) =>
-          num.trim()
-        );
-      if (parsedData.contact.email)
-        updates.contact.email = parsedData.contact.email.filter((email) =>
-          email.trim()
-        );
+    }
+
+    if (updates.contact) {
+      updates.contact.contactDetails = updates.contact.contactDetails.map((detail) => ({
+        ...detail,
+        title: detail.title || "Mr",
+        name: detail.name || "",
+        designation: detail.designation || "",
+        emails: detail.emails?.filter((email) => email.trim()) || [],
+      }));
+      updates.contact.email = parsedData.contact.email?.filter((email) => email.trim()) || [];
     }
 
     // Handle KYC updates
@@ -1673,6 +1684,9 @@ exports.updateBusiness = async (req, res) => {
     });
   } catch (err) {
     console.error("Error updating business:", err);
+    if (err instanceof PhoneNumberValidationError) {
+      return res.status(400).json({ message: err.message, code: err.code });
+    }
     return res
       .status(500)
       .json({ message: "Failed to update business", error: err.message });
@@ -2506,8 +2520,9 @@ exports.searchBusinesses = async (req, res) => {
 
 exports.checkPhoneExists = async (req, res) => {
   try {
-    const { phone } = req.body;
-    const existingUser = await User.findOne({ phone });
+    const { phone, country } = req.body;
+    const normalizedPhone = normalizePhoneNumber(phone, { country });
+    const existingUser = await User.findOne({ phone: normalizedPhone });
     if (existingUser) {
       return res.status(409).json({
         available: false,
@@ -2521,6 +2536,14 @@ exports.checkPhoneExists = async (req, res) => {
       success: true,
     });
   } catch (error) {
+    if (error instanceof PhoneNumberValidationError) {
+      return res.status(400).json({
+        available: false,
+        success: false,
+        message: error.message,
+        code: error.code,
+      });
+    }
     res.status(500).json({ message: "Internal Server error" });
   }
 };
