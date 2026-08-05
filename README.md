@@ -143,6 +143,28 @@ PM2 writes stdout and stderr to `logs/`. The setup command installs
 
 The `logs/` directory and `.env` are excluded from Git.
 
+## Browser CORS origins
+
+The API accepts the public frontend and Admin as separate browser origins. Set
+their exact origins in the backend environment (scheme, hostname, and port; no
+path is required):
+
+```env
+FRONTEND_URL=https://urbancitations.com
+ADMIN_URL=https://admin.example.com
+```
+
+For preview deployments or additional aliases, use a comma-separated list:
+
+```env
+CORS_ORIGINS=https://preview.example.com,https://admin-preview.example.com
+```
+
+`FRONTEND_URL`, `ADMIN_URL`, and `CORS_ORIGINS` are combined. In non-production
+environments, `http://localhost:5173` (frontend) and `http://localhost:3000`
+(Admin) are also allowed automatically. Restart or reload the backend after
+changing these environment variables.
+
 ## PM2.io dashboard and phone access
 
 Create a PM2.io bucket at [app.pm2.io](https://app.pm2.io), then use the bucket's

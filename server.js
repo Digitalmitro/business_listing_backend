@@ -15,6 +15,7 @@ logger.installConsoleBridge();
 const connectDB = require("./config/db");
 const { disconnectDB } = require("./config/db");
 const { createRequestLogger } = require("./middlewares/requestLogger");
+const { createCorsOptions } = require("./middlewares/corsOptions");
 const { errorHandler, notFoundHandler } = require("./middlewares/errorHandler");
 const { installProcessHandlers } = require("./utils/processHandlers");
 const { ResourceMonitor } = require("./utils/resourceMonitor");
@@ -86,7 +87,7 @@ function createApp() {
       },
     })
   );
-  app.use(cors());
+  app.use(cors(createCorsOptions()));
 
   const uploadDirectory = path.join(__dirname, "public/uploads");
   fs.mkdirSync(uploadDirectory, { recursive: true });
