@@ -1,111 +1,79 @@
 "use strict";
 
-const { test, after } = require("node:test");
+const { test } = require("node:test");
 const assert = require("node:assert/strict");
-const { publishUnifiedPost, getUserPostingHistory } = require("./socialPostingService");
-const { encrypt } = require("../utils/cryptoUtils");
-const { closeQueueConnections } = require("../utils/queue");
+const socialIntegrationService = require("./socialIntegrationService");
+const { publishUnifiedPost, getUserPostingHistory, scheduleUnifiedPost } = require("./socialPostingService");
 
-test("publishUnifiedPost validates required inputs before attempting broadcast", async () => {
-  await assert.rejects(async () => {
-    await publishUnifiedPost(null, { platforms: ["facebook"] });
-  }, /User authentication required/i);
-
-  await assert.rejects(async () => {
-    await publishUnifiedPost({ _id: "u1" }, { platforms: [] });
-  }, /At least one social media platform must be selected/i);
-
-  await assert.rejects(async () => {
-    await publishUnifiedPost({ _id: "u1" }, { platforms: ["tiktok"] });
-  }, /Unsupported platform/i);
-
-  await assert.rejects(async () => {
-    await publishUnifiedPost({ _id: "u1" }, { platforms: ["facebook"], caption: "", media: [] });
-  }, /Post must contain either caption text or attached media/i);
+test("publishUnifiedPost validates authentication, platforms, and content", async () => {
+  await assert.rejects(publishUnifiedPost(null, { platforms: ["facebook"] }), /User authentication required/);
+  await assert.rejects(publishUnifiedPost({ _id: "u1" }, { platforms: [] }), /At least one social media platform/);
+  await assert.rejects(publishUnifiedPost({ _id: "u1" }, { platforms: ["tiktok"], caption: "hello" }), /Unsupported platform/);
+  await assert.rejects(publishUnifiedPost({ _id: "u1" }, { platforms: ["facebook"] }), /must contain either caption text or attached media/);
 });
 
-test("publishUnifiedPost records SUCCESS on all selected platforms when verified", async () => {
-  const mockUser = {
-    _id: "user_multi_success",
-    socialMediaAccounts: {
-      facebook: { isConnected: true, status: "connected", accessToken: encrypt("token_fb"), tokenExpiry: new Date(Date.now() + 3600000) },
-      linkedin: { isConnected: true, status: "connected", accessToken: encrypt("token_li"), tokenExpiry: new Date(Date.now() + 3600000) },
-    },
-  };
-
-  const result = await publishUnifiedPost(mockUser, {
-    caption: "Exciting company update across FB and LinkedIn!",
-    media: [{ type: "image", url: "https://example.com/photo.jpg" }],
-    platforms: ["facebook", "linkedin"],
+test("publishUnifiedPost passes provider selectors and records success", async (context) => {
+  const calls = [];
+  context.mock.method(socialIntegrationService, "verifyOrPostToPlatform", async (_user, platform, postData) => {
+    calls.push({ platform, postData });
+    return { postId: `${platform}-post-id` };
   });
 
-  assert.equal(result.success, true);
+  const result = await publishUnifiedPost(
+    { _id: "507f1f77bcf86cd799439011", tenantId: "507f1f77bcf86cd799439012" },
+    {
+      caption: "Tenant update",
+      media: [{ type: "image", url: "https://cdn.example.com/post.jpg" }],
+      platforms: ["facebook", "pinterest", "threads"],
+      platformOptions: {
+        facebook: { pageId: "page-1" },
+        pinterest: { boardId: "board-1" },
+      },
+    }
+  );
+
   assert.equal(result.overallStatus, "SUCCESS");
-  assert.equal(result.results.length, 2);
-  assert.equal(result.results[0].status, "SUCCESS");
-  assert.equal(result.results[1].status, "SUCCESS");
-  assert.ok(result.postHistory._id);
-  assert.equal(result.postHistory.content, "Exciting company update across FB and LinkedIn!");
+  assert.equal(result.results.length, 3);
+  assert.equal(calls.find((call) => call.platform === "facebook").postData.pageId, "page-1");
+  assert.equal(calls.find((call) => call.platform === "pinterest").postData.boardId, "board-1");
+  assert.equal(calls.find((call) => call.platform === "threads").postData.imageUrl, "https://cdn.example.com/post.jpg");
+  assert.equal(String(result.postHistory.tenantId), "507f1f77bcf86cd799439012");
 });
 
-test("publishUnifiedPost records PARTIAL_SUCCESS when one platform passes and another fails without aborting", async () => {
-  const mockUser = {
-    _id: "user_partial_resilient",
-    socialMediaAccounts: {
-      twitter: { isConnected: true, status: "connected", accessToken: encrypt("token_tw"), tokenExpiry: new Date(Date.now() + 3600000) },
-      // pinterest is NOT connected / revoked
-      pinterest: { isConnected: true, status: "revoked", accessToken: encrypt("token_pin") },
-    },
-  };
-
-  const result = await publishUnifiedPost(mockUser, {
-    caption: "Partial failure resilience test message",
-    platforms: ["twitter", "pinterest"],
+test("publishUnifiedPost preserves partial provider outcomes", async (context) => {
+  context.mock.method(socialIntegrationService, "verifyOrPostToPlatform", async (_user, platform) => {
+    if (platform === "pinterest") throw new Error("board permission revoked");
+    return { postId: "threads-post-id" };
   });
-
-  assert.equal(result.success, true);
+  const result = await publishUnifiedPost(
+    { _id: "507f1f77bcf86cd799439011", tenantId: "507f1f77bcf86cd799439012" },
+    { caption: "Partial result", platforms: ["threads", "pinterest"] }
+  );
   assert.equal(result.overallStatus, "PARTIAL_SUCCESS");
-  assert.equal(result.results.length, 2);
-  
-  const twRes = result.results.find((r) => r.platform === "twitter");
-  assert.equal(twRes.status, "SUCCESS");
-  assert.ok(twRes.externalPostId);
-
-  const pinRes = result.results.find((r) => r.platform === "pinterest");
-  assert.equal(pinRes.status, "FAILURE");
-  assert.match(pinRes.failureReason, /revoked/i);
+  assert.equal(result.results.find((item) => item.platform === "threads").status, "SUCCESS");
+  assert.match(result.results.find((item) => item.platform === "pinterest").failureReason, /revoked/);
 });
 
-test("publishUnifiedPost records FAILURE when all target platforms fail", async () => {
-  const mockUser = {
-    _id: "user_all_fail",
-    socialMediaAccounts: {},
-  };
-
-  const result = await publishUnifiedPost(mockUser, {
-    caption: "Will fail on all",
-    platforms: ["facebook", "instagram"],
-  });
-
-  assert.equal(result.success, false);
-  assert.equal(result.overallStatus, "FAILURE");
-  assert.equal(result.results[0].status, "FAILURE");
-  assert.equal(result.results[1].status, "FAILURE");
+test("getUserPostingHistory validates identity and returns an offline empty page", async () => {
+  await assert.rejects(getUserPostingHistory(null), /User ID is required/);
+  const result = await getUserPostingHistory("507f1f77bcf86cd799439011", { page: 2, limit: 5 });
+  assert.deepEqual(result.history, []);
+  assert.equal(result.page, 2);
+  assert.equal(result.limit, 5);
 });
 
-test("getUserPostingHistory returns paginated history structure", async () => {
-  await assert.rejects(async () => {
-    await getUserPostingHistory(null);
-  }, /User ID is required/i);
-
-  const res = await getUserPostingHistory("user_hist_123", { page: 1, limit: 10 });
-  assert.ok(Array.isArray(res.history));
-  assert.equal(res.page, 1);
-  assert.equal(res.limit, 10);
-});
-
-after(async () => {
-  try {
-    await closeQueueConnections();
-  } catch (e) {}
+test("scheduleUnifiedPost preserves media type and provider-specific selectors", async () => {
+  const result = await scheduleUnifiedPost(
+    { _id: "507f1f77bcf86cd799439011", tenantId: "507f1f77bcf86cd799439012" },
+    {
+      caption: "Scheduled video",
+      media: [{ type: "video", url: "https://cdn.example.com/video.mp4" }],
+      platforms: ["threads"],
+      platformOptions: { threads: { replyControl: "everyone" } },
+      scheduledFor: new Date(Date.now() + 60_000).toISOString(),
+    }
+  );
+  assert.equal(result.scheduledPost.media[0].type, "video");
+  assert.equal(result.scheduledPost.media[0].url, "https://cdn.example.com/video.mp4");
+  assert.equal(result.scheduledPost.platformOptions.threads.replyControl, "everyone");
 });

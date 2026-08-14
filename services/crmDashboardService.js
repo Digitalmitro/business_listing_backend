@@ -22,7 +22,7 @@ const DASHBOARD_CALENDAR_PREVIEW_DAYS = Number(process.env.DASHBOARD_CALENDAR_PR
 const DASHBOARD_CALENDAR_LIMIT        = Number(process.env.DASHBOARD_CALENDAR_LIMIT        || 6);
 
 // ── Social platforms list – kept in sync with socialIntegrationService ────────
-const SOCIAL_PLATFORMS = (process.env.SOCIAL_PLATFORMS || "facebook,instagram,linkedin,twitter,pinterest").split(",").map(p => p.trim());
+const SOCIAL_PLATFORMS = (process.env.SOCIAL_PLATFORMS || "facebook,instagram,threads,linkedin,twitter,pinterest").split(",").map(p => p.trim());
 
 /**
  * Retrieve comprehensive executive dashboard metrics for CRM & Social Media modules.
@@ -44,11 +44,11 @@ exports.getDashboardSummary = async (ownerId) => {
     const prevPeriodStart = new Date(now.getTime() - DASHBOARD_CALENDAR_PREVIEW_DAYS * 24 * 60 * 60 * 1000);
 
     // 1. Fetch User Social Accounts
-    const user = await User.findById(ownerId).select("_id").lean();
+    const user = await User.findById(ownerId).select("_id tenantId").lean();
     const tenantId = user?.tenantId || ownerId;
     const [socialConnections, googleConnection] = await Promise.all([
-      SocialConnection.find({ tenantId, userId: ownerId }).select("platform status profileName providerUsername connectedAt").lean(),
-      GoogleBusinessConnection.findOne({ tenantId, userId: ownerId }).select("status googleEmail selectedProfileId").lean(),
+      SocialConnection.find({ userId: ownerId }).select("platform status profileName providerUsername connectedAt updatedAt").lean(),
+      GoogleBusinessConnection.findOne({ userId: ownerId }).select("status googleEmail googleName selectedProfileId").lean(),
     ]);
     const connectedSocialAccounts = [];
     const platforms = SOCIAL_PLATFORMS;

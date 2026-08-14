@@ -432,7 +432,7 @@ Base path: `/api/subscription`
 
 ## Social integrations
 
-Tenant OAuth application credentials are stored encrypted per tenant. Supported configuration values are `facebook`, `instagram`, `linkedin`, `twitter`, `pinterest`, and `google_business` (`google` is normalized to `google_business` when saving/removing configuration).
+Tenant OAuth application credentials are stored encrypted per tenant. Supported configuration values are `facebook`, `instagram`, `threads`, `linkedin`, `twitter`, `pinterest`, and `google_business` (`google` is normalized to `google_business` when saving/removing configuration).
 
 ### Tenant credentials and social account OAuth
 

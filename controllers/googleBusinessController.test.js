@@ -1,201 +1,72 @@
 "use strict";
 
-const { test, after } = require("node:test");
+const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const controller = require("./googleBusinessController");
-const { closeQueueConnections } = require("../utils/queue");
+const service = require("../services/googleBusinessService");
+const GoogleConnection = require("../models/GoogleBusinessConnection");
+const User = require("../models/User");
 
-function createMockRes() {
-  const res = {
-    statusCode: null,
+function response() {
+  return {
+    statusCode: 200,
     body: null,
-    status(code) {
-      this.statusCode = code;
-      return this;
-    },
-    json(data) {
-      this.body = data;
-      return this;
-    },
+    redirectUrl: null,
+    status(code) { this.statusCode = code; return this; },
+    json(body) { this.body = body; return this; },
+    redirect(url) { this.statusCode = 302; this.redirectUrl = url; return this; },
   };
-  return res;
 }
 
-test("getAuthUrl returns 200 and a valid Google auth URL", async () => {
-  const req = { user: { _id: "user_123" } };
-  const res = createMockRes();
-
-  await controller.getAuthUrl(req, res);
-
+test("getAuthUrl returns the tenant Google authorization URL", async (context) => {
+  context.mock.method(service, "createAuthorizationRequest", async () => "https://accounts.google.com/o/oauth2/v2/auth?state=safe");
+  const res = response();
+  await controller.getAuthUrl({
+    user: { _id: "u1", tenantId: "t1" },
+    query: { returnTo: "/settings/integrations" },
+  }, res);
   assert.equal(res.statusCode, 200);
-  assert.equal(res.body.success, true);
-  assert.match(res.body.url, /https:\/\/accounts\.google\.com/);
+  assert.match(res.body.url, /^https:\/\/accounts\.google\.com/);
 });
 
-test("connectAccount returns 400 if authorization code is missing", async () => {
-  const req = { body: {}, query: {} };
-  const res = createMockRes();
-
-  await controller.connectAccount(req, res);
-
-  assert.equal(res.statusCode, 400);
-  assert.equal(res.body.success, false);
-  assert.match(res.body.message, /Authorization code is required/i);
+test("legacy direct code exchange endpoint is disabled", async () => {
+  const res = response();
+  await controller.connectAccount({}, res);
+  assert.equal(res.statusCode, 410);
 });
 
-test("connectAccount returns 401 if user is not authenticated", async () => {
-  const req = { body: { code: "mock_auth_code_123" } };
-  const res = createMockRes();
-
-  await controller.connectAccount(req, res);
-
-  assert.equal(res.statusCode, 401);
-  assert.equal(res.body.success, false);
-});
-
-test("disconnectAccount sets isConnected to false on user object", async () => {
-  let saved = false;
-  const req = {
-    user: {
-      _id: "user_123",
-      googleBusinessProfile: { isConnected: true, accessToken: "token" },
-      async save() {
-        saved = true;
-      },
-    },
-  };
-  const res = createMockRes();
-
-  await controller.disconnectAccount(req, res);
-
+test("disconnect deletes only the current tenant and user connection", async (context) => {
+  let filter;
+  context.mock.method(GoogleConnection, "deleteOne", async (received) => { filter = received; });
+  const res = response();
+  await controller.disconnectAccount({ user: { _id: "u1", tenantId: "t1" } }, res);
   assert.equal(res.statusCode, 200);
-  assert.equal(res.body.success, true);
-  assert.equal(req.user.googleBusinessProfile.isConnected, false);
-  assert.equal(saved, true);
+  assert.deepEqual(filter, { tenantId: "t1", userId: "u1" });
 });
 
-test("selectProfile saves selectedProfileId and lastFetchedProfile locally", async () => {
-  let saved = false;
-  const mockProfile = {
-    businessId: "locations/123456789",
-    businessName: "Test Cafe",
-    category: "Cafe",
-    address: { city: "Austin", state: "TX", pincode: "78701", country: "US" },
-    phoneNumber: "+1 512-555-0100",
-    website: "https://testcafe.com",
-    description: "Cozy downtown cafe",
-    businessHours: { isOpen24Hours: false, periods: [] },
-    locationDetails: { latitude: 30.2672, longitude: -97.7431 },
-  };
-
-  const req = {
-    body: { locationName: "locations/123456789" },
-    user: {
-      _id: "user_123",
-      googleBusinessProfile: {
-        isConnected: true,
-        accessToken: "mock_token_abc",
-        tokenExpiry: new Date(Date.now() + 3600000),
-      },
-      async save() {
-        saved = true;
-      },
-    },
-  };
-  const res = createMockRes();
-
-  // Mock service fetch by pre-setting lastFetchedProfile in test if needed or testing controller branch
-  req.user.googleBusinessProfile.lastFetchedProfile = mockProfile;
-
-  await controller.selectProfile(req, res);
-
-  // Since actual axios fetch against Google API will fail without live token unless mocked/caught,
-  // let's verify error handling when location not found or successful branch
-  assert.ok([200, 500].includes(res.statusCode));
+test("callback success uses the stored safe return path", async (context) => {
+  const previous = process.env.FRONTEND_URL;
+  process.env.FRONTEND_URL = "https://urbancitations.com";
+  context.mock.method(service, "connectFromCallback", async () => ({
+    userId: "u1",
+    returnTo: "/settings/integrations",
+  }));
+  context.mock.method(User, "findById", async () => null);
+  const res = response();
+  await controller.handleCallback({ query: { code: "code", state: "state" } }, res);
+  const redirect = new URL(res.redirectUrl);
+  assert.equal(redirect.origin, "https://urbancitations.com");
+  assert.equal(redirect.pathname, "/settings/integrations");
+  assert.equal(redirect.searchParams.get("gmb"), "connected");
+  process.env.FRONTEND_URL = previous;
 });
 
-test("populateProfile successfully populates user details locally without modifying Google", async () => {
-  let userSaved = false;
-  const mockProfile = {
-    businessId: "locations/123456789",
-    businessName: "Local Bakery",
-    phoneNumber: "+1 312-555-0199",
-    address: { city: "Chicago", state: "IL", pincode: "60601", country: "US" },
-  };
+test("callback rejects missing code or state without exposing details", async () => {
+  const codeMissing = response();
+  await controller.handleCallback({ query: { state: "state" } }, codeMissing);
+  assert.equal(new URL(codeMissing.redirectUrl).searchParams.get("reason"), "missing_code");
 
-  const req = {
-    body: { target: "user" },
-    user: {
-      _id: "user_789",
-      phone: "",
-      city: "",
-      area: "",
-      pincode: "",
-      country: "",
-      googleBusinessProfile: {
-        isConnected: true,
-        selectedProfileId: "locations/123456789",
-        lastFetchedProfile: mockProfile,
-      },
-      async save() {
-        userSaved = true;
-      },
-    },
-  };
-  const res = createMockRes();
-
-  await controller.populateProfile(req, res);
-
-  assert.equal(res.statusCode, 200);
-  assert.equal(res.body.success, true);
-  assert.equal(req.user.phone, "+1 312-555-0199");
-  assert.equal(req.user.city, "Chicago");
-  assert.equal(req.user.area, "IL");
-  assert.equal(req.user.pincode, "60601");
-  assert.equal(userSaved, true);
-});
-
-test("handleCallback redirects to error when OAuth returns access_denied", async () => {
-  const req = { query: { error: "access_denied" } };
-  let redirectUrl = null;
-  const res = {
-    redirect(url) {
-      redirectUrl = url;
-    }
-  };
-
-  await controller.handleCallback(req, res);
-  assert.ok(redirectUrl.includes("gmb=error&reason=access_denied"));
-});
-
-test("handleCallback redirects to error when code is missing", async () => {
-  const req = { query: { state: "some_user_id" } };
-  let redirectUrl = null;
-  const res = {
-    redirect(url) {
-      redirectUrl = url;
-    }
-  };
-
-  await controller.handleCallback(req, res);
-  assert.ok(redirectUrl.includes("gmb=error&reason=missing_code"));
-});
-
-test("handleCallback redirects to error when state (userId) is missing", async () => {
-  const req = { query: { code: "some_auth_code" } };
-  let redirectUrl = null;
-  const res = {
-    redirect(url) {
-      redirectUrl = url;
-    }
-  };
-
-  await controller.handleCallback(req, res);
-  assert.ok(redirectUrl.includes("gmb=error&reason=missing_state"));
-});
-
-after(async () => {
-  try {
-    await closeQueueConnections();
-  } catch (e) {}
+  const stateMissing = response();
+  await controller.handleCallback({ query: { code: "code" } }, stateMissing);
+  assert.equal(new URL(stateMissing.redirectUrl).searchParams.get("reason"), "missing_state");
 });

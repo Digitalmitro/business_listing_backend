@@ -1,185 +1,167 @@
 "use strict";
 
-const { test, after } = require("node:test");
+process.env.ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || "test-only-encryption-key-32-characters-minimum";
+
+const { test, mock } = require("node:test");
 const assert = require("node:assert/strict");
-const {
-  SUPPORTED_PLATFORMS,
-  RevokedPermissionError,
-  getPlatformConfig,
-  getAuthUrl,
-  exchangeCodeAndFetchProfile,
-  getValidAccessToken,
-  disconnectAccount,
-  verifyOrPostToPlatform,
-} = require("./socialIntegrationService");
-const { encrypt } = require("../utils/cryptoUtils");
-const { closeQueueConnections } = require("../utils/queue");
+const TenantSocialCredential = require("../models/TenantSocialCredential");
+const OAuthState = require("../models/OAuthState");
+const SocialConnection = require("../models/SocialConnection");
+const { decrypt } = require("../utils/cryptoUtils");
+const service = require("./socialIntegrationService");
 
-test("getPlatformConfig validates all 5 supported platforms and rejects unsupported ones", () => {
-  const platforms = ["facebook", "instagram", "linkedin", "twitter", "pinterest"];
-  for (const p of platforms) {
-    const cfg = getPlatformConfig(p);
-    assert.ok(cfg.name);
-    assert.ok(cfg.authUrl);
-    assert.ok(cfg.postUrl);
+test("provider registry exposes all implemented OAuth integrations", () => {
+  const platforms = ["facebook", "instagram", "threads", "linkedin", "twitter", "pinterest"];
+  assert.deepEqual(Object.keys(service.SUPPORTED_PLATFORMS), platforms);
+  for (const platform of platforms) {
+    const config = service.getPlatformConfig(platform);
+    assert.ok(config.name);
+    assert.match(config.authUrl, /^https:\/\//);
+    assert.match(config.tokenUrl, /^https:\/\//);
+    assert.ok(config.scopes.length > 0);
   }
-
-  assert.throws(() => {
-    getPlatformConfig("tiktok");
-  }, /Unsupported social media platform/i);
+  assert.throws(() => service.getPlatformConfig("tiktok"), /Unsupported social media platform/);
 });
 
-test("getAuthUrl generates correct authorization URLs with required scopes for all platforms", () => {
-  const fbUrl = getAuthUrl("facebook", "state_fb");
-  assert.match(fbUrl, /https:\/\/www\.facebook\.com\/v19\.0\/dialog\/oauth/);
-  assert.match(fbUrl, /pages_manage_posts/);
-  assert.match(fbUrl, /state=state_fb/);
-
-  const liUrl = getAuthUrl("linkedin", "state_li");
-  assert.match(liUrl, /https:\/\/www\.linkedin\.com\/oauth\/v2\/authorization/);
-  assert.match(liUrl, /w_member_social/);
-
-  const twUrl = getAuthUrl("twitter", "state_tw");
-  assert.match(twUrl, /https:\/\/twitter\.com\/i\/oauth2\/authorize/);
-  assert.match(twUrl, /tweet\.write/);
-});
-
-test("exchangeCodeAndFetchProfile returns encrypted tokens and account metadata", async () => {
-  const account = await exchangeCodeAndFetchProfile("facebook", "mock_auth_code_999");
-  assert.equal(account.isConnected, true);
-  assert.equal(account.status, "connected");
-  assert.equal(typeof account.accessToken, "string");
-  assert.equal(account.accessToken.split(":").length, 3); // Encrypted AES-256-GCM format
-  assert.ok(account.tokenExpiry instanceof Date);
-  assert.ok(Array.isArray(account.scopes));
-});
-
-test("getValidAccessToken decrypts unexpired token and returns plaintext", async () => {
-  const mockUser = {
-    socialMediaAccounts: {
-      linkedin: {
-        isConnected: true,
-        status: "connected",
-        accessToken: encrypt("secret_linkedin_access_token_123"),
-        tokenExpiry: new Date(Date.now() + 3600 * 1000), // 1 hour in future
-      },
-    },
-  };
-
-  const token = await getValidAccessToken(mockUser, "linkedin");
-  assert.equal(token, "secret_linkedin_access_token_123");
-});
-
-test("getValidAccessToken throws RevokedPermissionError if account status is already revoked", async () => {
-  const mockUser = {
-    socialMediaAccounts: {
-      instagram: {
-        isConnected: true,
-        status: "revoked",
-        accessToken: encrypt("old_token"),
-      },
-    },
-  };
-
-  await assert.rejects(
-    async () => {
-      await getValidAccessToken(mockUser, "instagram");
-    },
-    (err) => {
-      return err instanceof RevokedPermissionError && err.status === "revoked";
-    }
+test("authorization URLs include exact callback, state, scopes, and X PKCE", () => {
+  const facebook = service.buildAuthorizationUrl(
+    service.getPlatformConfig("facebook"),
+    { id: "fb-client", redirectUri: "https://api.example.com/api/social-integrations/callback/facebook" },
+    "state-facebook"
   );
-});
+  const facebookUrl = new URL(facebook);
+  assert.equal(facebookUrl.searchParams.get("client_id"), "fb-client");
+  assert.equal(facebookUrl.searchParams.get("state"), "state-facebook");
+  assert.match(facebookUrl.searchParams.get("scope"), /pages_manage_posts/);
 
-test("getValidAccessToken automatically refreshes expired token and updates user", async () => {
-  let saved = false;
-  const mockUser = {
-    _id: "user_refresh_123",
-    socialMediaAccounts: {
-      twitter: {
-        isConnected: true,
-        status: "connected",
-        accessToken: encrypt("old_expired_twitter_token"),
-        refreshToken: encrypt("valid_refresh_twitter_token"),
-        tokenExpiry: new Date(Date.now() - 10000), // Expired
-      },
-    },
-    async save() {
-      saved = true;
-    },
-  };
-
-  const newToken = await getValidAccessToken(mockUser, "twitter");
-  assert.match(newToken, /mock_refreshed_access_twitter_/);
-  assert.equal(mockUser.socialMediaAccounts.twitter.status, "connected");
-  assert.equal(saved, true);
-});
-
-test("disconnectAccount resets account fields cleanly and sets status to not_connected", async () => {
-  let saved = false;
-  const mockUser = {
-    _id: "user_disc_456",
-    socialMediaAccounts: {
-      pinterest: {
-        isConnected: true,
-        status: "connected",
-        accessToken: "enc_token",
-        profileName: "My Pin Board",
-      },
-    },
-    async save() {
-      saved = true;
-    },
-  };
-
-  await disconnectAccount(mockUser, "pinterest");
-  assert.equal(mockUser.socialMediaAccounts.pinterest.isConnected, false);
-  assert.equal(mockUser.socialMediaAccounts.pinterest.status, "not_connected");
-  assert.equal(mockUser.socialMediaAccounts.pinterest.accessToken, null);
-  assert.equal(saved, true);
-});
-
-test("verifyOrPostToPlatform verifies official supported endpoints and publishes post", async () => {
-  const mockUser = {
-    _id: "user_post_789",
-    socialMediaAccounts: {
-      facebook: {
-        isConnected: true,
-        status: "connected",
-        accessToken: encrypt("fb_access_valid"),
-        tokenExpiry: new Date(Date.now() + 3600 * 1000),
-      },
-    },
-  };
-
-  const res = await verifyOrPostToPlatform(mockUser, "facebook", { text: "Hello from UrbanCitations!" });
-  assert.equal(res.success, true);
-  assert.equal(res.platform, "facebook");
-  assert.equal(res.endpointUsed, "https://graph.facebook.com/v19.0/me/feed");
-  assert.equal(res.status, "published");
-});
-
-test("verifyOrPostToPlatform throws error if account is not connected or revoked", async () => {
-  const mockUser = {
-    socialMediaAccounts: {
-      twitter: {
-        isConnected: true,
-        status: "revoked",
-        accessToken: encrypt("twitter_token"),
-      },
-    },
-  };
-
-  await assert.rejects(
-    async () => {
-      await verifyOrPostToPlatform(mockUser, "twitter", { text: "My Tweet" });
-    },
-    /Account Twitter\/X is not in 'connected' status|Permissions for twitter have been revoked/i
+  const twitter = service.buildAuthorizationUrl(
+    service.getPlatformConfig("twitter"),
+    { id: "x-client", redirectUri: "https://api.example.com/api/social-integrations/callback/twitter" },
+    "state-x",
+    "pkce-challenge"
   );
+  const twitterUrl = new URL(twitter);
+  assert.equal(twitterUrl.searchParams.get("code_challenge"), "pkce-challenge");
+  assert.equal(twitterUrl.searchParams.get("code_challenge_method"), "S256");
+  assert.match(twitterUrl.searchParams.get("scope"), /offline\.access/);
 });
 
-after(async () => {
+test("tenant credentials are encrypted before upsert and never returned in plaintext", async (context) => {
+  let capturedFilter;
+  let capturedUpdate;
+  context.mock.method(TenantSocialCredential, "findOneAndUpdate", (filter, update) => {
+    capturedFilter = filter;
+    capturedUpdate = update;
+    return {
+      select: async () => ({
+        platform: update.platform,
+        redirectUri: update.redirectUri,
+        enabled: true,
+      }),
+    };
+  });
+
+  const user = { _id: "507f1f77bcf86cd799439011", tenantId: "507f1f77bcf86cd799439012" };
+  const result = await service.saveTenantCredential(user, "threads", {
+    clientId: "threads-client",
+    clientSecret: "threads-secret",
+    redirectUri: "https://api.example.com/api/social-integrations/callback/threads",
+  });
+
+  assert.equal(capturedFilter.tenantId, user.tenantId);
+  assert.equal(capturedFilter.platform, "threads");
+  assert.notEqual(capturedUpdate.clientId, "threads-client");
+  assert.notEqual(capturedUpdate.clientSecret, "threads-secret");
+  assert.equal(decrypt(capturedUpdate.clientId), "threads-client");
+  assert.equal(decrypt(capturedUpdate.clientSecret), "threads-secret");
+  assert.equal(result.clientSecret, undefined);
+});
+
+test("credential validation rejects missing fields and insecure production callbacks", async () => {
+  const user = { _id: "507f1f77bcf86cd799439011", tenantId: "507f1f77bcf86cd799439012" };
+  await assert.rejects(
+    service.saveTenantCredential(user, "facebook", { clientId: "id" }),
+    /clientId, clientSecret, and redirectUri are required/
+  );
+
+  const previous = process.env.NODE_ENV;
+  process.env.NODE_ENV = "production";
+  await assert.rejects(
+    service.saveTenantCredential(user, "facebook", {
+      clientId: "id",
+      clientSecret: "secret",
+      redirectUri: "http://api.example.com/callback",
+    }),
+    /must use HTTPS/
+  );
+  process.env.NODE_ENV = previous;
+});
+
+test("authorization request persists one-time hashed state without plaintext state", async (context) => {
+  const user = { _id: "507f1f77bcf86cd799439011", tenantId: "507f1f77bcf86cd799439012" };
+  let stateRecord;
+  context.mock.method(TenantSocialCredential, "findOne", () => ({
+    select: async () => ({
+      clientId: require("../utils/cryptoUtils").encrypt("x-client"),
+      clientSecret: require("../utils/cryptoUtils").encrypt("x-secret"),
+      redirectUri: "https://api.example.com/api/social-integrations/callback/twitter",
+    }),
+  }));
+  context.mock.method(OAuthState, "create", async (record) => {
+    stateRecord = record;
+    return record;
+  });
+
+  const url = await service.createAuthorizationRequest(user, "twitter", "/settings/integrations");
+  const state = new URL(url).searchParams.get("state");
+  assert.ok(state);
+  assert.notEqual(stateRecord.stateHash, state);
+  assert.equal(stateRecord.stateHash.length, 64);
+  assert.equal(stateRecord.returnTo, "/settings/integrations");
+  assert.ok(stateRecord.codeVerifier);
+});
+
+test("redacted connection metadata contains selectors but no tokens", () => {
+  const result = service.redact({
+    platform: "facebook",
+    status: "connected",
+    providerUsername: "tenant-user",
+    accessToken: "encrypted-secret",
+    refreshToken: "encrypted-refresh",
+    providerData: {
+      pages: [{ id: "page-1", name: "Main Page", access_token: "encrypted-page-token" }],
+      boards: [{ id: "board-1", name: "Main Board", token: "secret" }],
+    },
+  });
+  assert.equal(result.isConnected, true);
+  assert.equal(result.platformUsername, "tenant-user");
+  assert.deepEqual(result.providerData.pages, [{ id: "page-1", name: "Main Page", image: "" }]);
+  assert.deepEqual(result.providerData.boards, [{ id: "board-1", name: "Main Board" }]);
+  assert.equal(result.accessToken, undefined);
+  assert.equal(result.refreshToken, undefined);
+  assert.equal(JSON.stringify(result).includes("encrypted-page-token"), false);
+});
+
+test("account listing is scoped by both tenant and user", async (context) => {
+  const previousReadyState = SocialConnection.db.readyState;
+  SocialConnection.db.readyState = 1;
+  let filter;
+  context.mock.method(SocialConnection, "find", (received) => {
+    filter = received;
+    return { select: async () => [] };
+  });
   try {
-    await closeQueueConnections();
-  } catch (e) {}
+    const accounts = await service.listAccounts({
+      _id: "507f1f77bcf86cd799439011",
+      tenantId: "507f1f77bcf86cd799439012",
+    });
+    assert.deepEqual(filter, {
+      tenantId: "507f1f77bcf86cd799439012",
+      userId: "507f1f77bcf86cd799439011",
+    });
+    assert.equal(accounts.threads.status, "not_connected");
+    assert.equal(accounts.threads.isConnected, false);
+  } finally {
+    SocialConnection.db.readyState = previousReadyState;
+  }
 });

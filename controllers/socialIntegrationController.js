@@ -2,6 +2,7 @@
 
 const logger = require("../utils/logger");
 const service = require("../services/socialIntegrationService");
+const { oauthResultUrl } = require("../utils/oauthRedirect");
 
 exports.getAuthUrl = async (req, res) => {
   try { const platform = String(req.query.platform || "").toLowerCase(); const url = await service.createAuthorizationRequest(req.user, platform, req.query.returnTo); return res.json({ success: true, platform, url }); }
@@ -9,14 +10,19 @@ exports.getAuthUrl = async (req, res) => {
 };
 
 exports.handleCallback = async (req, res) => {
-  const frontend = (process.env.FRONTEND_URL || "").replace(/\/$/, "");
   try {
     if (req.query.error) throw new Error(req.query.error_description || req.query.error);
     if (!req.query.code || !req.query.state) throw new Error("OAuth callback requires code and state");
     const result = await service.connectFromCallback(req.params.platform, req.query.code, req.query.state);
-    const target = result.returnTo.startsWith("/") ? `${frontend}${result.returnTo}` : result.returnTo;
-    const url = new URL(target || frontend || "http://localhost"); url.searchParams.set("social", "connected"); url.searchParams.set("platform", req.params.platform); return res.redirect(url.toString());
-  } catch (error) { logger.error("social.oauth.callback.failed", { platform: req.params.platform, error: error.message }); const target = frontend || "http://localhost"; const url = new URL(target); url.searchParams.set("social", "error"); url.searchParams.set("platform", req.params.platform); url.searchParams.set("reason", "oauth_failed"); return res.redirect(url.toString()); }
+    return res.redirect(oauthResultUrl(result.returnTo, { social: "connected", platform: req.params.platform }));
+  } catch (error) {
+    logger.error("social.oauth.callback.failed", { platform: req.params.platform, error: error.message });
+    return res.redirect(oauthResultUrl("/settings/integrations", {
+      social: "error",
+      platform: req.params.platform,
+      reason: "oauth_failed",
+    }));
+  }
 };
 
 exports.connectAccount = (_req, res) => res.status(410).json({ success: false, message: "Direct code exchange is disabled; start OAuth with GET /auth-url and follow the provider callback" });

@@ -1,5 +1,7 @@
 "use strict";
 
+process.env.ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || "test-only-encryption-key-32-characters-minimum";
+
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const { encrypt, decrypt, getSecretKey } = require("./cryptoUtils");

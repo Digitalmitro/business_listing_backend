@@ -20,9 +20,15 @@ exports.publishPost = async (req, res) => {
 
     const result = await socialPostingService.publishUnifiedPost(req.user, { caption, media, platforms, platformOptions });
 
+    const failureMessages = (result.results || [])
+      .filter((r) => r.status === "FAILURE")
+      .map((r) => `${r.platform}: ${r.failureReason}`)
+      .join("; ");
+
     return res.status(result.success ? 200 : 400).json({
       success: result.success,
       overallStatus: result.overallStatus,
+      message: failureMessages || (result.success ? "Post published successfully" : "Broadcast failed"),
       postHistory: result.postHistory,
       results: result.results,
     });

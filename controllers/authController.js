@@ -222,13 +222,20 @@ exports.googleLogin = async (req, res) => {
         userImage: picture,
       });
       await user.save();
+      const tenant = await Tenant.create({ ownerUserId: user._id, name });
+      user.tenantId = tenant._id;
+      await user.save();
 
       // Add welcome email job to queue for new SSO users
       await addJob("welcome-email", { userId: user._id });
+    } else if (!user.tenantId) {
+      const tenant = await Tenant.create({ ownerUserId: user._id, name: user.full_name || name });
+      user.tenantId = tenant._id;
+      await user.save();
     }
 
     // Generate JWT token
-    const payload = { id: user._id };
+    const payload = { id: user._id, tenantId: user.tenantId, role: "user" };
     const token = jwt.sign(payload, process.env.JWT_SECRET, {
       expiresIn: "7d",
     });

@@ -35,6 +35,12 @@ const scheduledSocialPostWorker = new Worker(
       await scheduledPost.save();
       return { status: "failed", reason: "user_not_found" };
     }
+    if (String(user.tenantId || user._id) !== String(scheduledPost.tenantId)) {
+      scheduledPost.status = "failed";
+      scheduledPost.error = "Tenant mismatch";
+      await scheduledPost.save();
+      return { status: "failed", reason: "tenant_mismatch" };
+    }
 
     try {
       const result = await socialPostingService.publishUnifiedPost(user, {

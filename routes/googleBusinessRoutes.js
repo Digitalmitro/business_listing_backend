@@ -7,6 +7,7 @@ const {
   getAuthUrl,
   connectAccount,
   disconnectAccount,
+  getConnectionStatus,
   getProfiles,
   selectProfile,
   getSelectedProfile,
@@ -18,6 +19,7 @@ router.get("/callback", handleCallback);
 
 // Protected — require user JWT
 router.get("/auth-url", authMiddleware, getAuthUrl);
+router.get("/status", authMiddleware, getConnectionStatus);
 router.post("/connect", authMiddleware, connectAccount);
 router.post("/disconnect", authMiddleware, disconnectAccount);
 router.get("/profiles", authMiddleware, getProfiles);
@@ -26,3 +28,4 @@ router.get("/selected-profile", authMiddleware, getSelectedProfile);
 router.post("/populate-profile", authMiddleware, populateProfile);
 
 module.exports = router;
+

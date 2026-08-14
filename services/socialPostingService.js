@@ -69,11 +69,12 @@ async function publishUnifiedPost(user, { caption = "", media = [], platforms = 
       });
       logger.info(`Unified post published successfully to ${platform}`, { userId: user._id, postId: postRes.postId });
     } catch (err) {
-      logger.error(`Unified post failed for ${platform}`, { error: err.message, userId: user._id });
+      const errorDetail = err.response?.data?.detail || err.response?.data?.error?.message || err.response?.data?.message || err.message || "Unknown error occurred while publishing to platform";
+      logger.error(`Unified post failed for ${platform}`, { error: errorDetail, userId: user._id });
       results.push({
         platform,
         status: "FAILURE",
-        failureReason: err.message || "Unknown error occurred while publishing to platform",
+        failureReason: errorDetail,
       });
     }
   }
@@ -194,13 +195,11 @@ async function scheduleUnifiedPost(user, { caption = "", media = [], platforms =
     throw new Error("Post must contain either caption text or attached media");
   }
 
-  const mediaUrls = normalizedMedia.map((m) => m.url);
-
   const docData = {
     userId: user._id,
     tenantId: user.tenantId || user._id,
     caption: captionStr,
-    media: mediaUrls,
+    media: normalizedMedia,
     platforms: normalizedPlatforms,
     platformOptions,
     scheduledFor: scheduleDate,
@@ -218,7 +217,7 @@ async function scheduleUnifiedPost(user, { caption = "", media = [], platforms =
       logger.warn("Could not enqueue delayed BullMQ job for scheduled post", { error: queueErr.message });
     }
   } else {
-    scheduledDoc = new ScheduledSocialPost({ _id: `sched_${Date.now()}`, ...docData });
+    scheduledDoc = new ScheduledSocialPost(docData);
   }
 
   logger.info("Social media post scheduled successfully", { userId: user._id, scheduledPostId: scheduledDoc._id, delayMs });

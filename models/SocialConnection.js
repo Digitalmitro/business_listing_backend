@@ -6,7 +6,7 @@ const socialConnectionSchema = new mongoose.Schema(
   {
     userId: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true, index: true },
     tenantId: { type: mongoose.Schema.Types.ObjectId, ref: "Tenant", required: true, index: true },
-    platform: { type: String, required: true, enum: ["facebook", "instagram", "linkedin", "twitter", "pinterest"], index: true },
+    platform: { type: String, required: true, enum: ["facebook", "instagram", "threads", "linkedin", "twitter", "pinterest"], index: true },
     status: { type: String, enum: ["connected", "expired", "revoked", "not_connected"], default: "connected", index: true },
     providerAccountId: { type: String, required: true },
     providerUsername: { type: String, default: "" },

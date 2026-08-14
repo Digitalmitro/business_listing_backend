@@ -2,13 +2,33 @@
 const { Queue } = require('bullmq');
 const Redis = require('ioredis');
 const logger = require('./logger');
+const isTestRuntime = process.env.NODE_ENV === 'test';
 
-const redisConnection = new Redis({
+const redisConnection = isTestRuntime ? {
+  status: 'end',
+  on() {},
+  async quit() {},
+} : new Redis({
   host: process.env.REDIS_HOST || 'localhost',
   port: process.env.REDIS_PORT || 6379,
   password: process.env.REDIS_PASSWORD || undefined,
   maxRetriesPerRequest: null, // Required for BullMQ
+  retryStrategy(times) {
+    // Exponential backoff capped at 5s to avoid flood logs when Redis is restarting
+    return Math.min(times * 500, 5000);
+  },
 });
+
+function createQueue(name, options) {
+  if (!isTestRuntime) return new Queue(name, options);
+  return {
+    name,
+    async add(jobName, data, jobOptions = {}) {
+      return { id: jobOptions.jobId || `${jobName}-test`, name: jobName, data, opts: jobOptions };
+    },
+    async close() {},
+  };
+}
 
 redisConnection.on('connect', () => {
   logger.info('redis.connected', 'Redis connection established');
@@ -26,50 +46,51 @@ redisConnection.on('end', () => {
   logger.warn('redis.disconnected', 'Redis connection closed');
 });
 
-const defaultAttempts = parseInt(process.env.QUEUE_DEFAULT_ATTEMPTS, 10) || 3;
-const defaultDelay = parseInt(process.env.QUEUE_DEFAULT_DELAY, 10) || 1000;
+const defaultAttempts = parseInt(process.env.BULLMQ_DEFAULT_ATTEMPTS || process.env.QUEUE_DEFAULT_ATTEMPTS, 10) || 3;
+const defaultDelay = parseInt(process.env.BULLMQ_BACKOFF_DELAY || process.env.QUEUE_DEFAULT_DELAY, 10) || 1000;
+const defaultBackoffType = process.env.BULLMQ_BACKOFF_TYPE || 'exponential';
 
-const emailQueue = new Queue('email-campaigns', {
+const emailQueue = createQueue('email-campaigns', {
   connection: redisConnection,
   defaultJobOptions: {
     attempts: defaultAttempts,
-    backoff: { type: 'exponential', delay: defaultDelay },
+    backoff: { type: defaultBackoffType, delay: defaultDelay },
   },
 });
 
-const welcomeQueue = new Queue('welcome-email', {
+const welcomeQueue = createQueue('welcome-email', {
   connection: redisConnection,
   defaultJobOptions: {
     attempts: defaultAttempts,
-    backoff: { type: 'exponential', delay: defaultDelay },
+    backoff: { type: defaultBackoffType, delay: defaultDelay },
   },
 });
 
-const purchaseQueue = new Queue('purchase-email', {
+const purchaseQueue = createQueue('purchase-email', {
   connection: redisConnection,
   defaultJobOptions: {
     attempts: defaultAttempts,
-    backoff: { type: 'exponential', delay: defaultDelay },
+    backoff: { type: defaultBackoffType, delay: defaultDelay },
   },
 });
 
-const claimQueue = new Queue('claim-email', {
+const claimQueue = createQueue('claim-email', {
   connection: redisConnection,
   defaultJobOptions: {
     attempts: defaultAttempts,
-    backoff: { type: 'exponential', delay: defaultDelay },
+    backoff: { type: defaultBackoffType, delay: defaultDelay },
   },
 });
 
-const kycQueue = new Queue('kyc-email', {
+const kycQueue = createQueue('kyc-email', {
   connection: redisConnection,
   defaultJobOptions: {
     attempts: defaultAttempts,
-    backoff: { type: 'exponential', delay: defaultDelay },
+    backoff: { type: defaultBackoffType, delay: defaultDelay },
   },
 });
 
-const geocodingQueue = new Queue('geocoding-batch', {
+const geocodingQueue = createQueue('geocoding-batch', {
   connection: redisConnection,
   defaultJobOptions: {
     attempts: parseInt(process.env.GEOCODING_ATTEMPTS, 10) || 5,
@@ -77,35 +98,35 @@ const geocodingQueue = new Queue('geocoding-batch', {
   },
 });
 
-const enquiryQueue = new Queue('enquiry-email', {
+const enquiryQueue = createQueue('enquiry-email', {
   connection: redisConnection,
   defaultJobOptions: {
     attempts: defaultAttempts,
-    backoff: { type: 'exponential', delay: defaultDelay },
+    backoff: { type: defaultBackoffType, delay: defaultDelay },
   },
 });
 
-const bookingQueue = new Queue('booking-email', {
+const bookingQueue = createQueue('booking-email', {
   connection: redisConnection,
   defaultJobOptions: {
     attempts: defaultAttempts,
-    backoff: { type: 'exponential', delay: defaultDelay },
+    backoff: { type: defaultBackoffType, delay: defaultDelay },
   },
 });
 
-const leadFollowUpQueue = new Queue('lead-follow-up', {
+const leadFollowUpQueue = createQueue('lead-follow-up', {
   connection: redisConnection,
   defaultJobOptions: {
     attempts: defaultAttempts,
-    backoff: { type: 'exponential', delay: defaultDelay },
+    backoff: { type: defaultBackoffType, delay: defaultDelay },
   },
 });
 
-const scheduledSocialPostQueue = new Queue('scheduled-social-post', {
+const scheduledSocialPostQueue = createQueue('scheduled-social-post', {
   connection: redisConnection,
   defaultJobOptions: {
     attempts: defaultAttempts,
-    backoff: { type: 'exponential', delay: defaultDelay },
+    backoff: { type: defaultBackoffType, delay: defaultDelay },
   },
 });
 

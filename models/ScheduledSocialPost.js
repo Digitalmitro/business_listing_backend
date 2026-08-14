@@ -17,7 +17,7 @@ const scheduledSocialPostSchema = new mongoose.Schema(
       default: "",
     },
     media: {
-      type: [String],
+      type: [mongoose.Schema.Types.Mixed],
       default: [],
     },
     platforms: {

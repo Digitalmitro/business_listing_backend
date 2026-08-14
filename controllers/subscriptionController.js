@@ -20,11 +20,21 @@ const environment =
 
 const paypalClient = new paypal.core.PayPalHttpClient(environment);
 
-// Razorpay Instance
-const razorpay = new (require("razorpay"))({
-  key_id: process.env.RAZORPAY_KEY_ID,
-  key_secret: process.env.RAZORPAY_KEY_SECRET,
-});
+// Initialize Razorpay only when a Razorpay operation is requested. Optional
+// payment configuration must not prevent the rest of the API from starting.
+const getRazorpayClient = () => {
+  const keyId = process.env.RAZORPAY_KEY_ID;
+  const keySecret = process.env.RAZORPAY_KEY_SECRET;
+
+  if (!keyId || !keySecret) {
+    const error = new Error("Razorpay is not configured");
+    error.code = "PAYMENT_PROVIDER_NOT_CONFIGURED";
+    throw error;
+  }
+
+  const Razorpay = require("razorpay");
+  return new Razorpay({ key_id: keyId, key_secret: keySecret });
+};
 
 // Helper: Get PayPal Access Token
 const getPayPalAccessToken = async () => {
@@ -266,6 +276,8 @@ const createRazorpaySubscription = async (req, res) => {
   const userId = req.user.id;
 
   try {
+    const razorpay = getRazorpayClient();
+
     if (!businessId || !packageId) {
       return res
         .status(400)
@@ -331,6 +343,9 @@ const createRazorpaySubscription = async (req, res) => {
     });
   } catch (error) {
     console.error("Razorpay Subscription Error:", error);
+    if (error.code === "PAYMENT_PROVIDER_NOT_CONFIGURED") {
+      return res.status(503).json({ success: false, message: error.message });
+    }
     res
       .status(500)
       .json({ success: false, message: "Failed to create subscription" });
@@ -409,6 +424,12 @@ const verifyRazorpaySubscription = async (req, res) => {
 
   try {
     const secret = process.env.RAZORPAY_KEY_SECRET;
+    if (!secret) {
+      return res.status(503).json({
+        success: false,
+        message: "Razorpay is not configured",
+      });
+    }
     const body = razorpay_payment_id + "|" + razorpay_subscription_id;
 
     const expectedSignature = crypto
@@ -498,6 +519,7 @@ const cancelBusinessSubscription = async (req, res) => {
       business.subscription.paymentGateway === "razorpay" &&
       business.subscription.razorpaySubscriptionId
     ) {
+      const razorpay = getRazorpayClient();
       await razorpay.subscriptions.cancel(
         business.subscription.razorpaySubscriptionId
       );
@@ -528,6 +550,9 @@ const cancelBusinessSubscription = async (req, res) => {
     res.json({ success: true, message: "Subscription canceled successfully" });
   } catch (error) {
     console.error("Cancel Subscription Error:", error);
+    if (error.code === "PAYMENT_PROVIDER_NOT_CONFIGURED") {
+      return res.status(503).json({ success: false, message: error.message });
+    }
     res
       .status(500)
       .json({ success: false, message: "Failed to cancel subscription" });

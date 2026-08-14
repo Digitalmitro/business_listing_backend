@@ -12,6 +12,7 @@ const BusinessSchema = new Schema(
       type: String, 
       default: "https://img.icons8.com/fluency/100/000000/organization.png" 
     },
+    googleLocationId: { type: String, index: true },
     address: {
       blockName: { type: String },
       streetName: { type: String },

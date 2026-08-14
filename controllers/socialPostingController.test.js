@@ -1,88 +1,63 @@
 "use strict";
 
-const { test, after } = require("node:test");
+const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const controller = require("./socialPostingController");
-const { encrypt } = require("../utils/cryptoUtils");
-const { closeQueueConnections } = require("../utils/queue");
+const service = require("../services/socialPostingService");
 
-function createMockRes() {
+function response() {
   return {
-    statusCode: null,
+    statusCode: 200,
     body: null,
-    status(code) {
-      this.statusCode = code;
-      return this;
-    },
-    json(data) {
-      this.body = data;
-      return this;
-    },
+    status(code) { this.statusCode = code; return this; },
+    json(body) { this.body = body; return this; },
   };
 }
 
-test("publishPost returns 401 when user is not authenticated", async () => {
-  const req = { body: { caption: "hi", platforms: ["facebook"] } };
-  const res = createMockRes();
-  await controller.publishPost(req, res);
+test("publishPost requires an authenticated user and at least one platform", async () => {
+  const unauthenticated = response();
+  await controller.publishPost({ body: { platforms: ["facebook"] } }, unauthenticated);
+  assert.equal(unauthenticated.statusCode, 401);
 
-  assert.equal(res.statusCode, 401);
-  assert.equal(res.body.success, false);
+  const empty = response();
+  await controller.publishPost({ user: { _id: "u1" }, body: { platforms: [] } }, empty);
+  assert.equal(empty.statusCode, 400);
 });
 
-test("publishPost returns 400 when platforms array is missing or empty", async () => {
-  const req = { user: { _id: "u1" }, body: { caption: "hi", platforms: [] } };
-  const res = createMockRes();
-  await controller.publishPost(req, res);
-
-  assert.equal(res.statusCode, 400);
-  assert.equal(res.body.success, false);
-});
-
-test("publishPost executes unified publication across platforms and returns 200", async () => {
-  const req = {
-    user: {
-      _id: "u_ctrl_pub",
-      socialMediaAccounts: {
-        facebook: {
-          isConnected: true,
-          status: "connected",
-          accessToken: encrypt("ctrl_fb"),
-          tokenExpiry: new Date(Date.now() + 3600000),
-        },
-      },
-    },
+test("publishPost forwards platform options and returns provider outcomes", async (context) => {
+  let payload;
+  context.mock.method(service, "publishUnifiedPost", async (_user, received) => {
+    payload = received;
+    return {
+      success: true,
+      overallStatus: "SUCCESS",
+      postHistory: { _id: "history-1" },
+      results: [{ platform: "facebook", status: "SUCCESS", externalPostId: "post-1" }],
+    };
+  });
+  const res = response();
+  await controller.publishPost({
+    user: { _id: "u1", tenantId: "t1" },
     body: {
-      caption: "Controller unified post test",
+      caption: "hello",
       platforms: ["facebook"],
-      media: [{ type: "image", url: "https://example.com/ctrl.png" }],
+      platformOptions: { facebook: { pageId: "page-1" } },
     },
-  };
-  const res = createMockRes();
-  await controller.publishPost(req, res);
-
+  }, res);
   assert.equal(res.statusCode, 200);
-  assert.equal(res.body.success, true);
-  assert.equal(res.body.overallStatus, "SUCCESS");
-  assert.equal(res.body.results[0].platform, "facebook");
-  assert.equal(res.body.results[0].status, "SUCCESS");
-  assert.ok(res.body.postHistory._id);
+  assert.equal(payload.platformOptions.facebook.pageId, "page-1");
+  assert.equal(res.body.results[0].externalPostId, "post-1");
 });
 
-test("getHistory returns 200 with paginated structure for authenticated user", async () => {
-  const req = { user: { _id: "u_ctrl_hist" }, query: { page: 1, limit: 15 } };
-  const res = createMockRes();
-  await controller.getHistory(req, res);
-
+test("getHistory scopes the request through the authenticated user object", async (context) => {
+  let receivedUser;
+  context.mock.method(service, "getUserPostingHistory", async (user) => {
+    receivedUser = user;
+    return { history: [], total: 0, page: 1, limit: 10 };
+  });
+  const user = { _id: "u1", tenantId: "t1" };
+  const res = response();
+  await controller.getHistory({ user, query: {} }, res);
   assert.equal(res.statusCode, 200);
-  assert.equal(res.body.success, true);
-  assert.ok(Array.isArray(res.body.history));
-  assert.equal(res.body.page, 1);
-  assert.equal(res.body.limit, 15);
-});
-
-after(async () => {
-  try {
-    await closeQueueConnections();
-  } catch (e) {}
+  assert.equal(receivedUser, user);
 });

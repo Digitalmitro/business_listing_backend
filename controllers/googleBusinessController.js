@@ -1,11 +1,42 @@
 "use strict";
 
 const mongoose = require("mongoose");
-const User = require("../models/User");
 const Business = require("../models/Business");
 const logger = require("../utils/logger");
 const googleBusinessService = require("../services/googleBusinessService");
 const GoogleConnection = require("../models/GoogleBusinessConnection");
+const { oauthResultUrl } = require("../utils/oauthRedirect");
+
+/**
+ * GET /api/google-business/status
+ * Lightweight DB-only check — no Google API calls, no quota consumed.
+ * Returns whether the user has an active Google Business connection.
+ */
+exports.getConnectionStatus = async (req, res) => {
+  try {
+    if (!req.user) return res.status(401).json({ success: false, isConnected: false });
+    const conn = await GoogleConnection.findOne({
+      tenantId: req.user.tenantId || req.user._id,
+      userId: req.user._id,
+    }).select("status connectedAt googleEmail googleName googlePicture selectedProfileId lastFetchedProfile");
+    if (!conn) return res.json({ success: true, isConnected: false });
+    return res.json({
+      success: true,
+      isConnected: conn.status === "connected",
+      status: conn.status,
+      connectedAt: conn.connectedAt,
+      googleEmail: conn.googleEmail || null,
+      googleName: conn.googleName || null,
+      googlePicture: conn.googlePicture || null,
+      selectedProfileId: conn.selectedProfileId || null,
+      profileName: conn.lastFetchedProfile?.businessName || null,
+      lastFetchedProfile: conn.lastFetchedProfile || null,
+    });
+  } catch (error) {
+    logger.error("google.status.failed", { userId: req.user?._id, error: error.message });
+    return res.status(500).json({ success: false, isConnected: false, message: error.message });
+  }
+};
 
 /**
  * GET /api/google-business/auth-url
@@ -32,43 +63,34 @@ exports.getAuthUrl = async (req, res) => {
  * On failure  → redirects to FRONTEND_URL/businessEdit?gmb=error&reason=<message>
  */
 exports.handleCallback = async (req, res) => {
-  const frontendUrl = (process.env.FRONTEND_URL || "http://localhost:5173").replace(/\/$/, "");
-  const successRedirect = `${frontendUrl}/businessEdit?gmb=connected`;
-
   const { code, state, error: oauthError } = req.query;
 
   // Google returns `error=access_denied` when the user cancels or denies permission
   if (oauthError) {
     logger.warn("Google OAuth callback: user denied access or error returned", { error: oauthError });
-    return res.redirect(`${frontendUrl}/businessEdit?gmb=error&reason=${encodeURIComponent(oauthError)}`);
+    return res.redirect(oauthResultUrl("/settings/integrations", { gmb: "error", reason: oauthError }));
   }
 
   if (!code) {
     logger.error("Google OAuth callback: no authorization code received");
-    return res.redirect(`${frontendUrl}/businessEdit?gmb=error&reason=missing_code`);
+    return res.redirect(oauthResultUrl("/settings/integrations", { gmb: "error", reason: "missing_code" }));
   }
 
   if (!state) {
     logger.error("Google OAuth callback: state missing from callback");
-    return res.redirect(`${frontendUrl}/businessEdit?gmb=error&reason=missing_state`);
+    return res.redirect(oauthResultUrl("/settings/integrations", { gmb: "error", reason: "missing_state" }));
   }
 
   try {
     const result = await googleBusinessService.connectFromCallback(code, state);
     logger.info("Google OAuth callback: account connected successfully", { userId: result.userId });
-
-    // Best-effort prefetch profiles so the UI loads instantly
-    try {
-      const user = await User.findById(result.userId);
-      if (user) await googleBusinessService.fetchAllProfilesForUser(user);
-    } catch (fetchErr) {
-      logger.warn("Google OAuth callback: could not prefetch profiles", { error: fetchErr.message });
-    }
-
-    return res.redirect(successRedirect);
+    // NOTE: We intentionally do NOT prefetch profiles here to avoid burning Google API quota
+    // (mybusinessaccountmanagement.googleapis.com has strict rate limits).
+    // Profiles are fetched lazily when the user opens the Business Edit or Integrations page.
+    return res.redirect(oauthResultUrl(result.returnTo, { gmb: "connected" }));
   } catch (error) {
     logger.error("Google OAuth callback: token exchange failed", { error: error.message });
-    return res.redirect(`${frontendUrl}/businessEdit?gmb=error&reason=${encodeURIComponent(error.message)}`);
+    return res.redirect(oauthResultUrl("/settings/integrations", { gmb: "error", reason: "oauth_failed" }));
   }
 };
 
@@ -104,8 +126,87 @@ exports.disconnectAccount = async (req, res) => {
 };
 
 /**
+ * Helper: Automatically create / update a Business listing in UrbanCitations from a Google Business Profile location
+ */
+async function autoImportProfileToBusiness(user, profile) {
+  if (!profile || !profile.businessName) return null;
+  const name = profile.businessName.trim();
+  const locId = profile.businessId || "";
+
+  // Check if business already exists
+  let targetBusiness = await Business.findOne({
+    userId: user._id,
+    $or: [
+      ...(locId ? [{ googleLocationId: locId }] : []),
+      { businessName: new RegExp(`^${name}$`, "i") }
+    ]
+  });
+
+  const rawCoords = [
+    Number(profile.locationDetails?.longitude) || 0,
+    Number(profile.locationDetails?.latitude) || 0,
+  ];
+
+  if (!targetBusiness) {
+    targetBusiness = new Business({
+      userId: user._id,
+      businessName: name,
+      googleLocationId: locId,
+      address: {
+        pincode: profile.address?.pincode || "000000",
+        city: profile.address?.city || "Unknown",
+        state: profile.address?.state || "Unknown",
+        country: profile.address?.country || "US",
+        streetName: profile.address?.streetName || "",
+      },
+      addressString: profile.address?.formattedAddress || "",
+      location: {
+        type: "Point",
+        coordinates: rawCoords,
+      },
+      description: profile.description || "",
+      website: profile.website || "",
+      importedCategory: profile.category || "",
+      contact: {
+        contactDetails: [
+          {
+            title: "Mr",
+            name: user.full_name || "Owner",
+            mobileNumbers: profile.phoneNumber ? [profile.phoneNumber] : ["0000000000"],
+          }
+        ]
+      }
+    });
+
+    await targetBusiness.save();
+
+    user.businesses = user.businesses || [];
+    if (!user.businesses.some((id) => id.toString() === targetBusiness._id.toString())) {
+      user.businesses.push(targetBusiness._id);
+      await user.save();
+    }
+  } else {
+    // Update existing business details if needed
+    if (locId && !targetBusiness.googleLocationId) {
+      targetBusiness.googleLocationId = locId;
+    }
+    if (profile.address?.formattedAddress && !targetBusiness.addressString) {
+      targetBusiness.addressString = profile.address.formattedAddress;
+    }
+    if (profile.category && !targetBusiness.importedCategory) {
+      targetBusiness.importedCategory = profile.category;
+    }
+    await targetBusiness.save();
+  }
+
+  return targetBusiness;
+}
+
+exports.autoImportProfileToBusiness = autoImportProfileToBusiness;
+
+/**
  * GET /api/google-business/profiles
- * Fetches all available Business Profiles across connected accounts.
+ * Fetches all available Business Profiles across connected accounts and auto-syncs them to Business listings.
  */
 exports.getProfiles = async (req, res) => {
   try {
@@ -114,13 +215,33 @@ exports.getProfiles = async (req, res) => {
     }
 
     const profiles = await googleBusinessService.fetchAllProfilesForUser(req.user);
+
+    // Auto-create / sync business listings in UrbanCitations for each profile
+    const importedBusinesses = [];
+    for (const p of profiles) {
+      try {
+        const biz = await autoImportProfileToBusiness(req.user, p);
+        if (biz) importedBusinesses.push(biz);
+      } catch (err) {
+        logger.warn("google.auto_import.error", { profileId: p.businessId, error: err.message });
+      }
+    }
+
     return res.status(200).json({
       success: true,
       count: profiles.length,
       profiles,
+      importedBusinesses,
     });
   } catch (error) {
     logger.error("Error fetching Google Business Profiles", { error: error.message });
+    const httpStatus = error.response?.status;
+    if (httpStatus === 429) {
+      return res.status(429).json({ success: false, message: "Google API rate limit exceeded. Please wait a moment and try again." });
+    }
+    if (httpStatus === 403) {
+      return res.status(403).json({ success: false, message: "Google Business Profile API access not granted. This API requires explicit approval from Google — see the Google Cloud Console." });
+    }
     return res.status(500).json({
       success: false,
       message: "Failed to fetch Business Profiles: " + error.message,

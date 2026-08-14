@@ -6,8 +6,14 @@ const schema = new mongoose.Schema({
   status: { type: String, enum: ["connected", "expired", "revoked"], default: "connected" },
   accessToken: { type: String, required: true, select: false },
   refreshToken: { type: String, required: true, select: false },
-  tokenExpiresAt: { type: Date }, googleAccountId: String, googleEmail: String,
-  selectedProfileId: String, lastFetchedProfile: mongoose.Schema.Types.Mixed, connectedAt: { type: Date, default: Date.now },
+  tokenExpiresAt: { type: Date },
+  googleAccountId: String,
+  googleEmail: String,
+  googleName: String,
+  googlePicture: String,
+  selectedProfileId: String,
+  lastFetchedProfile: mongoose.Schema.Types.Mixed,
+  connectedAt: { type: Date, default: Date.now },
 }, { timestamps: true });
 schema.index({ tenantId: 1, userId: 1 }, { unique: true });
 module.exports = mongoose.model("GoogleBusinessConnection", schema);

@@ -2,7 +2,7 @@
 const mongoose = require("mongoose");
 const schema = new mongoose.Schema({
   tenantId: { type: mongoose.Schema.Types.ObjectId, ref: "Tenant", required: true, index: true },
-  platform: { type: String, enum: ["facebook", "instagram", "linkedin", "twitter", "pinterest", "google_business"], required: true },
+  platform: { type: String, enum: ["facebook", "instagram", "threads", "linkedin", "twitter", "pinterest", "google_business"], required: true },
   clientId: { type: String, required: true, select: false },
   clientSecret: { type: String, required: true, select: false },
   redirectUri: { type: String, required: true },
