@@ -132,7 +132,7 @@ function buildAuthorizationUrl(config, credential, state, codeChallenge) {
     scope: config.scopes.join(config.scopeSeparator || " "),
     state,
   });
-  if (config.platform === "facebook" || config.platform === "instagram") {
+  if (config.platform === "facebook") {
     params.set("auth_type", "rerequest");
   }
   if (codeChallenge) {
@@ -321,9 +321,9 @@ async function profileFor(config, token, credential) {
               access_token: pageData.access_token || token,
             });
           }
-        } catch (e) {}
+        } catch (e) { }
       }
-    } catch (e) {}
+    } catch (e) { }
   }
 
   return { id: String(me.id || ""), username: "", name: me.name || "", image: "", pages };
@@ -445,9 +445,9 @@ async function getValidAccessToken(user, platform) {
     const data = ["instagram", "threads"].includes(config.platform)
       ? await refreshLongLivedMetaToken(config, account)
       : await tokenRequest(config, {
-          grant_type: "refresh_token",
-          refresh_token: decrypt(account.refreshToken),
-        }, null, credential);
+        grant_type: "refresh_token",
+        refresh_token: decrypt(account.refreshToken),
+      }, null, credential);
     if (!data.access_token) throw new Error("refresh response missing access token");
     account.accessToken = encrypt(data.access_token);
     if (data.refresh_token) account.refreshToken = encrypt(data.refresh_token);
