@@ -23,6 +23,26 @@ exports.login = async (req, res) => {
       return res.status(400).json({ success: false, message: "Invalid credentials" });
     }
 
+    // Check if OTP is enabled (defaults to true if ADMIN_OTP is not provided or not explicitly "false")
+    const isOtpEnabled = process.env.ADMIN_OTP !== "false";
+
+    if (!isOtpEnabled) {
+      const token = await admin.generateAuthToken();
+      return res.status(200).json({
+        success: true,
+        requiresOtp: false,
+        message: "Login successful",
+        token,
+        admin: {
+          id: admin._id,
+          name: admin.name,
+          email: admin.email,
+          role: admin.role,
+          permissions: admin.permissions,
+        },
+      });
+    }
+
     // Generate 6-digit OTP
     const otp = otpGenerator.generate(6, { upperCase: false, specialChars: false });
     const otpExpiration = new Date(Date.now() + OTP_EXPIRATION_TIME);
@@ -39,6 +59,7 @@ exports.login = async (req, res) => {
     if (mailSent) {
       return res.status(200).json({
         success: true,
+        requiresOtp: true,
         message: "OTP sent to email. Please check your email to complete login.",
       });
     } else {

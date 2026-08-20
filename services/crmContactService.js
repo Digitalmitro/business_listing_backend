@@ -195,16 +195,26 @@ async function deleteContact(ownerId, contactId) {
 /**
  * Converts an existing contact into a sales lead.
  */
-async function convertContactToLead(ownerId, contactId, { expectedRevenue = 0, status = "New", notes = "" } = {}) {
+async function convertContactToLead(ownerId, contactId, payload = {}) {
   if (!ownerId || !contactId) throw new Error("ownerId and contactId are required");
+
+  const { status = "New", notes = "" } = payload;
+  const expectedRevenue =
+    payload.expectedRevenue !== undefined
+      ? Number(payload.expectedRevenue) || 0
+      : payload.estimatedValue !== undefined
+      ? Number(payload.estimatedValue) || 0
+      : payload.dealValue !== undefined
+      ? Number(payload.dealValue) || 0
+      : 0;
 
   const contact = await getContactById(ownerId, contactId);
   const leadData = {
-    leadName: contact.name,
+    leadName: payload.leadName || contact.name,
     company: contact.company || "",
     email: contact.email || "",
     phone: contact.phone || "",
-    expectedRevenue: Number(expectedRevenue) || 0,
+    expectedRevenue,
     status,
     source: contact.source || "Contact Conversion",
     notes: notes || contact.notes || `Converted from contact (${contact.name})`,

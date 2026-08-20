@@ -7,6 +7,23 @@ const { LEAD_STATUSES, CrmLead } = require("../models/CrmLead");
 const { CrmPipelineStage } = require("../models/CrmConfig");
 const { logAudit, truncate, resolveDisplayName } = require("./crmAuditService");
 
+const STATUS_ALIASES = {
+  lead: "New",
+  "contact made": "Prospecting",
+  "meeting scheduled": "Meeting/Demo",
+  "proposal sent": "Proposal",
+};
+
+function normalizeStatus(inputStatus) {
+  if (!inputStatus || typeof inputStatus !== "string") return "New";
+  const trimmed = inputStatus.trim();
+  const lower = trimmed.toLowerCase();
+  if (STATUS_ALIASES[lower]) {
+    return STATUS_ALIASES[lower];
+  }
+  return trimmed;
+}
+
 let cachedAllowedStatuses = null;
 let cachedAllowedStatusesTime = 0;
 
@@ -50,10 +67,11 @@ async function createLead(ownerId, leadData = {}, performedBy = null) {
     throw new Error("Lead name is required");
   }
 
-  const status = leadData.status || "New";
+  const rawStatus = leadData.status || "New";
+  const status = normalizeStatus(rawStatus);
   const allowedStatuses = await getAllowedLeadStatuses();
   if (!allowedStatuses.includes(status)) {
-    throw new Error(`Invalid status '${status}'. Allowed values: ${allowedStatuses.join(", ")}`);
+    throw new Error(`Invalid status '${rawStatus}'. Allowed values: ${allowedStatuses.join(", ")}`);
   }
 
   const actor = performedBy || ownerId;
@@ -71,9 +89,19 @@ async function createLead(ownerId, leadData = {}, performedBy = null) {
     performedAt:   now,
   };
 
+  const revenue =
+    leadData.expectedRevenue !== undefined
+      ? Number(leadData.expectedRevenue) || 0
+      : leadData.estimatedValue !== undefined
+      ? Number(leadData.estimatedValue) || 0
+      : leadData.dealValue !== undefined
+      ? Number(leadData.dealValue) || 0
+      : 0;
+
   const docData = {
     ...leadData,
     leadName: leadData.leadName.trim(),
+    expectedRevenue: revenue,
     status,
     ownerId,
     activities: [initialActivity],
@@ -220,9 +248,11 @@ async function updateLead(ownerId, leadId, updateData = {}, performedBy = null) 
   }
 
   if (updateData.status) {
+    const rawStatus = updateData.status;
+    updateData.status = normalizeStatus(rawStatus);
     const allowedStatuses = await getAllowedLeadStatuses();
     if (!allowedStatuses.includes(updateData.status)) {
-      throw new Error(`Invalid status '${updateData.status}'. Allowed values: ${allowedStatuses.join(", ")}`);
+      throw new Error(`Invalid status '${rawStatus}'. Allowed values: ${allowedStatuses.join(", ")}`);
     }
   }
 
@@ -230,6 +260,13 @@ async function updateLead(ownerId, leadId, updateData = {}, performedBy = null) 
     const existing = await CrmLead.findOne({ _id: leadId, ownerId });
     if (!existing) {
       throw new LeadNotFoundError("Lead not found or you lack permission to modify it");
+    }
+
+    if (updateData.estimatedValue !== undefined && updateData.expectedRevenue === undefined) {
+      updateData.expectedRevenue = Number(updateData.estimatedValue) || 0;
+    }
+    if (updateData.dealValue !== undefined && updateData.expectedRevenue === undefined) {
+      updateData.expectedRevenue = Number(updateData.dealValue) || 0;
     }
 
     const activityEntries = [];

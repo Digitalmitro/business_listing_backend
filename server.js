@@ -117,7 +117,19 @@ function createApp() {
         },
     credentials: true,
     methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization", "X-Webhook-Signature", "X-Hub-Signature-256"],
+    allowedHeaders: [
+      "Content-Type",
+      "Authorization",
+      "token",
+      "x-access-token",
+      "X-Requested-With",
+      "Accept",
+      "Origin",
+      "X-Webhook-Signature",
+      "X-Hub-Signature-256",
+      "Cache-Control",
+      "Pragma",
+    ],
   }));
 
   app.use(createRequestLogger());

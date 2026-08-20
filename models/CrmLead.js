@@ -175,6 +175,15 @@ const crmLeadSchema = new mongoose.Schema(
   }
 );
 
+// Virtual getters and setters for estimatedValue and dealValue aliases
+crmLeadSchema.virtual("estimatedValue")
+  .get(function () { return this.expectedRevenue !== undefined ? this.expectedRevenue : 0; })
+  .set(function (val) { this.expectedRevenue = Number(val) || 0; });
+
+crmLeadSchema.virtual("dealValue")
+  .get(function () { return this.expectedRevenue !== undefined ? this.expectedRevenue : 0; })
+  .set(function (val) { this.expectedRevenue = Number(val) || 0; });
+
 // Compound index for fast multi-tenant pipeline filtering and Kanban ordering
 crmLeadSchema.index({ ownerId: 1, status: 1, pipelineOrder: 1, expectedRevenue: -1 });
 
