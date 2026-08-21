@@ -77,15 +77,22 @@ exports.schedulePost = async (req, res) => {
       return res.status(401).json({ success: false, message: "User not authenticated" });
     }
 
-    const { caption, media, platforms, platformOptions, scheduledFor } = req.body;
+    const { caption, media, platforms, platformOptions, scheduledFor, timezone } = req.body;
     if (!Array.isArray(platforms) || platforms.length === 0) {
       return res.status(400).json({ success: false, message: "platforms array is required and must not be empty" });
     }
     if (!scheduledFor) {
-      return res.status(400).json({ success: false, message: "scheduledFor timestamp is required" });
+      return res.status(400).json({ success: false, message: "scheduledFor timestamp (UTC) is required" });
     }
 
-    const result = await socialPostingService.scheduleUnifiedPost(req.user, { caption, media, platforms, platformOptions, scheduledFor });
+    const result = await socialPostingService.scheduleUnifiedPost(req.user, {
+      caption,
+      media,
+      platforms,
+      platformOptions,
+      scheduledFor,
+      timezone: timezone || "UTC",
+    });
     return res.status(201).json(result);
   } catch (error) {
     logger.error("Error scheduling unified social media post", { error: error.message });

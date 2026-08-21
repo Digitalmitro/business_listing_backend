@@ -49,6 +49,10 @@ async function publishUnifiedPost(user, { caption = "", media = [], platforms = 
     throw new Error("Post must contain either caption text or attached media");
   }
 
+  if (normalizedPlatforms.includes("instagram") && normalizedMedia.length === 0) {
+    throw new Error("Instagram requires at least one attached image or video URL");
+  }
+
   const imageUrl = normalizedMedia.find((m) => m.type === "image")?.url || "";
   const videoUrl = normalizedMedia.find((m) => m.type === "video")?.url || "";
 
@@ -159,7 +163,7 @@ async function getUserPostingHistory(userOrId, { page = 1, limit = 20 } = {}) {
 /**
  * Schedules a unified post to be published across selected platforms at a future time.
  */
-async function scheduleUnifiedPost(user, { caption = "", media = [], platforms = [], platformOptions = {}, scheduledFor } = {}) {
+async function scheduleUnifiedPost(user, { caption = "", media = [], platforms = [], platformOptions = {}, scheduledFor, timezone = "UTC" } = {}) {
   if (!user || !user._id) {
     throw new Error("User authentication required for scheduling posts");
   }
@@ -167,7 +171,7 @@ async function scheduleUnifiedPost(user, { caption = "", media = [], platforms =
     throw new Error("At least one social media platform must be selected");
   }
   if (!scheduledFor || isNaN(new Date(scheduledFor).getTime())) {
-    throw new Error("Valid scheduledFor timestamp is required");
+    throw new Error("Valid scheduledFor timestamp (UTC format) is required");
   }
 
   const scheduleDate = new Date(scheduledFor);
@@ -195,6 +199,10 @@ async function scheduleUnifiedPost(user, { caption = "", media = [], platforms =
     throw new Error("Post must contain either caption text or attached media");
   }
 
+  if (normalizedPlatforms.includes("instagram") && normalizedMedia.length === 0) {
+    throw new Error("Instagram requires at least one attached image or video URL");
+  }
+
   const docData = {
     userId: user._id,
     tenantId: user.tenantId || user._id,
@@ -203,6 +211,7 @@ async function scheduleUnifiedPost(user, { caption = "", media = [], platforms =
     platforms: normalizedPlatforms,
     platformOptions,
     scheduledFor: scheduleDate,
+    timezone: String(timezone || "UTC"),
     status: "scheduled",
   };
 

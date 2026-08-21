@@ -667,28 +667,58 @@ async function verifyOrPostToPlatform(user, platform, postData = {}) {
   let response;
   try {
     if (config.platform === "facebook") {
-      const page = (account.providerData?.pages || []).find((item) => String(item.id) === String(postData.pageId));
-      if (!page?.access_token) throw new Error("Select a connected Facebook Page before posting");
-      const pageAccessToken = decrypt(page.access_token);
-      if (postData.videoUrl) {
-        response = await requestWithRetry(() => axios.post(
-          `https://graph.facebook.com/${page.id}/videos`,
-          { file_url: postData.videoUrl, description: text, access_token: pageAccessToken },
-          { timeout: 15_000 }
-        ));
-      } else if (postData.imageUrl) {
-        response = await requestWithRetry(() => axios.post(
-          `https://graph.facebook.com/${page.id}/photos`,
-          { url: postData.imageUrl, caption: text, access_token: pageAccessToken },
-          { timeout: 15_000 }
-        ));
-      } else {
-        response = await requestWithRetry(() => axios.post(
-          `https://graph.facebook.com/${page.id}/feed`,
-          { message: text, link: postData.linkUrl },
-          { params: { access_token: pageAccessToken }, timeout: 15_000 }
-        ));
+      const targetPageIds = Array.isArray(postData.pageIds) && postData.pageIds.length > 0
+        ? postData.pageIds.map(String)
+        : postData.pageId
+        ? [String(postData.pageId)]
+        : [];
+
+      if (targetPageIds.length === 0) {
+        throw new Error("Select at least one connected Facebook Page before posting");
       }
+
+      const availablePages = account.providerData?.pages || [];
+      const postedResults = [];
+
+      for (const targetId of targetPageIds) {
+        const page = availablePages.find((item) => String(item.id) === targetId);
+        if (!page?.access_token) {
+          throw new Error(`Facebook Page (${targetId}) not found or missing access token`);
+        }
+        const pageAccessToken = decrypt(page.access_token);
+        let pageResponse;
+        if (postData.videoUrl) {
+          pageResponse = await requestWithRetry(() => axios.post(
+            `https://graph.facebook.com/${page.id}/videos`,
+            { file_url: postData.videoUrl, description: text, access_token: pageAccessToken },
+            { timeout: 15_000 }
+          ));
+        } else if (postData.imageUrl) {
+          pageResponse = await requestWithRetry(() => axios.post(
+            `https://graph.facebook.com/${page.id}/photos`,
+            { url: postData.imageUrl, caption: text, access_token: pageAccessToken },
+            { timeout: 15_000 }
+          ));
+        } else {
+          pageResponse = await requestWithRetry(() => axios.post(
+            `https://graph.facebook.com/${page.id}/feed`,
+            { message: text, link: postData.linkUrl },
+            { params: { access_token: pageAccessToken }, timeout: 15_000 }
+          ));
+        }
+        postedResults.push({
+          pageId: page.id,
+          pageName: page.name,
+          postId: pageResponse.data.id || pageResponse.data.post_id,
+        });
+      }
+
+      response = {
+        data: {
+          id: postedResults.map((r) => r.postId).join(", "),
+          pages: postedResults,
+        },
+      };
     } else if (config.platform === "instagram") {
       if (!postData.imageUrl && !postData.videoUrl) {
         throw new Error("Instagram publishing requires a public image or video URL");

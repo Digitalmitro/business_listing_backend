@@ -30,6 +30,10 @@ const scheduledSocialPostSchema = new mongoose.Schema(
       required: true,
       index: true,
     },
+    timezone: {
+      type: String,
+      default: "UTC",
+    },
     status: {
       type: String,
       enum: ["scheduled", "processing", "published", "failed", "cancelled"],
