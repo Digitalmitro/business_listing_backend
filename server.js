@@ -59,10 +59,10 @@ const crmScheduleRoutes = require("./routes/crmScheduleRoutes");
 const crmDashboardRoutes = require("./routes/crmDashboardRoutes");
 const crmLeadRoutes = require("./routes/crmLeadRoutes");
 // New routes added as part of production-ready implementation
-const crmAuditRoutes         = require("./routes/crmAuditRoutes");
-const crmConfigRoutes        = require("./routes/crmConfigRoutes");
-const crmLeadImportRoutes    = require("./routes/crmLeadImportRoutes");
-const unsubscribeRoutes      = require("./routes/unsubscribeRoutes");
+const crmAuditRoutes = require("./routes/crmAuditRoutes");
+const crmConfigRoutes = require("./routes/crmConfigRoutes");
+const crmLeadImportRoutes = require("./routes/crmLeadImportRoutes");
+const unsubscribeRoutes = require("./routes/unsubscribeRoutes");
 
 const PORT = Number(process.env.PORT || 5000);
 const SHUTDOWN_TIMEOUT_MS = Number(process.env.SHUTDOWN_TIMEOUT_MS || 10_000);
@@ -82,10 +82,14 @@ function shouldStartInlineWorkers() {
 
 function configureTrustProxy(app) {
   const value = process.env.TRUST_PROXY;
-  if (value === undefined || value === "false") return;
-  if (value === "true") app.set("trust proxy", true);
-  else if (/^\d+$/.test(value)) app.set("trust proxy", Number(value));
-  else app.set("trust proxy", value);
+  if (value === "false") return;
+  if (value === "true" || process.env.NODE_ENV === "production" || value === undefined) {
+    app.set("trust proxy", true);
+  } else if (/^\d+$/.test(value)) {
+    app.set("trust proxy", Number(value));
+  } else {
+    app.set("trust proxy", value);
+  }
 }
 
 function createApp() {
@@ -95,7 +99,8 @@ function createApp() {
 
   // ── Security: Helmet (CSP, HSTS, X-Frame-Options, etc.) ───────────────────
   app.use(helmet({
-    contentSecurityPolicy: process.env.NODE_ENV === "production" ? undefined : false,
+    crossOriginResourcePolicy: { policy: "cross-origin" },
+    contentSecurityPolicy: false,
     crossOriginEmbedderPolicy: false, // Allow embedding in iframes for admin dashboard
   }));
 
@@ -108,13 +113,13 @@ function createApp() {
     origin: allowedOrigins.length === 0
       ? true  // Allow all in dev when no env is set
       : (origin, callback) => {
-          if (!origin || allowedOrigins.includes(origin)) {
-            callback(null, true);
-          } else {
-            logger.warn("cors.rejected", "CORS blocked request from disallowed origin", { origin });
-            callback(new Error(`CORS policy: origin '${origin}' is not allowed`));
-          }
-        },
+        if (!origin || allowedOrigins.includes(origin)) {
+          callback(null, true);
+        } else {
+          logger.warn("cors.rejected", "CORS blocked request from disallowed origin", { origin });
+          callback(new Error(`CORS policy: origin '${origin}' is not allowed`));
+        }
+      },
     credentials: true,
     methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
     allowedHeaders: [
@@ -163,7 +168,13 @@ function createApp() {
 
   const uploadDirectory = path.join(__dirname, "public/uploads");
   fs.mkdirSync(uploadDirectory, { recursive: true });
-  app.use("/uploads", express.static(uploadDirectory));
+  app.use("/uploads", express.static(uploadDirectory, {
+    setHeaders: (res) => {
+      res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
+      res.setHeader("Access-Control-Allow-Origin", "*");
+      res.setHeader("Cache-Control", "public, max-age=86400");
+    },
+  }));
 
   app.get("/", (_req, res) => {
     res.status(200).json({ message: "Welcome to the UrbanCitations server" });
@@ -220,19 +231,19 @@ function createApp() {
   app.use("/api/social-integrations", socialIntegrationRoutes);
   app.use("/api/social-posting", socialPostingRoutes);
   // ── CRM routes ────────────────────────────────────────────────────────────
-  app.use("/api/crm/contacts",           crmContactRoutes);
-  app.use("/api/crm/leads/followup",     crmFollowUpRoutes);
-  app.use("/api/crm/leads/replies",      crmReplyRoutes);
-  app.use("/api/crm/leads/import",       crmLeadImportRoutes);
-  app.use("/api/crm/leads",              crmLeadRoutes);
+  app.use("/api/crm/contacts", crmContactRoutes);
+  app.use("/api/crm/leads/followup", crmFollowUpRoutes);
+  app.use("/api/crm/leads/replies", crmReplyRoutes);
+  app.use("/api/crm/leads/import", crmLeadImportRoutes);
+  app.use("/api/crm/leads", crmLeadRoutes);
   // Canonical singular paths (duplicates removed)
-  app.use("/api/crm/forecast",           crmForecastRoutes);
-  app.use("/api/crm/calendar",           crmScheduleRoutes);
-  app.use("/api/crm/dashboard",          crmDashboardRoutes);
-  app.use("/api/crm/audit",              crmAuditRoutes);
-  app.use("/api/crm/config",             crmConfigRoutes);
+  app.use("/api/crm/forecast", crmForecastRoutes);
+  app.use("/api/crm/calendar", crmScheduleRoutes);
+  app.use("/api/crm/dashboard", crmDashboardRoutes);
+  app.use("/api/crm/audit", crmAuditRoutes);
+  app.use("/api/crm/config", crmConfigRoutes);
   // Unsubscribe (public)
-  app.use("/api/unsubscribe",            unsubscribeRoutes);
+  app.use("/api/unsubscribe", unsubscribeRoutes);
 
   app.use(notFoundHandler);
   app.use(errorHandler);

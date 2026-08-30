@@ -1,6 +1,6 @@
 # UrbanCitations backend API reference
 
-This document describes the HTTP routes currently mounted by `server.js`. It was verified against `server.js`, `routes/*.js`, and the corresponding controllers on 2026-08-03.
+This document describes the HTTP routes currently mounted by `server.js`. It was verified against `server.js`, `routes/*.js`, and the corresponding controllers on 2026-08-28.
 
 ## Quick start
 
@@ -10,7 +10,7 @@ cp .env.example .env
 npm start
 ```
 
-The default local base URL is `http://localhost:5000`. Set `PORT` to use a different port.
+The default local base URL is `http://localhost:5000` (or `PORT` configured in `.env`).
 
 ## Request conventions
 
@@ -62,7 +62,7 @@ Global 404 and error responses use these shapes:
 | GET | `/` | Public | API welcome response. |
 | GET | `/health/live` | Public | Process liveness, uptime, and timestamp. |
 | GET | `/health/ready` | Public | MongoDB/Redis readiness; returns `503` until both are ready. |
-| GET | `/uploads/<filename>` | Public | Serve locally stored uploads. |
+| GET | `/uploads/<filename>` | Public | Serve locally stored uploads from `public/uploads`. |
 
 ## User authentication and profiles
 
@@ -93,7 +93,7 @@ curl -X POST http://localhost:5000/api/auth/login \
 
 ## Admin authentication and management
 
-Base path: `/admin`
+Base path: `/admin` and `/admin/crm`
 
 | Method | Path | Access | Main input / purpose |
 | --- | --- | --- | --- |
@@ -459,6 +459,7 @@ Base path: `/api/google-business`. Google access is read-only; `populate-profile
 | --- | --- | --- | --- |
 | GET | `/api/google-business/auth-url` | JWT | Optional query `returnTo`; create Google OAuth URL. |
 | GET | `/api/google-business/callback` | OAuth callback | Query: `code`, `state`, or `error`; redirects to frontend. |
+| GET | `/api/google-business/status` | JWT | Return connection and authorization status. |
 | POST | `/api/google-business/connect` | JWT | Deprecated direct exchange; returns `410 Gone`. |
 | POST | `/api/google-business/disconnect` | JWT | Delete the current tenant/user Google connection. |
 | GET | `/api/google-business/profiles` | JWT | List available accounts/locations. |
@@ -497,7 +498,14 @@ Base path: `/api/crm/leads`
 | PUT | `/api/crm/leads/:id` | Update an owned lead. |
 | POST | `/api/crm/leads/:id/activities` | Add an activity entry. |
 | DELETE | `/api/crm/leads/:id` | Delete a lead. |
-| POST | `/api/crm/leads/import` | Multipart field `file`; CSV, XLSX, or XLS, default maximum 10 MB. |
+
+### Lead imports
+
+Base path: `/api/crm/leads/import`
+
+| Method | Path | Access | Main input / purpose |
+| --- | --- | --- | --- |
+| POST | `/api/crm/leads/import` | JWT | Multipart field `file`; CSV, XLSX, or XLS, default maximum 10 MB. |
 
 ### Contacts
 
@@ -556,6 +564,8 @@ Base path: `/api/crm/leads/replies`
 | GET | `/api/crm/config/scheduler` | JWT | Return scheduler configuration. |
 
 ## Unsubscribe API
+
+Mounted at `/api/unsubscribe` (and `/api/unsubscribe` in email campaigns router).
 
 | Method | Path | Access | Main input / purpose |
 | --- | --- | --- | --- |
