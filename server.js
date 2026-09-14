@@ -160,6 +160,7 @@ function createApp() {
   if (process.env.NODE_ENV === "production" || process.env.ENABLE_RATE_LIMITING === "true") {
     const { authLimiter, apiLimiter, webhookLimiter } = require("./middlewares/rateLimiter");
     app.use("/api/auth", authLimiter);
+    app.use(["/api/admin/login", "/api/admin/verify-otp", "/api/admin/forgot-password", "/api/admin/reset-password"], authLimiter);
     app.use("/api/crm/leads/replies/reply-webhook", webhookLimiter);
     app.use("/api/email-campaign/delivery-webhook", webhookLimiter);
     app.use("/api", apiLimiter);
@@ -209,8 +210,12 @@ function createApp() {
   app.use("/notification", notificationRoutes);
   app.use("/message", notificationRoutes);
   app.use("/api", topCountryRoutes);
-  app.use("/admin", adminRoutes);
+  // Admin panel calls `${REACT_APP_BACKEND_API}/admin/...` where the base already
+  // ends in `/api`, so mount under `/api/admin` (legacy `/admin` kept for compatibility).
+  app.use("/api/admin/crm", adminCrmRoutes);
+  app.use("/api/admin", adminRoutes);
   app.use("/admin/crm", adminCrmRoutes);
+  app.use("/admin", adminRoutes);
   app.use("/api/plan", planRoutes);
   app.use("/api/review", reviewRoutes);
   app.use("/api", appointmentRoutes);
