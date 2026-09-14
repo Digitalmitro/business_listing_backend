@@ -160,6 +160,16 @@ exports.uploadMedia = async (req, res) => {
     }
 
     const { cloudinary } = require("../config/Cloudinary");
+    const { cloud_name, api_key, api_secret } = cloudinary.config();
+    if (!cloud_name || !api_key || !api_secret) {
+      logger.error("socialPosting.upload_media_unconfigured", "Cloudinary credentials missing", {
+        cloudName: Boolean(cloud_name), apiKey: Boolean(api_key), apiSecret: Boolean(api_secret),
+      });
+      return res.status(503).json({
+        success: false,
+        message: "Media upload is not configured on the server (CLOUDINARY_CLOUD_NAME / CLOUDINARY_API_KEY / CLOUDINARY_API_SECRET). Contact the administrator.",
+      });
+    }
     const uploaded = await new Promise((resolve, reject) => {
       const stream = cloudinary.uploader.upload_stream(
         {
@@ -186,7 +196,11 @@ exports.uploadMedia = async (req, res) => {
       bytes: uploaded.bytes,
     });
   } catch (error) {
-    logger.error("Error uploading social media file", { error: error.message });
-    return res.status(500).json({ success: false, message: `Media upload failed: ${error.message}` });
+    // Cloudinary rejects with `{ message, http_code }` or `{ error: { message } }` rather than an Error.
+    const reason = error?.message || error?.error?.message || (typeof error === "string" ? error : JSON.stringify(error));
+    logger.error("socialPosting.upload_media_failed", "Error uploading social media file", {
+      error: reason, httpCode: error?.http_code, userId: req.user?._id,
+    });
+    return res.status(500).json({ success: false, message: `Media upload failed: ${reason}` });
   }
 };
