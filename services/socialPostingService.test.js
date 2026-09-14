@@ -77,3 +77,34 @@ test("scheduleUnifiedPost preserves media type and provider-specific selectors",
   assert.equal(result.scheduledPost.media[0].url, "https://cdn.example.com/video.mp4");
   assert.equal(result.scheduledPost.platformOptions.threads.replyControl, "everyone");
 });
+
+test("publishUnifiedPost rejects browser-only blob:/data: media URLs before contacting providers", async (context) => {
+  const verify = context.mock.method(socialIntegrationService, "verifyOrPostToPlatform", async () => ({ postId: "x" }));
+  const user = { _id: "507f1f77bcf86cd799439011", tenantId: "507f1f77bcf86cd799439012" };
+  await assert.rejects(
+    publishUnifiedPost(user, { caption: "hi", platforms: ["facebook", "instagram"], media: [{ type: "image", url: "blob:https://urbancitations.com/1234-abcd" }] }),
+    /Media URL must be a public http\(s\) address/
+  );
+  await assert.rejects(
+    publishUnifiedPost(user, { caption: "hi", platforms: ["facebook"], media: ["data:image/png;base64,AAAA"] }),
+    /Media URL must be a public http\(s\) address/
+  );
+  await assert.rejects(
+    publishUnifiedPost(user, { caption: "hi", platforms: ["facebook"], media: ["not a url"] }),
+    /Invalid media URL/
+  );
+  assert.equal(verify.mock.callCount(), 0);
+});
+
+test("scheduleUnifiedPost rejects browser-only media URLs", async () => {
+  const user = { _id: "507f1f77bcf86cd799439011", tenantId: "507f1f77bcf86cd799439012" };
+  await assert.rejects(
+    scheduleUnifiedPost(user, {
+      caption: "hi",
+      platforms: ["instagram"],
+      media: [{ type: "image", url: "blob:https://urbancitations.com/1234-abcd" }],
+      scheduledFor: new Date(Date.now() + 3600_000).toISOString(),
+    }),
+    /Media URL must be a public http\(s\) address/
+  );
+});

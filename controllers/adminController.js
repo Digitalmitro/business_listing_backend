@@ -56,15 +56,20 @@ exports.login = async (req, res) => {
     const emailBody = `Your OTP for login is: ${otp}\n\nThis OTP is valid for 5 minutes.`;
     const mailSent = await sendMail(admin.email, "Your OTP for Admin Login", emailBody);
 
-    if (mailSent) {
+    if (mailSent && mailSent.success) {
       return res.status(200).json({
         success: true,
         requiresOtp: true,
         message: "OTP sent to email. Please check your email to complete login.",
       });
-    } else {
-      return res.status(500).json({ success: false, message: "Failed to send OTP email" });
     }
+
+    const reason = mailSent?.error?.message || "Unknown mailer error";
+    console.error("Admin login OTP email failed:", reason);
+    return res.status(502).json({
+      success: false,
+      message: `Failed to send OTP email: ${reason}. Contact the administrator to check the server's EMAIL_USER / EMAIL_PASS configuration.`,
+    });
   } catch (error) {
     console.error(error);
     res.status(500).json({ success: false, message: "Server error" });
@@ -267,11 +272,12 @@ exports.forgotPassword = async (req, res) => {
     const emailBody = `Your OTP for password reset is: ${otp}\n\nThis OTP is valid for 5 minutes.`;
     const mailSent = await sendMail(admin.email, "Password Reset OTP - Admin", emailBody);
 
-    if (mailSent) {
-      res.status(200).json({ success: true, message: "OTP sent to email" });
-    } else {
-      res.status(500).json({ success: false, message: "Failed to send email" });
+    if (mailSent && mailSent.success) {
+      return res.status(200).json({ success: true, message: "OTP sent to email" });
     }
+    const reason = mailSent?.error?.message || "Unknown mailer error";
+    console.error("Admin password reset OTP email failed:", reason);
+    return res.status(502).json({ success: false, message: `Failed to send OTP email: ${reason}` });
   } catch (error) {
     res.status(500).json({ success: false, message: "Server error" });
   }

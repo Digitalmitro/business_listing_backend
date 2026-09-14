@@ -8,6 +8,45 @@ const ScheduledSocialPost = require("../models/ScheduledSocialPost");
 const { addJob } = require("../utils/queue");
 
 /**
+ * Social platforms fetch attached media by URL from their own servers, so every media
+ * URL must be a publicly reachable http(s) address. Browser-only `blob:` / `data:`
+ * object URLs (produced by URL.createObjectURL) can never be fetched by Facebook,
+ * Instagram, Threads or Pinterest and would fail with opaque provider errors such as
+ * "Unsupported state or unable to authenticate data" or
+ * "Only photo or video can be accepted as media type".
+ */
+function normalizeMediaList(media) {
+  if (!Array.isArray(media)) return [];
+  const normalized = media
+    .map((m) => {
+      if (typeof m === "string") return { type: "image", url: m.trim() };
+      return {
+        type: m?.type === "video" ? "video" : "image",
+        url: String(m?.url || m?.src || "").trim(),
+      };
+    })
+    .filter((m) => Boolean(m.url));
+
+  for (const m of normalized) {
+    let parsed;
+    try {
+      parsed = new URL(m.url);
+    } catch {
+      throw new Error(`Invalid media URL '${m.url}'. Provide a public https:// image or video URL, or upload the file first.`);
+    }
+    if (!["http:", "https:"].includes(parsed.protocol)) {
+      throw new Error(
+        `Media URL must be a public http(s) address that social platforms can download. '${parsed.protocol}' URLs only exist inside your browser; upload the file so it is hosted on a public URL first.`
+      );
+    }
+    if (["localhost", "127.0.0.1", "0.0.0.0"].includes(parsed.hostname)) {
+      throw new Error("Media URL points to localhost, which social platforms cannot reach. Use a publicly hosted URL.");
+    }
+  }
+  return normalized;
+}
+
+/**
  * Publishes content immediately across selected social media platforms.
  * Handles partial posting failures by recording exact per-platform outcomes without aborting other broadcasts.
  * @param {Object} user - Authenticated user; connections are loaded by user ID from SocialConnection.
@@ -35,15 +74,7 @@ async function publishUnifiedPost(user, { caption = "", media = [], platforms = 
   }
 
   const captionStr = typeof caption === "string" ? caption.trim() : "";
-  const normalizedMedia = Array.isArray(media)
-    ? media.map((m) => {
-        if (typeof m === "string") return { type: "image", url: m };
-        return {
-          type: m.type === "video" ? "video" : "image",
-          url: String(m.url || m.src || ""),
-        };
-      }).filter((m) => Boolean(m.url))
-    : [];
+  const normalizedMedia = normalizeMediaList(media);
 
   if (!captionStr && normalizedMedia.length === 0) {
     throw new Error("Post must contain either caption text or attached media");
@@ -191,9 +222,7 @@ async function scheduleUnifiedPost(user, { caption = "", media = [], platforms =
   }
 
   const captionStr = typeof caption === "string" ? caption.trim() : "";
-  const normalizedMedia = Array.isArray(media)
-    ? media.map((m) => (typeof m === "string" ? { type: "image", url: m } : { type: m.type === "video" ? "video" : "image", url: String(m.url || m.src || "") })).filter((m) => Boolean(m.url))
-    : [];
+  const normalizedMedia = normalizeMediaList(media);
 
   if (!captionStr && normalizedMedia.length === 0) {
     throw new Error("Post must contain either caption text or attached media");

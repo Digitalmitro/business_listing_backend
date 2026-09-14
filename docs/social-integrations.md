@@ -12,6 +12,10 @@ This is a tenant-scoped Bring Your Own App integration. Each tenant stores its o
 - Pinterest uses OAuth 2, user-selected boards, `/v5/pins`, and continuous refresh tokens for eligible applications. A board ID and public image URL are required for a Pin.
 - Google Business Profile is read-only. The integration uses `business.manage`, lists accounts and locations, gets locations with a read mask, and performs no Google PATCH, PUT, POST, DELETE, or update operation. Local profile population only writes to this application's database.
 
+## Media hosting
+
+Every provider downloads attached media from the URL the post carries, so the URL must be a public `http(s)` address. `POST /api/social-posting/upload-media` (multipart field `media`, image or video, 50 MB max) stores the file on Cloudinary under `social-posts/<tenantId>/` and returns `{ url, type }`; the frontend "Upload File" mode calls it and forwards the returned URL to `/publish` and `/schedule`. Images are normalised to JPEG because Instagram only accepts JPEG by URL. `publishUnifiedPost` and `scheduleUnifiedPost` reject `blob:`, `data:`, and localhost URLs up front, since those produce misleading provider errors ("Unsupported state or unable to authenticate data" on Facebook, "Only photo or video can be accepted as media type" on Instagram). Cloudinary credentials (`CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, `CLOUDINARY_API_SECRET`) must be configured for uploads to work.
+
 ## Credential setup
 
 Credentials must be entered through `/settings/integrations`. They are encrypted into `TenantSocialCredential`; provider secrets must not be placed in `.env` or frontend variables. The UI displays the exact backend callback URI that must be registered for each provider.
