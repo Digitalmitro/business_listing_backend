@@ -53,6 +53,8 @@ const authMiddleware = async (req, res, next) => {
     req.tenantId = principal.tenantId;
 
     req.user = principal;
+    // Admins operate across every tenant's CRM data; regular users are scoped to their own.
+    req.isAdmin = principal instanceof Admin;
     next();
   } catch (error) {
     logger.warn("auth.middleware_error", "JWT validation failed", {

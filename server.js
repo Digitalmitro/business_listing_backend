@@ -97,6 +97,14 @@ function createApp() {
   configureTrustProxy(app);
   app.disable("x-powered-by");
 
+  // The admin panel's REACT_APP_BACKEND_API already ends in `/api`, yet many of its
+  // screens prepend `/api/` again (`/api/api/crm/leads`). Collapse the duplicate so
+  // those requests reach the real routes instead of 404ing.
+  app.use((req, _res, next) => {
+    if (req.url.startsWith("/api/api/")) req.url = req.url.slice(4);
+    next();
+  });
+
   // ── Security: Helmet (CSP, HSTS, X-Frame-Options, etc.) ───────────────────
   app.use(helmet({
     crossOriginResourcePolicy: { policy: "cross-origin" },

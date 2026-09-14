@@ -56,6 +56,17 @@ class LeadNotFoundError extends Error {
 }
 
 /**
+ * Sentinel accepted in place of an ownerId by the read/update/delete functions below.
+ * Admin callers pass it so the query is not restricted to a single owner.
+ */
+const ALL_OWNERS = "__all_owners__";
+
+/** Builds the owner clause of a query: empty for ALL_OWNERS, `{ ownerId }` otherwise. */
+function ownerFilter(ownerId) {
+  return ownerId === ALL_OWNERS ? {} : { ownerId };
+}
+
+/**
  * Creates a new CRM lead under the specified owner and logs initial creation activity.
  */
 async function createLead(ownerId, leadData = {}, performedBy = null) {
@@ -159,7 +170,7 @@ async function getLeads(
   const pageNum  = Math.max(1, Number(page) || 1);
   const limitNum = Math.min(100, Math.max(1, Number(limit) || 20));
 
-  const query = { ownerId };
+  const query = ownerFilter(ownerId);
 
   if (status       && typeof status       === "string" && status.trim())       query.status       = status.trim();
   if (source       && typeof source       === "string" && source.trim())       query.source       = source.trim();
@@ -214,7 +225,7 @@ async function getLeadById(ownerId, leadId) {
   }
 
   if (mongoose.connection && mongoose.connection.readyState === 1) {
-    const lead = await CrmLead.findOne({ _id: leadId, ownerId })
+    const lead = await CrmLead.findOne({ _id: leadId, ...ownerFilter(ownerId) })
       .populate("assignedUser", "full_name email userImage")
       .populate("activities.user",        "full_name email")
       .populate("activities.performedBy", "full_name email")
@@ -257,7 +268,7 @@ async function updateLead(ownerId, leadId, updateData = {}, performedBy = null) 
   }
 
   if (mongoose.connection && mongoose.connection.readyState === 1) {
-    const existing = await CrmLead.findOne({ _id: leadId, ownerId });
+    const existing = await CrmLead.findOne({ _id: leadId, ...ownerFilter(ownerId) });
     if (!existing) {
       throw new LeadNotFoundError("Lead not found or you lack permission to modify it");
     }
@@ -426,7 +437,7 @@ async function updateLead(ownerId, leadId, updateData = {}, performedBy = null) 
     }
 
     const updated = await CrmLead.findOneAndUpdate(
-      { _id: leadId, ownerId },
+      { _id: leadId, ...ownerFilter(ownerId) },
       {
         $set:  updateData,
         $push: { activities: { $each: activityEntries } },
@@ -440,7 +451,7 @@ async function updateLead(ownerId, leadId, updateData = {}, performedBy = null) 
     // ── Emit all collected audit events ───────────────────────────────
     for (const call of auditCalls) {
       logAudit({
-        ownerId,
+        ownerId:         updated.ownerId,
         leadId,
         leadName:        updated.leadName,
         performedBy:     actor,
@@ -515,7 +526,7 @@ async function addLeadActivity(
 
   if (mongoose.connection && mongoose.connection.readyState === 1) {
     const updated = await CrmLead.findOneAndUpdate(
-      { _id: leadId, ownerId },
+      { _id: leadId, ...ownerFilter(ownerId) },
       { $push: { activities: activityEntry } },
       { new: true }
     )
@@ -535,7 +546,7 @@ async function addLeadActivity(
       "activity_logged";
 
     logAudit({
-      ownerId,
+      ownerId:         updated.ownerId,
       leadId,
       leadName:        updated.leadName,
       action:          auditAction,
@@ -565,7 +576,7 @@ async function deleteLead(ownerId, leadId) {
   if (!ownerId || !leadId) throw new Error("ownerId and leadId are required");
 
   if (mongoose.connection && mongoose.connection.readyState === 1) {
-    const existing = await CrmLead.findOne({ _id: leadId, ownerId });
+    const existing = await CrmLead.findOne({ _id: leadId, ...ownerFilter(ownerId) });
     if (!existing) {
       throw new LeadNotFoundError("Lead not found or you lack permission to delete it");
     }
@@ -573,11 +584,11 @@ async function deleteLead(ownerId, leadId) {
     // Capture name before deletion for audit record
     const leadName = existing.leadName;
 
-    await CrmLead.findOneAndDelete({ _id: leadId, ownerId });
+    await CrmLead.findOneAndDelete({ _id: leadId, ...ownerFilter(ownerId) });
 
     // ── Audit log (fire-and-forget) ───────────────────────────────────
     logAudit({
-      ownerId,
+      ownerId:     existing.ownerId,
       leadId,
       leadName,
       action:      "lead_deleted",
@@ -612,7 +623,7 @@ async function reorderKanbanLeads(ownerId, updates = [], performedBy = null) {
     if (validUpdates.length === 0) return [];
 
     const leadIds = validUpdates.map((u) => u.leadId);
-    const existingLeads = await CrmLead.find({ _id: { $in: leadIds }, ownerId }).lean();
+    const existingLeads = await CrmLead.find({ _id: { $in: leadIds }, ...ownerFilter(ownerId) }).lean();
     const existingLeadsMap = new Map(existingLeads.map((l) => [String(l._id), l]));
 
     const bulkOps = [];
@@ -641,7 +652,7 @@ async function reorderKanbanLeads(ownerId, updates = [], performedBy = null) {
         updateQuery.$push = { activities: activityItem };
 
         logAudit({
-          ownerId,
+          ownerId: existing.ownerId,
           leadId: item.leadId,
           leadName: existing.leadName,
           action: "pipeline_move",
@@ -656,7 +667,7 @@ async function reorderKanbanLeads(ownerId, updates = [], performedBy = null) {
 
       bulkOps.push({
         updateOne: {
-          filter: { _id: item.leadId, ownerId },
+          filter: { _id: item.leadId, ...ownerFilter(ownerId) },
           update: updateQuery,
         },
       });
@@ -666,7 +677,7 @@ async function reorderKanbanLeads(ownerId, updates = [], performedBy = null) {
       await CrmLead.bulkWrite(bulkOps);
     }
 
-    const leads = await CrmLead.find({ ownerId })
+    const leads = await CrmLead.find(ownerFilter(ownerId))
       .sort({ pipelineOrder: 1, updatedAt: -1 })
       .populate("assignedUser", "full_name email userImage")
       .populate("activities.user", "full_name email")
@@ -703,6 +714,7 @@ async function reorderKanbanLeads(ownerId, updates = [], performedBy = null) {
 }
 
 module.exports = {
+  ALL_OWNERS,
   LeadNotFoundError,
   createLead,
   getLeads,

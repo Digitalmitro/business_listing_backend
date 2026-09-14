@@ -4,6 +4,13 @@ const logger = require("../utils/logger");
 const crmLeadService = require("../services/crmLeadService");
 
 /**
+ * Owner scope for lead queries: admins see every owner's leads (the admin panel is the
+ * source of truth), regular users only their own.
+ */
+const leadScope = (req) => (req.isAdmin ? crmLeadService.ALL_OWNERS : req.user._id);
+
+
+/**
  * POST /api/crm/leads
  * Create a new CRM lead.
  */
@@ -32,7 +39,7 @@ exports.getLeads = async (req, res) => {
       return res.status(401).json({ success: false, message: "User not authenticated" });
     }
 
-    const data = await crmLeadService.getLeads(req.user._id, req.query);
+    const data = await crmLeadService.getLeads(leadScope(req), req.query);
     return res.status(200).json({ success: true, ...data });
   } catch (error) {
     logger.error("Error retrieving CRM leads", { error: error.message });
@@ -50,7 +57,7 @@ exports.getLeadById = async (req, res) => {
       return res.status(401).json({ success: false, message: "User not authenticated" });
     }
 
-    const lead = await crmLeadService.getLeadById(req.user._id, req.params.id);
+    const lead = await crmLeadService.getLeadById(leadScope(req), req.params.id);
     return res.status(200).json({ success: true, lead });
   } catch (error) {
     const status = error.status || 500;
@@ -68,7 +75,7 @@ exports.updateLead = async (req, res) => {
       return res.status(401).json({ success: false, message: "User not authenticated" });
     }
 
-    const lead = await crmLeadService.updateLead(req.user._id, req.params.id, req.body, req.user._id);
+    const lead = await crmLeadService.updateLead(leadScope(req), req.params.id, req.body, req.user._id);
     return res.status(200).json({ success: true, lead });
   } catch (error) {
     logger.error("Error updating CRM lead", { error: error.message });
@@ -88,7 +95,7 @@ exports.addActivity = async (req, res) => {
       return res.status(401).json({ success: false, message: "User not authenticated" });
     }
 
-    const lead = await crmLeadService.addLeadActivity(req.user._id, req.params.id, req.body, req.user._id);
+    const lead = await crmLeadService.addLeadActivity(leadScope(req), req.params.id, req.body, req.user._id);
     return res.status(201).json({ success: true, lead });
   } catch (error) {
     logger.error("Error adding lead activity", { error: error.message });
@@ -108,7 +115,7 @@ exports.deleteLead = async (req, res) => {
       return res.status(401).json({ success: false, message: "User not authenticated" });
     }
 
-    const result = await crmLeadService.deleteLead(req.user._id, req.params.id);
+    const result = await crmLeadService.deleteLead(leadScope(req), req.params.id);
     return res.status(200).json({ success: true, ...result });
   } catch (error) {
     const status = error.status || 500;
@@ -126,7 +133,7 @@ exports.reorderKanban = async (req, res) => {
       return res.status(401).json({ success: false, message: "User not authenticated" });
     }
 
-    const leads = await crmLeadService.reorderKanbanLeads(req.user._id, req.body.updates || [], req.user._id);
+    const leads = await crmLeadService.reorderKanbanLeads(leadScope(req), req.body.updates || [], req.user._id);
     return res.status(200).json({ success: true, leads });
   } catch (error) {
     logger.error("Error reordering Kanban leads", { error: error.message });
