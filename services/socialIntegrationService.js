@@ -425,13 +425,35 @@ async function refreshLongLivedMetaToken(config, account) {
   return response.data;
 }
 
+/**
+ * Decrypts a stored token. A GCM auth failure ("Unsupported state or unable to authenticate data")
+ * means the token was encrypted under a different ENCRYPTION_KEY than the one this process runs
+ * with, so it can never be decrypted again; mark the connection expired and ask for a reconnect
+ * instead of surfacing the raw crypto error.
+ */
+async function decryptStoredToken(account, config, encryptedValue) {
+  try {
+    return decrypt(encryptedValue);
+  } catch (error) {
+    logger.error("social.token.decrypt_failed", {
+      platform: config.platform,
+      connectionId: account._id,
+      error: error.message,
+    });
+    account.status = "expired";
+    account.lastError = "Stored token could not be decrypted (encryption key changed); reconnect is required";
+    await saveConnection(account);
+    throw new RevokedPermissionError(config.platform, "stored token cannot be decrypted; reconnect the account");
+  }
+}
+
 async function getValidAccessToken(user, platform) {
   const config = getPlatformConfig(platform);
   const account = await findConnection(user, config.platform);
   if (!account || account.status !== "connected") throw new Error(`Account ${config.name} is not connected`);
   const expiry = account.tokenExpiresAt;
   if (account.accessToken && (!expiry || new Date(expiry).getTime() - Date.now() > BUFFER_MS)) {
-    return decrypt(account.accessToken);
+    return decryptStoredToken(account, config, account.accessToken);
   }
 
   if (!account.refreshToken && !["instagram", "threads"].includes(config.platform)) {
@@ -446,7 +468,7 @@ async function getValidAccessToken(user, platform) {
       ? await refreshLongLivedMetaToken(config, account)
       : await tokenRequest(config, {
         grant_type: "refresh_token",
-        refresh_token: decrypt(account.refreshToken),
+        refresh_token: await decryptStoredToken(account, config, account.refreshToken),
       }, null, credential);
     if (!data.access_token) throw new Error("refresh response missing access token");
     account.accessToken = encrypt(data.access_token);
@@ -685,7 +707,7 @@ async function verifyOrPostToPlatform(user, platform, postData = {}) {
         if (!page?.access_token) {
           throw new Error(`Facebook Page (${targetId}) not found or missing access token`);
         }
-        const pageAccessToken = decrypt(page.access_token);
+        const pageAccessToken = await decryptStoredToken(account, config, page.access_token);
         let pageResponse;
         if (postData.videoUrl) {
           pageResponse = await requestWithRetry(() => axios.post(
@@ -729,7 +751,9 @@ async function verifyOrPostToPlatform(user, platform, postData = {}) {
           image_url: postData.imageUrl || undefined,
           video_url: postData.videoUrl || undefined,
           caption: text,
-          media_type: postData.videoUrl ? "REELS" : "IMAGE",
+          // media_type is only valid for REELS / STORIES / CAROUSEL; single images must omit it
+          // or Instagram answers "Only photo or video can be accepted as media type".
+          ...(postData.videoUrl ? { media_type: "REELS" } : {}),
           access_token: token,
         },
         { timeout: 15_000 }
