@@ -1215,7 +1215,7 @@ exports.getBusinessById = async (req, res) => {
 
     // Provide the expected shape to the frontend without the DB write storm
     const businessDataForClient = {
-      ...business.toObject({ flattenMaps: true }),
+      ...business, // query uses .lean(), so this is already a plain object
       profileCompletionScore,
       enquiryCount,
       offerCount: offersWithService.length,
