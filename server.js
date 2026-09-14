@@ -220,7 +220,9 @@ function createApp() {
   app.use("/api/review", reviewRoutes);
   app.use("/api", appointmentRoutes);
   app.use("/api", claimRoutes);
+  // Admin panel calls `/api/campaigns`, the public CRM suite calls `/api/email/campaigns`.
   app.use("/api", emailCampaignRoutes);
+  app.use("/api/email", emailCampaignRoutes);
   app.use("/api", enquiryRoutes);
   app.use("/api", questionRoutes);
   app.use("/api", topServicesRoutes);
