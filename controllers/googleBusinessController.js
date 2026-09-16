@@ -2,10 +2,34 @@
 
 const mongoose = require("mongoose");
 const Business = require("../models/Business");
+const Category = require("../models/Category");
 const logger = require("../utils/logger");
 const googleBusinessService = require("../services/googleBusinessService");
+const googleBusinessImportService = require("../services/googleBusinessImportService");
+const { escapeRegex } = require("../services/businessImportService");
 const GoogleConnection = require("../models/GoogleBusinessConnection");
 const { oauthResultUrl } = require("../utils/oauthRedirect");
+
+/** Maps a Google/import-service error to the HTTP status + message the frontend already handles. */
+function respondToGoogleError(res, error, fallbackMessage) {
+  logger.error("google_business.request_failed", { error: error.message });
+  if (error.status) {
+    const body = { success: false, message: error.message };
+    if (error.existingBusinessId) body.existingBusinessId = error.existingBusinessId;
+    if (error.claimable) body.claimable = error.claimable;
+    if (error.requiresCategory) body.requiresCategory = error.requiresCategory;
+    if (error.suggestedCategoryName) body.suggestedCategoryName = error.suggestedCategoryName;
+    return res.status(error.status).json(body);
+  }
+  const httpStatus = error.response?.status;
+  if (httpStatus === 429) {
+    return res.status(429).json({ success: false, message: "Google API rate limit exceeded. Please wait a moment and try again." });
+  }
+  if (httpStatus === 403) {
+    return res.status(403).json({ success: false, message: "Google Business Profile API access not granted. This API requires explicit approval from Google — see the Google Cloud Console." });
+  }
+  return res.status(500).json({ success: false, message: `${fallbackMessage}: ${error.message}` });
+}
 
 /**
  * GET /api/google-business/status
@@ -68,7 +92,8 @@ exports.handleCallback = async (req, res) => {
   // Google returns `error=access_denied` when the user cancels or denies permission
   if (oauthError) {
     logger.warn("Google OAuth callback: user denied access or error returned", { error: oauthError });
-    return res.redirect(oauthResultUrl("/settings/integrations", { gmb: "error", reason: oauthError }));
+    const cancelled = await googleBusinessService.cancelAuthorizationRequest(state);
+    return res.redirect(oauthResultUrl(cancelled?.returnTo || "/settings/integrations", { gmb: "error", reason: oauthError }));
   }
 
   if (!code) {
@@ -126,112 +151,48 @@ exports.disconnectAccount = async (req, res) => {
 };
 
 /**
- * Helper: Automatically create / update a Business listing in UrbanCitations from a Google Business Profile location
- */
-async function autoImportProfileToBusiness(user, profile) {
-  if (!profile || !profile.businessName) return null;
-  const name = profile.businessName.trim();
-  const locId = profile.businessId || "";
-
-  // Check if business already exists
-  let targetBusiness = await Business.findOne({
-    userId: user._id,
-    $or: [
-      ...(locId ? [{ googleLocationId: locId }] : []),
-      { businessName: new RegExp(`^${name}$`, "i") }
-    ]
-  });
-
-  const rawCoords = [
-    Number(profile.locationDetails?.longitude) || 0,
-    Number(profile.locationDetails?.latitude) || 0,
-  ];
-
-  if (!targetBusiness) {
-    targetBusiness = new Business({
-      userId: user._id,
-      businessName: name,
-      googleLocationId: locId,
-      address: {
-        pincode: profile.address?.pincode || "000000",
-        city: profile.address?.city || "Unknown",
-        state: profile.address?.state || "Unknown",
-        country: profile.address?.country || "US",
-        streetName: profile.address?.streetName || "",
-      },
-      addressString: profile.address?.formattedAddress || "",
-      location: {
-        type: "Point",
-        coordinates: rawCoords,
-      },
-      description: profile.description || "",
-      website: profile.website || "",
-      importedCategory: profile.category || "",
-      contact: {
-        contactDetails: [
-          {
-            title: "Mr",
-            name: user.full_name || "Owner",
-            mobileNumbers: profile.phoneNumber ? [profile.phoneNumber] : ["0000000000"],
-          }
-        ]
-      }
-    });
-
-    await targetBusiness.save();
-
-    user.businesses = user.businesses || [];
-    if (!user.businesses.some((id) => id.toString() === targetBusiness._id.toString())) {
-      user.businesses.push(targetBusiness._id);
-      await user.save();
-    }
-  } else {
-    // Update existing business details if needed
-    if (locId && !targetBusiness.googleLocationId) {
-      targetBusiness.googleLocationId = locId;
-    }
-    if (profile.address?.formattedAddress && !targetBusiness.addressString) {
-      targetBusiness.addressString = profile.address.formattedAddress;
-    }
-    if (profile.category && !targetBusiness.importedCategory) {
-      targetBusiness.importedCategory = profile.category;
-    }
-    await targetBusiness.save();
-  }
-
-  return targetBusiness;
-}
-
-exports.autoImportProfileToBusiness = autoImportProfileToBusiness;
-
-/**
  * GET /api/google-business/profiles
- * Fetches all available Business Profiles across connected accounts and auto-syncs them to Business listings.
+ * Fetches all Business Profile locations the connected Google account can access.
+ * Read-only: unlike the previous implementation, this never creates or modifies any
+ * Business document — importing is a separate, explicit user action (see importLocation
+ * below). Each profile is annotated with its link status so the frontend can show
+ * "Already imported", "Linked to another account", or offer a fresh import.
  */
 exports.getProfiles = async (req, res) => {
   try {
-    if (!req.user || !(await googleBusinessService.connection(req.user))) {
+    const connection = req.user && (await googleBusinessService.connection(req.user));
+    if (!connection || connection.status !== "connected") {
       return res.status(401).json({ success: false, message: "Google account not connected" });
     }
 
     const profiles = await googleBusinessService.fetchAllProfilesForUser(req.user);
 
-    // Auto-create / sync business listings in UrbanCitations for each profile
-    const importedBusinesses = [];
-    for (const p of profiles) {
-      try {
-        const biz = await autoImportProfileToBusiness(req.user, p);
-        if (biz) importedBusinesses.push(biz);
-      } catch (err) {
-        logger.warn("google.auto_import.error", { profileId: p.businessId, error: err.message });
-      }
-    }
+    const locationIds = profiles.map((p) => p.businessId).filter(Boolean);
+    const linkedBusinesses = locationIds.length
+      ? await Business.find({ googleLocationId: { $in: locationIds } }).select("_id userId googleLocationId").lean()
+      : [];
+    const linkedByLocationId = new Map(linkedBusinesses.map((b) => [b.googleLocationId, b]));
+
+    const categoryNames = [...new Set(profiles.map((p) => p.category).filter(Boolean))];
+    const categories = categoryNames.length
+      ? await Category.find({ name: { $in: categoryNames.map((n) => new RegExp(`^${escapeRegex(n)}$`, "i")) } }).select("_id name").lean()
+      : [];
+    const categoryByLowerName = new Map(categories.map((c) => [c.name.toLowerCase(), c._id]));
+
+    const annotatedProfiles = profiles.map((p) => {
+      const linked = p.businessId ? linkedByLocationId.get(p.businessId) : null;
+      return {
+        ...p,
+        linkedBusinessId: linked ? linked._id : null,
+        linkedToCurrentUser: linked ? String(linked.userId || "") === String(req.user._id) : false,
+        suggestedCategoryId: p.category ? categoryByLowerName.get(p.category.toLowerCase()) || null : null,
+      };
+    });
 
     return res.status(200).json({
       success: true,
-      count: profiles.length,
-      profiles,
-      importedBusinesses,
+      count: annotatedProfiles.length,
+      profiles: annotatedProfiles,
     });
   } catch (error) {
     logger.error("Error fetching Google Business Profiles", { error: error.message });
@@ -250,6 +211,42 @@ exports.getProfiles = async (req, res) => {
 };
 
 /**
+ * POST /api/google-business/import-location
+ * Imports one Google Business Profile location, chosen by the user, into UC as a normal
+ * Business (or syncs it if already linked to one of the user's own businesses). This is
+ * the single creation path for the "Import from Google Business Profile" flow; it reuses
+ * businessService.createBusiness — the same function the manual creation form uses.
+ */
+exports.importLocation = async (req, res) => {
+  try {
+    if (!req.user) {
+      return res.status(401).json({ success: false, message: "User not authenticated" });
+    }
+    const { accountName, locationName, categoryId, subCategoryIds } = req.body || {};
+    if (!locationName) {
+      return res.status(400).json({ success: false, message: "locationName is required." });
+    }
+
+    const { business, created } = await googleBusinessImportService.importLocation(req.user, {
+      accountName,
+      locationName,
+      categoryId,
+      subCategoryIds,
+    });
+
+    return res.status(created ? 201 : 200).json({
+      success: true,
+      created,
+      message: created ? "Business imported from Google Business Profile." : "Existing business synced from Google Business Profile.",
+      business,
+      businessId: business._id,
+    });
+  } catch (error) {
+    return respondToGoogleError(res, error, "Failed to import Business Profile");
+  }
+};
+
+/**
  * POST /api/google-business/select-profile
  * Saves the selected Google Business Profile location ID and caches its normalized 9 fields.
  */
@@ -262,13 +259,14 @@ exports.selectProfile = async (req, res) => {
       return res.status(400).json({ success: false, message: "locationName or businessId is required" });
     }
 
-    if (!req.user || !(await googleBusinessService.connection(req.user))) {
+    const activeConnection = req.user && (await googleBusinessService.connection(req.user));
+    if (!activeConnection || activeConnection.status !== "connected") {
       return res.status(401).json({ success: false, message: "Google account not connected" });
     }
 
     const profile = await googleBusinessService.fetchProfileByLocationName(req.user, targetLocationId);
 
-    const googleConnection = await googleBusinessService.connection(req.user);
+    const googleConnection = activeConnection;
     googleConnection.selectedProfileId = targetLocationId;
     googleConnection.lastFetchedProfile = profile;
     await googleConnection.save();
@@ -284,11 +282,7 @@ exports.selectProfile = async (req, res) => {
       profile,
     });
   } catch (error) {
-    logger.error("Error selecting Google Business Profile", { error: error.message });
-    return res.status(500).json({
-      success: false,
-      message: "Failed to select profile: " + error.message,
-    });
+    return respondToGoogleError(res, error, "Failed to select profile");
   }
 };
 
@@ -299,7 +293,7 @@ exports.selectProfile = async (req, res) => {
 exports.getSelectedProfile = async (req, res) => {
   try {
     const googleConnection = req.user && (await googleBusinessService.connection(req.user));
-    if (!googleConnection) {
+    if (!googleConnection || googleConnection.status !== "connected") {
       return res.status(401).json({ success: false, message: "Google account not connected" });
     }
 
@@ -336,7 +330,7 @@ exports.getSelectedProfile = async (req, res) => {
 exports.populateProfile = async (req, res) => {
   try {
     const googleConnection = req.user && (await googleBusinessService.connection(req.user));
-    if (!googleConnection) {
+    if (!googleConnection || googleConnection.status !== "connected") {
       return res.status(401).json({ success: false, message: "Google account not connected" });
     }
 
@@ -377,84 +371,34 @@ exports.populateProfile = async (req, res) => {
     }
 
     // 2. Populate Business Profile
+    // Enrichment only — delegates to the same ownership-scoped lookup and fill-only sync the
+    // creation flow uses (googleBusinessImportService), instead of a second, independent
+    // Business-mutation path. Creating a brand-new business from Google now happens exclusively
+    // through POST /api/google-business/import-location, which enforces a UC category the way
+    // every other creation path does; this endpoint no longer creates businesses with no category.
     if (target === "business" || target === "both") {
       if (businessId) {
         targetBusiness = await Business.findOne({ _id: businessId, userId: req.user._id });
         if (!targetBusiness) {
           return res.status(404).json({ success: false, message: "Specified target Business not found" });
         }
-      } else if (req.user.businesses && req.user.businesses.length > 0) {
-        targetBusiness = await Business.findById(req.user.businesses[0]);
-      }
-
-      if (!targetBusiness) {
-        targetBusiness = new Business({
-          userId: req.user._id,
-          businessName: profile.businessName || "New Business",
-          address: {
-            pincode: profile.address?.pincode || "000000",
-            city: profile.address?.city || "Unknown",
-            state: profile.address?.state || "Unknown",
-            country: profile.address?.country || "US",
-          },
-          location: {
-            type: "Point",
-            coordinates: [
-              profile.locationDetails?.longitude || 0,
-              profile.locationDetails?.latitude || 0,
-            ],
-          },
-        });
-      }
-
-      // Populate core details safely
-      if (profile.businessName) targetBusiness.businessName = profile.businessName;
-      if (profile.description) targetBusiness.description = profile.description;
-      if (profile.website) targetBusiness.website = profile.website;
-
-      if (profile.address) {
-        targetBusiness.address = targetBusiness.address || {};
-        if (profile.address.streetName) targetBusiness.address.streetName = profile.address.streetName;
-        if (profile.address.city) targetBusiness.address.city = profile.address.city;
-        if (profile.address.state) targetBusiness.address.state = profile.address.state;
-        if (profile.address.pincode) targetBusiness.address.pincode = profile.address.pincode;
-        if (profile.address.country) targetBusiness.address.country = profile.address.country;
-      }
-
-      if (profile.locationDetails && (profile.locationDetails.latitude !== 0 || profile.locationDetails.longitude !== 0)) {
-        targetBusiness.location = {
-          type: "Point",
-          coordinates: [profile.locationDetails.longitude, profile.locationDetails.latitude],
-        };
-      }
-
-      if (profile.phoneNumber) {
-        targetBusiness.contact = targetBusiness.contact || {};
-        targetBusiness.contact.contactDetails = targetBusiness.contact.contactDetails || [];
-        if (targetBusiness.contact.contactDetails.length === 0) {
-          targetBusiness.contact.contactDetails.push({
-            title: "Mr",
-            name: req.user.full_name || "Owner",
-            mobileNumbers: [profile.phoneNumber],
-          });
-        } else if (!targetBusiness.contact.contactDetails[0].mobileNumbers.includes(profile.phoneNumber)) {
-          targetBusiness.contact.contactDetails[0].mobileNumbers.push(profile.phoneNumber);
+      } else {
+        targetBusiness = await googleBusinessImportService.findLinkedBusiness(req.user._id, profile);
+        if (targetBusiness && String(targetBusiness.userId || "") !== String(req.user._id)) {
+          return res.status(403).json({ success: false, message: "You do not own this business." });
         }
       }
 
-      if (profile.category) {
-        targetBusiness.importedCategory = profile.category;
+      if (!targetBusiness) {
+        return res.status(400).json({
+          success: false,
+          message: 'No existing business to populate from this Google Business Profile. Use "Import from Google Business Profile" on the business creation page to create one.',
+        });
       }
 
-      const isNewBusiness = !targetBusiness._id || targetBusiness.isNew;
-      await targetBusiness.save();
-
-      if (isNewBusiness) {
-        req.user.businesses = req.user.businesses || [];
-        req.user.businesses.push(targetBusiness._id);
-        await req.user.save();
-      }
-
+      targetBusiness = await googleBusinessImportService.syncLinkedBusiness(targetBusiness, profile, {}, {
+        accountName: targetBusiness.googleAccountName,
+      });
       businessUpdated = true;
     }
 

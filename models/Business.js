@@ -12,7 +12,19 @@ const BusinessSchema = new Schema(
       type: String, 
       default: "https://img.icons8.com/fluency/100/000000/organization.png" 
     },
-    googleLocationId: { type: String, index: true },
+    // Google location resource names are globally stable (for example
+    // `locations/123`).  A partial unique index makes duplicate prevention hold
+    // across concurrent requests and across multiple API processes, rather than
+    // relying only on a find-before-create check.
+    googleLocationId: { type: String },
+    creationSource: {
+      type: String,
+      enum: ["manual", "google_business"],
+      default: "manual",
+      index: true,
+    },
+    googleAccountName: { type: String },
+    googleLastSyncedAt: { type: Date },
     address: {
       blockName: { type: String },
       streetName: { type: String },
@@ -194,6 +206,14 @@ const BusinessSchema = new Schema(
 
 // ✅ Indexes for performance
 BusinessSchema.index({ businessName: 1 });
+BusinessSchema.index(
+  { googleLocationId: 1 },
+  {
+    name: "googleLocationId_1",
+    unique: true,
+    partialFilterExpression: { googleLocationId: { $type: "string", $gt: "" } },
+  }
+);
 BusinessSchema.index({ "address.city": 1 });
 BusinessSchema.index({ "address.pincode": 1 });
 BusinessSchema.index({ location: "2dsphere" });

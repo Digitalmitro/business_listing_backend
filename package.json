@@ -9,6 +9,7 @@
     "start": "node server.js",
     "dev": "nodemon server.js",
     "monitor:cpu": "node scripts/cpuMonitor.js",
+    "indexes": "node scripts/createIndexes.js",
     "pm2:start": "pm2 start ecosystem.config.js --env production",
     "pm2:deploy": "pm2 startOrReload ecosystem.config.js --env production --update-env",
     "pm2:reload": "pm2 reload business-listing-api --update-env",

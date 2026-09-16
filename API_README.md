@@ -254,6 +254,8 @@ All legacy plan routes are currently public.
 
 ## Businesses, offers, and imports
 
+A UC Business can be created two ways, both ending at the same document shape: manually via `POST /api/business/businesses` below, or by importing a Google Business Profile location via `POST /api/google-business/import-location` (see "Google Business Profile"). Both call the shared `services/businessService.js#createBusiness`, so there is one place that validates categories, builds the contact/timing shape, attaches the owner, and notifies admins.
+
 Base path: `/api/business`
 
 | Method | Path | Access | Main input / purpose |
@@ -453,19 +455,20 @@ Base path: `/api/social-integrations`
 
 ### Google Business Profile
 
-Base path: `/api/google-business`. Google access is read-only; `populate-profile` writes only to this application's User/Business records.
+Base path: `/api/google-business`. Google access is read-only. `GET /profiles` is now a pure read — it no longer creates or modifies any Business document (see "Business creation" below for the one supported creation path); `populate-profile` and `import-location` write only to this application's User/Business records.
 
 | Method | Path | Access | Main input / purpose |
 | --- | --- | --- | --- |
-| GET | `/api/google-business/auth-url` | JWT | Optional query `returnTo`; create Google OAuth URL. |
+| GET | `/api/google-business/auth-url` | Customer JWT | Optional query `returnTo`; create Google OAuth URL with a one-time, expiring hashed state. |
 | GET | `/api/google-business/callback` | OAuth callback | Query: `code`, `state`, or `error`; redirects to frontend. |
 | GET | `/api/google-business/status` | JWT | Return connection and authorization status. |
 | POST | `/api/google-business/connect` | JWT | Deprecated direct exchange; returns `410 Gone`. |
 | POST | `/api/google-business/disconnect` | JWT | Delete the current tenant/user Google connection. |
-| GET | `/api/google-business/profiles` | JWT | List available accounts/locations. |
+| GET | `/api/google-business/profiles` | Customer JWT | List all paginated available accounts/locations, each annotated with `linkedBusinessId`, `linkedToCurrentUser`, and `suggestedCategoryId`. Read-only — creates nothing. |
 | POST | `/api/google-business/select-profile` | JWT | JSON: `locationName` or legacy `businessId`. |
 | GET | `/api/google-business/selected-profile` | JWT | Return the cached/refreshed selected profile. |
-| POST | `/api/google-business/populate-profile` | JWT | JSON: optional `target` (`user`, `business`, `both`) and `businessId`. |
+| POST | `/api/google-business/populate-profile` | JWT | JSON: optional `target` (`user`, `business`, `both`) and `businessId`. The `business` target now only enriches an existing, ownership-scoped business (matched by `googleLocationId` or an exact name match, or the given `businessId`); it no longer creates a business with no category. Use `import-location` to create one. |
+| POST | `/api/google-business/import-location` | Customer JWT | JSON: `accountName`, `locationName` (required), optional `categoryId`, `subCategoryIds`. Re-fetches the location with the caller's token, creates a normal UC Business through the same `businessService.createBusiness` the manual form uses, or manually refreshes an existing link. Returns `409` with `existingBusinessId` if the Google location is linked to a different owner. |
 
 ### Social publishing and scheduling
 

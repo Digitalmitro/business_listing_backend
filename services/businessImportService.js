@@ -981,4 +981,5 @@ module.exports = {
   readImportFile,
   runBusinessImport,
   validateAndNormalizeRow,
+  escapeRegex,
 };

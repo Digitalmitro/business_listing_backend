@@ -14,54 +14,8 @@ const XLSX = require("xlsx");
 const fs = require("fs");
 const { addJob } = require("../utils/queue");
 const { notifyAdmins } = require("../helpers/notificationHelper");
-
-const VALID_COUNTRIES = [
-  "Afghanistan", "Albania", "Algeria", "Andorra", "Angola", "Antigua and Barbuda", "Argentina", "Armenia", "Australia", "Austria", "Azerbaijan",
-  "Bahamas", "Bahrain", "Bangladesh", "Barbados", "Belarus", "Belgium", "Belize", "Benin", "Bhutan", "Bolivia", "Bosnia and Herzegovina", "Botswana", "Brazil", "Brunei", "Bulgaria", "Burkina Faso", "Burundi",
-  "Cabo Verde", "Cambodia", "Cameroon", "Canada", "Central African Republic", "Chad", "Chile", "China", "Colombia", "Comoros", "Congo", "Costa Rica", "Croatia", "Cuba", "Cyprus", "Czech Republic",
-  "Denmark", "Djibouti", "Dominica", "Dominican Republic",
-  "Ecuador", "Egypt", "El Salvador", "Equatorial Guinea", "Eritrea", "Estonia", "Eswatini", "Ethiopia",
-  "Fiji", "Finland", "France",
-  "Gabon", "Gambia", "Georgia", "Germany", "Ghana", "Greece", "Grenada", "Guatemala", "Guinea", "Guinea-Bissau", "Guyana",
-  "Haiti", "Honduras", "Hungary",
-  "Iceland", "India", "Indonesia", "Iran", "Iraq", "Ireland", "Israel", "Italy", "Ivory Coast",
-  "Jamaica", "Japan", "Jordan",
-  "Kazakhstan", "Kenya", "Kiribati", "Kuwait", "Kyrgyzstan",
-  "Laos", "Latvia", "Lebanon", "Lesotho", "Liberia", "Libya", "Liechtenstein", "Lithuania", "Luxembourg",
-  "Madagascar", "Malawi", "Malaysia", "Maldives", "Mali", "Malta", "Marshall Islands", "Mauritania", "Mauritius", "Mexico", "Micronesia", "Moldova", "Monaco", "Mongolia", "Montenegro", "Morocco", "Mozambique", "Myanmar",
-  "Namibia", "Nauru", "Nepal", "Netherlands", "New Zealand", "Nicaragua", "Niger", "Nigeria", "North Korea", "North Macedonia", "Norway",
-  "Oman",
-  "Pakistan", "Palau", "Palestine", "Panama", "Papua New Guinea", "Paraguay", "Peru", "Philippines", "Poland", "Portugal",
-  "Qatar",
-  "Romania", "Russia", "Rwanda",
-  "Saint Kitts and Nevis", "Saint Lucia", "Saint Vincent and the Grenadines", "Samoa", "San Marino", "Sao Tome and Principe", "Saudi Arabia", "Senegal", "Serbia", "Seychelles", "Sierra Leone", "Singapore", "Slovakia", "Slovenia", "Solomon Islands", "Somalia", "South Africa", "South Korea", "South Sudan", "Spain", "Sri Lanka", "Sudan", "Suriname", "Sweden", "Switzerland", "Syria",
-  "Taiwan", "Tajikistan", "Tanzania", "Thailand", "Timor-Leste", "Togo", "Tonga", "Trinidad and Tobago", "Tunisia", "Turkey", "Turkmenistan", "Tuvalu",
-  "Uganda", "Ukraine", "United Arab Emirates", "United Kingdom", "United States", "Uruguay", "Uzbekistan",
-  "Vanuatu", "Vatican City", "Venezuela", "Vietnam",
-  "Yemen",
-  "Zambia", "Zimbabwe"
-];
-
-const VALID_COUNTRIES_MAP = new Map(VALID_COUNTRIES.map(c => [c.toLowerCase(), c]));
-
-// Helper to normalize country names
-const normalizeCountry = (c) => {
-  if (!c || typeof c !== "string") return "Unknown Country";
-  const trimmed = c.trim();
-  const upper = trimmed.toUpperCase();
-  const map = {
-    "USA": "United States",
-    "US": "United States",
-    "UNITED STATES": "United States",
-    "UK": "United Kingdom",
-    "UAE": "United Arab Emirates",
-    "CANADA": "Canada",
-    "INDIA": "India"
-  };
-  const mappedCountry = map[upper] || trimmed;
-  const standardName = VALID_COUNTRIES_MAP.get(mappedCountry.toLowerCase());
-  return standardName || mappedCountry;
-};
+const { VALID_COUNTRIES, normalizeCountry } = require("../helpers/country");
+const businessService = require("../services/businessService");
 
 ///this api use combine for admin and users
 exports.createBusiness = async (req, res) => {
@@ -81,168 +35,12 @@ exports.createBusiness = async (req, res) => {
     }
 
     const isAdmin = ["admin", "super-admin"].includes(req.user?.role);
-    let userId = loggedInUserId;
 
-    // For admins, allow business creation without user attachment
-    if (isAdmin) {
-      userId = null;
-    }
-
-    // Convert coordinates to GeoJSON
-    const coords = businessData.address?.coordinates;
-    if (!coords?.latitude || !coords?.longitude) {
-      return res
-        .status(400)
-        .json({ message: "Latitude and longitude are required." });
-    }
-
-    // Normalize categories (handle 'categories' vs 'category' and object vs ID string)
-    let rawCategories = businessData.categories || businessData.category || [];
-    // If it's not an array, make it one (though it should be)
-    if (!Array.isArray(rawCategories)) rawCategories = [rawCategories];
-
-    const validCategories = rawCategories
-      .map((item) => (typeof item === "object" && item._id ? item._id : item))
-      .filter((id) => mongoose.Types.ObjectId.isValid(id))
-      .map((id) => new mongoose.Types.ObjectId(id));
-
-    // Normalize subCategories
-    let rawSubCategories =
-      businessData.subCategories || businessData.subCategory || [];
-    if (!Array.isArray(rawSubCategories)) rawSubCategories = [rawSubCategories];
-
-    const validSubCategories = rawSubCategories
-      .map((item) => (typeof item === "object" && item._id ? item._id : item))
-      .filter((id) => mongoose.Types.ObjectId.isValid(id))
-      .map((id) => new mongoose.Types.ObjectId(id));
-
-    // Verify categories exist (since category is required)
-    if (validCategories.length === 0) {
-      return res
-        .status(400)
-        .json({ message: "At least one category is required." });
-    }
-    const existingCategories = await Category.find({
-      _id: { $in: validCategories },
-    });
-    if (existingCategories.length !== validCategories.length) {
-      return res
-        .status(400)
-        .json({ message: "One or more categories are invalid." });
-    }
-
-    // Verify subCategories exist
-    if (validSubCategories.length > 0) {
-      const existingSubCategories = await SubCategory.find({
-        _id: { $in: validSubCategories },
-      });
-      if (existingSubCategories.length !== validSubCategories.length) {
-        return res
-          .status(400)
-          .json({ message: "One or more subcategories are invalid." });
-      }
-    }
-
-    // Attach uploaded file names
-    const businessLogo = req.files?.businessLogo?.[0];
-    const photos = Array.isArray(req.files?.photos)
-      ? req.files.photos
-      : req.files?.photos
-      ? [req.files.photos]
-      : [];
-
-    // Removed console.logs from hot path
-    console.log("SubCategory:", validSubCategories);
-
-    // Initialize and validate contact object
-    const contact = businessData.contact || {};
-    const { mobile, whatsapp, email, contactDetails } = contact;
-
-    // Handle contactDetails
-    const validatedContactDetails =
-      contactDetails && Array.isArray(contactDetails)
-        ? contactDetails.map((contact) => ({
-            title: contact.title || "Mr",
-            name: contact.name || "Default Name",
-            designation: contact.designation || "",
-            mobileNumbers: mobile?.filter((num) => num.trim()) || [""],
-            whatsappNumbers: whatsapp?.filter((num) => num.trim()) || [""],
-            emails: email?.filter((em) => em.trim()) || [""],
-          }))
-        : [
-            {
-              title: "Mr",
-              name: contactDetails?.[0]?.name || "Default Name",
-              designation: contactDetails?.[0]?.designation || "",
-              mobileNumbers: mobile?.filter((num) => num.trim()) || [""],
-              whatsappNumbers: whatsapp?.filter((num) => num.trim()) || [""],
-              emails: email?.filter((em) => em.trim()) || [""],
-            },
-          ];
-
-    // Create business object explicitly
-    const newBusinessData = {
-      businessName: businessData.businessName,
-      address: {
-        blockName: businessData.address?.blockName || "",
-        streetName: businessData.address?.streetName,
-        area: businessData.address?.area,
-        state: businessData.address?.state,
-        country: normalizeCountry(businessData.address?.country),
-        landmark: businessData.address?.landmark || "",
-        pincode: businessData.address?.pincode,
-        city: businessData.address?.city,
-        state: businessData.address?.state,
-      },
-      location: {
-        type: "Point",
-        coordinates: [coords.longitude, coords.latitude],
-      },
-      contact: {
-        contactDetails: validatedContactDetails,
-        mobile: mobile?.filter((num) => num.trim()) || [],
-        whatsapp: whatsapp?.filter((num) => num.trim()) || [],
-        email: email?.filter((em) => em.trim()) || [],
-      },
-      businessTiming: {
-        isOpen24Hours: businessData.businessTiming?.isOpen24Hours ?? false,
-        daysOfWeek: businessData.businessTiming?.daysOfWeek || [],
-        schedule: businessData.businessTiming?.schedule || {},
-      },
-      category: validCategories,
-      subCategory: validSubCategories,
-      businessLogo: businessLogo ? businessLogo.filename : undefined,
-      photos: photos.map((photo) => photo.filename),
-      userId: userId,
-      claimed: !isAdmin,
-      isAdmin: isAdmin,
-    };
-
-    console.log("New business data:", newBusinessData);
-
-    // Create and save business
-    const newBusiness = new Business(newBusinessData);
-    const savedBusiness = await newBusiness.save();
-
-    console.log("Saved business:", savedBusiness);
-
-    // Attach business to user if userId is provided
-    if (userId) {
-      const user = await User.findById(userId);
-      if (!user) {
-        return res.status(400).json({ message: "User not found." });
-      }
-      user.businesses.push(savedBusiness._id);
-      user.isSeller = true;
-      await user.save();
-    }
-
-    // Notify Admins about new business
-    await notifyAdmins({
-      title: "New Business Listed",
-      description: `${savedBusiness.businessName} has been listed on the platform.`,
-      link: `/view-business/${savedBusiness._id}`,
-      category: "business",
+    const savedBusiness = await businessService.createBusiness({
+      ownerId: loggedInUserId,
+      isAdmin,
+      businessData,
+      files: req.files,
     });
 
     res.status(201).json({
@@ -253,7 +51,8 @@ exports.createBusiness = async (req, res) => {
     });
   } catch (error) {
     console.error("Error creating business:", error);
-    res.status(400).json({
+    const status = error.status && error.status !== 500 ? error.status : 400;
+    res.status(status).json({
       success: false,
       message: error._message || error.message || "Failed to create business",
       errors: error.errors,

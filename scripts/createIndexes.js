@@ -20,6 +20,32 @@ const {
 } = require("../models/CrmConfig");
 const ScheduledSocialPost = require("../models/ScheduledSocialPost");
 const UnsubscribedEmail = require("../models/UnsubscribedEmail");
+const Business = require("../models/Business");
+
+async function ensureBusinessGoogleLocationIndex() {
+  const duplicates = await Business.aggregate([
+    { $match: { googleLocationId: { $type: "string", $ne: "" } } },
+    { $group: { _id: "$googleLocationId", count: { $sum: 1 }, businessIds: { $push: "$_id" } } },
+    { $match: { count: { $gt: 1 } } },
+    { $limit: 20 },
+  ]);
+  if (duplicates.length > 0) {
+    const ids = duplicates.map((row) => row._id).join(", ");
+    throw new Error(`Cannot create the unique Google location index; duplicate googleLocationId values must be reviewed first: ${ids}`);
+  }
+
+  const indexName = "googleLocationId_1";
+  const desiredPartialFilter = { googleLocationId: { $type: "string", $gt: "" } };
+  const indexes = await Business.collection.indexes();
+  const current = indexes.find((index) => index.name === indexName);
+  if (current && (!current.unique || JSON.stringify(current.partialFilterExpression) !== JSON.stringify(desiredPartialFilter))) {
+    await Business.collection.dropIndex(indexName);
+  }
+  await Business.collection.createIndex(
+    { googleLocationId: 1 },
+    { name: indexName, unique: true, partialFilterExpression: desiredPartialFilter }
+  );
+}
 
 async function createAllIndexes() {
   try {
@@ -31,6 +57,12 @@ async function createAllIndexes() {
 
     await mongoose.connect(mongoUri);
     console.log("Connected to MongoDB for index creation...");
+
+    // This deliberately refuses to guess which existing Business should keep a
+    // duplicated Google location link. Resolve any reported rows first, then
+    // rerun the script; no Business document is deleted or rewritten here.
+    await ensureBusinessGoogleLocationIndex();
+    console.log("Successfully created/verified unique Google location index for Business");
 
     const models = [
       { name: "CrmLead", model: CrmLead },
@@ -46,6 +78,7 @@ async function createAllIndexes() {
       { name: "CrmSchedulerConfig", model: CrmSchedulerConfig },
       { name: "ScheduledSocialPost", model: ScheduledSocialPost },
       { name: "UnsubscribedEmail", model: UnsubscribedEmail },
+      { name: "Business", model: Business },
     ];
 
     for (const { name, model } of models) {
@@ -69,4 +102,4 @@ if (require.main === module) {
   createAllIndexes();
 }
 
-module.exports = { createAllIndexes };
+module.exports = { createAllIndexes, ensureBusinessGoogleLocationIndex };

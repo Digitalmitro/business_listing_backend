@@ -32,6 +32,12 @@ Useful health checks:
 - `GET /health/live` — confirms the Node.js process is alive.
 - `GET /health/ready` — confirms MongoDB and Redis are ready.
 
+## Business creation (manual / Google import)
+
+A Business can be created two ways: manually through `POST /api/business/businesses` (frontend: the `/businessform` "Create Manually" step), or by importing a Google Business Profile location through `POST /api/google-business/import-location` (frontend: the `/businessform?mode=google` step). Both call the shared `services/businessService.js#createBusiness`, so there is exactly one place that validates categories/subcategories, preserves each contact person's fields, builds the business-hours shape, attaches the owner, and notifies admins. The Google path maps provider data through `services/googleBusinessImportService.js` before handing off to that service. Imported listings remain ordinary `Business` documents and therefore use the existing discovery, profile, enquiry, booking, lead, notification, social, and admin paths.
+
+Google import stores `creationSource`, the durable `googleLocationId`, the account resource name used for media, and `googleLastSyncedAt`. Refresh is explicit: the owner chooses **Already imported — Sync latest details**. There is no Google push subscription or background Business Profile scheduler in this codebase. A Google-created listing refreshes Google-owned fields; a manually created listing that is later linked is enriched only where its data is missing. See `docs/social-integrations.md` for the mapping, duplicate rules, limitations, and database-index rollout, and `API_README.md` for the endpoint reference.
+
 ## Business CSV/XLSX imports
 
 Send one `.csv` or `.xlsx` file in the `file` or legacy `csvFile` multipart field:
