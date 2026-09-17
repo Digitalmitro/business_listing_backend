@@ -3,7 +3,7 @@
 
 const mongoose = require("mongoose");
 const { ownerFilter, leadIdsForBusiness } = require("./crmScope");
-const CrmLead = require("../models/CrmLead");
+const { CrmLead } = require("../models/CrmLead");
 const CrmEmailReplyLog = require("../models/CrmEmailReplyLog");
 const { CrmReplyKeyword } = require("../models/CrmConfig");
 const logger = require("../utils/logger");

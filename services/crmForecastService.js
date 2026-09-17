@@ -3,7 +3,7 @@
 
 const mongoose = require("mongoose");
 const { scopeFilter } = require("./crmScope");
-const CrmLead = require("../models/CrmLead");
+const { CrmLead } = require("../models/CrmLead");
 const logger = require("../utils/logger");
 
 const STAGE_PROBABILITIES = {

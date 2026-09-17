@@ -2,9 +2,77 @@
 "use strict";
 
 const mongoose = require("mongoose");
-const { scopeFilter, validBusinessId } = require("./crmScope");
+const { scopeFilter, validBusinessId, ALL_OWNERS, appointmentStartTime, invalidateCrmSnapshots } = require("./crmScope");
+const Appointment = require("../models/Appointment");
+const Business = require("../models/Business");
+require("../models/User"); // registers the schema Appointment.userId populates
+
+const APPOINTMENT_EVENT_TYPE = "Appointment";
+const APPOINTMENT_SLOT_MINUTES = 30;
+
+/**
+ * Customer bookings (Appointment collection) shown on the CRM calendar as read-only
+ * items. Scoped to one business when `businessId` is given, otherwise to every
+ * business the owner has (admins without a business see all bookings).
+ */
+async function appointmentEvents(ownerId, businessId, startDate, endDate) {
+  const filter = { status: { $ne: "Canceled" } };
+  const bizId = validBusinessId(businessId);
+  if (bizId) {
+    filter.businessId = bizId;
+  } else if (ownerId !== ALL_OWNERS) {
+    const owned = await Business.find({ userId: ownerId }).select("_id").lean();
+    if (owned.length === 0) return [];
+    filter.businessId = { $in: owned.map((b) => b._id) };
+  }
+  if (startDate && endDate) {
+    // appointmentDate is stored at the start of the day; widen by a day each side.
+    filter.appointmentDate = {
+      $gte: new Date(startDate.getTime() - 24 * 60 * 60 * 1000),
+      $lte: new Date(endDate.getTime() + 24 * 60 * 60 * 1000),
+    };
+  }
+
+  const appointments = await Appointment.find(filter)
+    .populate("userId", "full_name email phone")
+    .populate("businessId", "businessName")
+    .sort({ appointmentDate: -1 })
+    .limit(500)
+    .lean();
+
+  const events = [];
+  for (const a of appointments) {
+    const start = appointmentStartTime(a);
+    if (!start) continue;
+    if (startDate && endDate && (start < startDate || start > endDate)) continue;
+    const customer = a.userId && typeof a.userId === "object" ? a.userId : null;
+    const customerName = customer?.full_name || "Customer";
+    events.push({
+      _id: `appointment_${a._id}`,
+      isVirtual: true,
+      isAppointment: true,
+      appointmentId: a._id,
+      appointmentStatus: a.status,
+      ownerId,
+      businessId: a.businessId || null,
+      leadId: null,
+      customer: customer ? { _id: customer._id, name: customer.full_name, email: customer.email, phone: customer.phone } : null,
+      title: `Booking: ${a.serviceName || "Service"} – ${customerName}`,
+      eventType: APPOINTMENT_EVENT_TYPE,
+      startTime: start,
+      endTime: new Date(start.getTime() + APPOINTMENT_SLOT_MINUTES * 60 * 1000),
+      description: `${a.serviceName || "Service"} booked by ${customerName}${customer?.phone ? ` (${customer.phone})` : ""}. Status: ${a.status}.`,
+      locationOrLink: "",
+      status: a.status === "Completed" ? "Completed" : "Scheduled",
+      isAllDay: false,
+      createdAt: a.createdAt || start,
+      updatedAt: a.updatedAt || start,
+    });
+  }
+  return events;
+}
 const CrmEvent = require("../models/CrmEvent");
-const CrmLead = require("../models/CrmLead");
+const { CrmLead } = require("../models/CrmLead");
 const logger = require("../utils/logger");
 
 const VALID_EVENT_TYPES = ["Follow-up", "Meeting", "Call", "Demo", "Proposal reminder", "Other"];
@@ -172,6 +240,7 @@ exports.createEvent = async (ownerId, payload) => {
     }
 
     logger.info("Created CRM calendar event", { eventId: savedEvent._id, ownerId, eventType });
+    await invalidateCrmSnapshots();
     return savedEvent;
   }
 
@@ -234,6 +303,18 @@ exports.getEvents = async (ownerId, query = {}) => {
 
     const includeVirtual = query.includeVirtual !== "false" && !query.leadId;
     if (includeVirtual) {
+      // Customer bookings for the business(es) in scope.
+      try {
+        const bookings = await appointmentEvents(ownerId, query.businessId, startDate, endDate);
+        if (filter.eventType && filter.eventType.$in) {
+          virtualEvents.push(...bookings.filter((b) => filter.eventType.$in.includes(b.eventType)));
+        } else {
+          virtualEvents.push(...bookings);
+        }
+      } catch (err) {
+        logger.warn("Could not load appointments for CRM calendar", { error: err.message });
+      }
+
       const leadFilter = {
         ...scopeFilter(ownerId, query.businessId),
         nextFollowUpDate: { $ne: null },
@@ -250,6 +331,7 @@ exports.getEvents = async (ownerId, query = {}) => {
       );
 
       for (const lead of leadsWithFollowUp) {
+        if (lead.sourceRef?.model === "Appointment") continue; // shown as the booking itself
         const fDate = new Date(lead.nextFollowUpDate);
         if (isNaN(fDate.getTime())) continue;
 
@@ -354,6 +436,7 @@ exports.updateEvent = async (ownerId, eventId, payload) => {
 
     const updated = await event.save();
     logger.info("Updated CRM calendar event", { eventId, ownerId });
+    await invalidateCrmSnapshots();
     return updated;
   }
 
@@ -387,6 +470,7 @@ exports.deleteEvent = async (ownerId, eventId) => {
     }
 
     logger.info("Deleted CRM calendar event", { eventId, ownerId });
+    await invalidateCrmSnapshots();
     return { success: true, message: "Calendar event deleted successfully", id: eventId };
   }
 

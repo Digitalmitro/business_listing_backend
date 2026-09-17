@@ -15,6 +15,7 @@ const moment = require("moment");
 const Business = require("../models/Business");
 const { CrmLead } = require("../models/CrmLead");
 const { createLead } = require("./crmLeadService");
+const { appointmentStartTime } = require("./crmScope");
 const logger = require("../utils/logger");
 
 const ENQUIRY_SOURCE = "Business Profile Enquiry";
@@ -124,7 +125,7 @@ async function createLeadFromAppointment(appointment, customer = null) {
         company: "",
         source: APPOINTMENT_SOURCE,
         notes,
-        nextFollowUpDate: appointment.appointmentDate || null,
+        nextFollowUpDate: appointmentStartTime(appointment) || appointment.appointmentDate || null,
       },
     });
   } catch (error) {

@@ -55,7 +55,7 @@ class LeadNotFoundError extends Error {
   }
 }
 
-const { ALL_OWNERS, ownerFilter, scopeFilter, validBusinessId } = require("./crmScope");
+const { ALL_OWNERS, ownerFilter, scopeFilter, validBusinessId, invalidateCrmSnapshots } = require("./crmScope");
 
 /**
  * Creates a new CRM lead under the specified owner and logs initial creation activity.
@@ -133,6 +133,7 @@ async function createLead(ownerId, leadData = {}, performedBy = null) {
     });
 
     logger.info("CRM Lead created successfully", { leadId: newLead._id, ownerId, status });
+    await invalidateCrmSnapshots();
     return newLead;
   }
 
@@ -470,6 +471,7 @@ async function updateLead(ownerId, leadId, updateData = {}, performedBy = null) 
     }
 
     logger.info("CRM Lead updated successfully", { leadId, ownerId, status: updated.status });
+    await invalidateCrmSnapshots();
     return updated;
   }
 
@@ -570,6 +572,7 @@ async function addLeadActivity(
     });
 
     logger.info("Activity logged on CRM Lead", { leadId, ownerId, type: activityEntry.type });
+    await invalidateCrmSnapshots();
     return updated;
   }
 
@@ -609,6 +612,7 @@ async function deleteLead(ownerId, leadId) {
     });
 
     logger.info("CRM Lead deleted successfully", { leadId, ownerId });
+    await invalidateCrmSnapshots();
     return { success: true, leadId };
   }
 
@@ -699,6 +703,7 @@ async function reorderKanbanLeads(ownerId, updates = [], performedBy = null) {
       .lean();
 
     logger.info("CRM Leads Kanban reordered via bulkWrite successfully", { count: updates.length, ownerId });
+    await invalidateCrmSnapshots();
     return leads;
   }
 

@@ -70,8 +70,31 @@ async function delCache(key) {
   inMemoryCache.delete(key);
 }
 
+/**
+ * Invalidate every key that starts with `prefix` (Redis SCAN + in-memory).
+ * Used to drop CRM dashboard/forecast snapshots after a write so "Refresh" is live.
+ */
+async function delCacheByPrefix(prefix) {
+  try {
+    if (redisConnection && redisConnection.status === "ready") {
+      let cursor = "0";
+      do {
+        const [next, keys] = await redisConnection.scan(cursor, "MATCH", `${prefix}*`, "COUNT", 200);
+        cursor = next;
+        if (keys.length) await redisConnection.del(...keys);
+      } while (cursor !== "0");
+    }
+  } catch (err) {
+    logger.warn("Redis delCacheByPrefix error", { prefix, error: err.message });
+  }
+  for (const key of [...inMemoryCache.keys()]) {
+    if (key.startsWith(prefix)) inMemoryCache.delete(key);
+  }
+}
+
 module.exports = {
   getCache,
   setCache,
   delCache,
+  delCacheByPrefix,
 };

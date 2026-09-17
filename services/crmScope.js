@@ -11,6 +11,7 @@
 
 const mongoose = require("mongoose");
 const Business = require("../models/Business");
+const { delCacheByPrefix } = require("../utils/cache");
 
 /** Sentinel accepted in place of an ownerId so admin reads are not limited to one owner. */
 const ALL_OWNERS = "__all_owners__";
@@ -90,7 +91,41 @@ async function leadIdsForBusiness(businessId) {
   return leads.map((l) => l._id);
 }
 
+/**
+ * Drops cached dashboard/forecast snapshots so the next read (e.g. the Refresh
+ * button) reflects the write that just happened. Cheap: prefix scan on a handful
+ * of keys. Never throws.
+ */
+async function invalidateCrmSnapshots() {
+  try {
+    await Promise.all([delCacheByPrefix("crm:dashboard:"), delCacheByPrefix("crm:forecast:")]);
+  } catch {
+    /* cache is best-effort */
+  }
+}
+
+/**
+ * Combines an appointment's day with its "10:30 AM" style slot into a Date.
+ * Falls back to the stored day when the slot cannot be parsed.
+ */
+function appointmentStartTime(appointment) {
+  const day = appointment?.appointmentDate ? new Date(appointment.appointmentDate) : null;
+  if (!day || isNaN(day.getTime())) return null;
+  const m = /^(\d{1,2}):(\d{2})\s*(AM|PM)?$/i.exec(String(appointment.timeSlot || "").trim());
+  if (!m) return day;
+  let hours = Number(m[1]);
+  const minutes = Number(m[2]);
+  const period = (m[3] || "").toUpperCase();
+  if (period === "PM" && hours !== 12) hours += 12;
+  if (period === "AM" && hours === 12) hours = 0;
+  const start = new Date(day);
+  start.setHours(hours, minutes, 0, 0);
+  return start;
+}
+
 module.exports = {
+  invalidateCrmSnapshots,
+  appointmentStartTime,
   ALL_OWNERS,
   ownerFilter,
   businessFilter,

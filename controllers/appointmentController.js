@@ -5,6 +5,7 @@ const User = require("../models/User");
 const { notifyAdmins, createNotification } = require("../helpers/notificationHelper");
 const { addJob } = require("../utils/queue");
 const { createLeadFromAppointment } = require("../services/crmLeadIntakeService");
+const { invalidateCrmSnapshots } = require("../services/crmScope");
 
 exports.CreateAppointment = async (req, res) => {
   try {
@@ -61,6 +62,7 @@ exports.CreateAppointment = async (req, res) => {
 
     // Add the booking to the business's CRM as a lead (idempotent, never throws)
     await createLeadFromAppointment(appointment, user);
+    await invalidateCrmSnapshots();
 
     const formattedDate = moment(normalizedDate).format("dddd, MMMM Do YYYY");
     const replacements = {
