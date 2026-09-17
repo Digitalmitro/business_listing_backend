@@ -2,6 +2,7 @@
 "use strict";
 
 const mongoose = require("mongoose");
+const { scopeFilter, validBusinessId } = require("./crmScope");
 const { CrmAuditLog, AUDIT_ACTIONS } = require("../models/CrmAuditLog");
 const logger = require("../utils/logger");
 
@@ -48,6 +49,7 @@ function resolveDisplayName(userDoc) {
  */
 async function logAudit({
   ownerId,
+  businessId = null,
   leadId,
   leadName = "Unknown Lead",
   action,
@@ -79,6 +81,7 @@ async function logAudit({
 
     const entry = new CrmAuditLog({
       ownerId,
+      businessId: validBusinessId(businessId),
       leadId,
       leadName: String(leadName || "Unknown Lead").slice(0, 200),
       action,
@@ -127,12 +130,13 @@ async function getAuditLogs(ownerId, opts = {}) {
     endDate,
     page = 1,
     limit = 25,
+    businessId,
   } = opts;
 
   const pageNum  = Math.max(1, parseInt(page, 10) || 1);
   const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10) || 25));
 
-  const filter = { ownerId };
+  const filter = scopeFilter(ownerId, businessId);
 
   if (leadId)      filter.leadId      = leadId;
   if (action && AUDIT_ACTIONS.includes(action)) filter.action = action;
@@ -193,8 +197,8 @@ async function getAuditLogsForLead(ownerId, leadId, opts = {}) {
 async function exportAuditLogs(ownerId, opts = {}) {
   if (!ownerId) throw new Error("ownerId is required");
 
-  const { leadId, action, performedBy, startDate, endDate, search } = opts;
-  const filter = { ownerId };
+  const { leadId, action, performedBy, startDate, endDate, search, businessId } = opts;
+  const filter = scopeFilter(ownerId, businessId);
   if (leadId)      filter.leadId      = leadId;
   if (action && AUDIT_ACTIONS.includes(action)) filter.action = action;
   if (performedBy) filter.performedBy = performedBy;

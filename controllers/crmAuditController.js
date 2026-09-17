@@ -2,6 +2,7 @@
 "use strict";
 
 const logger = require("../utils/logger");
+const { readScope } = require("../services/crmScope");
 const crmAuditService = require("../services/crmAuditService");
 
 /**
@@ -14,7 +15,7 @@ exports.getAuditLogs = async (req, res) => {
       return res.status(401).json({ success: false, message: "User not authenticated" });
     }
 
-    const data = await crmAuditService.getAuditLogs(req.user._id, req.query);
+    const data = await crmAuditService.getAuditLogs(readScope(req), req.query);
     return res.status(200).json({ success: true, ...data });
   } catch (error) {
     logger.error("Error retrieving CRM audit logs", { error: error.message });
@@ -32,7 +33,7 @@ exports.exportAuditLogs = async (req, res) => {
       return res.status(401).json({ success: false, message: "User not authenticated" });
     }
 
-    const csvData = await crmAuditService.exportAuditLogs(req.user._id, req.query);
+    const csvData = await crmAuditService.exportAuditLogs(readScope(req), req.query);
 
     res.setHeader("Content-Type", "text/csv");
     res.setHeader("Content-Disposition", `attachment; filename="crm_audit_logs_${new Date().toISOString().split("T")[0]}.csv"`);
@@ -53,7 +54,7 @@ exports.getAuditLogsForLead = async (req, res) => {
       return res.status(401).json({ success: false, message: "User not authenticated" });
     }
 
-    const data = await crmAuditService.getAuditLogsForLead(req.user._id, req.params.leadId, req.query);
+    const data = await crmAuditService.getAuditLogsForLead(readScope(req), req.params.leadId, req.query);
     return res.status(200).json({ success: true, ...data });
   } catch (error) {
     logger.error("Error retrieving lead audit logs", { error: error.message });

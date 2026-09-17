@@ -2,6 +2,7 @@
 "use strict";
 
 const logger = require("../utils/logger");
+const { readScope } = require("../services/crmScope");
 const crmFollowUpService = require("../services/crmFollowUpService");
 
 /**
@@ -51,7 +52,7 @@ exports.getLogs = async (req, res) => {
       return res.status(401).json({ success: false, message: "User not authenticated" });
     }
 
-    const data = await crmFollowUpService.getFollowUpLogs(req.user._id, req.query);
+    const data = await crmFollowUpService.getFollowUpLogs(readScope(req), req.query);
     return res.status(200).json({ success: true, ...data });
   } catch (error) {
     logger.error("Error retrieving CRM follow-up logs", { error: error.message });

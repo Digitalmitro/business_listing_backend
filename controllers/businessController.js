@@ -14,7 +14,8 @@ const XLSX = require("xlsx");
 const fs = require("fs");
 const { addJob } = require("../utils/queue");
 const { notifyAdmins } = require("../helpers/notificationHelper");
-const { VALID_COUNTRIES, normalizeCountry } = require("../helpers/country");
+const { VALID_COUNTRIES, normalizeCountry, countryMatchValues } = require("../helpers/country");
+const { escapeRegex } = require("../services/businessImportService");
 const businessService = require("../services/businessService");
 
 ///this api use combine for admin and users
@@ -816,22 +817,9 @@ exports.getBusiness = async (req, res) => {
     const limitNum = Math.max(1, Number(limit));
     const skip = (pageNum - 1) * limitNum;
 
-    // SMART COUNTRY MAPPING
-    const countryMap = {
-      UK: "United Kingdom",
-      "United Kingdom": "United Kingdom",
-      USA: "United States",
-      "United States": "United States",
-      US: "United States",
-      India: "India",
-    };
-
-    let normalizedCountry = "";
-    if (country) {
-      const upperCountry = country.trim().toUpperCase();
-      normalizedCountry =
-        countryMap[upperCountry] || countryMap[country.trim()] || country;
-    }
+    // Country filter uses the shared canonical list so aliases and ISO codes
+    // ("US", "IN", "usa") match the same rows the admin tabs show.
+    const normalizedCountry = country && country.trim() ? normalizeCountry(country) : "";
 
     // Build query
     let query = {};
@@ -863,9 +851,10 @@ exports.getBusiness = async (req, res) => {
 
     // Country filter (Smart Match)
     if (normalizedCountry) {
-      query["address.country"] = {
-        $regex: new RegExp(`^${normalizedCountry}$`, "i"),
-      };
+      // Match every stored spelling of the country (canonical, aliases, ISO code) so a
+      // listing never disappears from the admin because it was saved as "IN" or "usa".
+      const variants = countryMatchValues(normalizedCountry).map(escapeRegex).join("|");
+      query["address.country"] = { $regex: new RegExp(`^(${variants})$`, "i") };
     }
 
     // Status filters

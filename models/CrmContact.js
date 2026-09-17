@@ -20,6 +20,12 @@ const crmContactSchema = new mongoose.Schema(
       required: true,
       index: true,
     },
+    businessId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Business",
+      default: null,
+      index: true,
+    },
     name: {
       type: String,
       required: true,

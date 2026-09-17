@@ -2,6 +2,7 @@
 "use strict";
 
 const logger = require("../utils/logger");
+const { readScope } = require("../services/crmScope");
 const crmDashboardService = require("../services/crmDashboardService");
 
 /**
@@ -13,7 +14,7 @@ exports.getDashboardSummary = async (req, res) => {
     if (!req.user || !req.user._id) {
       return res.status(401).json({ success: false, message: "User not authenticated" });
     }
-    const summary = await crmDashboardService.getDashboardSummary(req.user._id);
+    const summary = await crmDashboardService.getDashboardSummary(readScope(req), { businessId: req.query?.businessId });
     return res.status(200).json(summary);
   } catch (error) {
     logger.error("Error retrieving CRM dashboard summary", { error: error.message });

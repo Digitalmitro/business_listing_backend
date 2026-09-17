@@ -2,12 +2,14 @@
 
 const logger = require("../utils/logger");
 const crmLeadService = require("../services/crmLeadService");
+const { readScope, resolveWriteScope } = require("../services/crmScope");
 
 /**
  * Owner scope for lead queries: admins see every owner's leads (the admin panel is the
- * source of truth), regular users only their own.
+ * source of truth), regular users only their own. A `businessId` query param narrows
+ * either scope to one business.
  */
-const leadScope = (req) => (req.isAdmin ? crmLeadService.ALL_OWNERS : req.user._id);
+const leadScope = readScope;
 
 
 /**
@@ -20,11 +22,16 @@ exports.createLead = async (req, res) => {
       return res.status(401).json({ success: false, message: "User not authenticated" });
     }
 
-    const lead = await crmLeadService.createLead(req.user._id, req.body, req.user._id);
+    const scope = await resolveWriteScope(req, req.body.businessId);
+    const lead = await crmLeadService.createLead(
+      scope.ownerId,
+      { ...req.body, businessId: scope.businessId },
+      req.user._id
+    );
     return res.status(201).json({ success: true, lead });
   } catch (error) {
     logger.error("Error creating CRM lead", { error: error.message });
-    const status = error.message.includes("is required") || error.message.includes("Invalid status") ? 400 : 500;
+    const status = error.status || (error.message.includes("is required") || error.message.includes("Invalid status") ? 400 : 500);
     return res.status(status).json({ success: false, message: error.message });
   }
 };

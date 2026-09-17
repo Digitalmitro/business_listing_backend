@@ -31,23 +31,94 @@ const VALID_COUNTRIES = [
 
 const VALID_COUNTRIES_MAP = new Map(VALID_COUNTRIES.map((c) => [c.toLowerCase(), c]));
 
-/** Normalizes a free-text country name (aliases, casing) to the canonical VALID_COUNTRIES form. */
+const COUNTRY_ALIASES = {
+  "USA": "United States",
+  "U.S.A.": "United States",
+  "U.S.": "United States",
+  "US": "United States",
+  "UNITED STATES": "United States",
+  "UNITED STATES OF AMERICA": "United States",
+  "UNITED STATESS": "United States",
+  "UK": "United Kingdom",
+  "U.K.": "United Kingdom",
+  "GREAT BRITAIN": "United Kingdom",
+  "ENGLAND": "United Kingdom",
+  "UAE": "United Arab Emirates",
+  "CANADA": "Canada",
+  "INDIA": "India",
+  "IN": "India",
+  "BHARAT": "India",
+};
+
+/**
+ * Normalizes a free-text country name (aliases, casing, ISO 3166-1 alpha-2 codes such
+ * as "IN"/"US" that the customer form's location detection sends) to the canonical
+ * VALID_COUNTRIES form. Unrecognised input is returned trimmed so callers can decide
+ * what to do with it (see isKnownCountry).
+ */
 function normalizeCountry(c) {
   if (!c || typeof c !== "string") return "Unknown Country";
-  const trimmed = c.trim();
+  const trimmed = c.trim().replace(/\s+/g, " ");
+  if (!trimmed) return "Unknown Country";
   const upper = trimmed.toUpperCase();
-  const map = {
-    "USA": "United States",
-    "US": "United States",
-    "UNITED STATES": "United States",
-    "UK": "United Kingdom",
-    "UAE": "United Arab Emirates",
-    "CANADA": "Canada",
-    "INDIA": "India",
-  };
-  const mappedCountry = map[upper] || trimmed;
-  const standardName = VALID_COUNTRIES_MAP.get(mappedCountry.toLowerCase());
-  return standardName || mappedCountry;
+
+  const aliased = COUNTRY_ALIASES[upper];
+  if (aliased) return aliased;
+
+  const standardName = VALID_COUNTRIES_MAP.get(trimmed.toLowerCase());
+  if (standardName) return standardName;
+
+  if (/^[A-Z]{2}$/.test(upper)) {
+    const fromCode = countryNameFromRegionCode(upper);
+    const codeName = fromCode && (COUNTRY_ALIASES[fromCode.toUpperCase()] || VALID_COUNTRIES_MAP.get(fromCode.toLowerCase()));
+    if (codeName) return codeName;
+  }
+
+  return trimmed;
+}
+
+let regionCodeByName = null;
+/** Lazily builds { canonical country name -> ISO alpha-2 code } from Intl region names. */
+function getRegionCodeByName() {
+  if (regionCodeByName) return regionCodeByName;
+  const map = new Map();
+  const display = getRegionDisplayNames();
+  if (display) {
+    for (let a = 65; a <= 90; a++) {
+      for (let b = 65; b <= 90; b++) {
+        const code = String.fromCharCode(a) + String.fromCharCode(b);
+        let name = "";
+        try { name = display.of(code); } catch { continue; }
+        if (name && name !== code) {
+          const canonical = COUNTRY_ALIASES[name.toUpperCase()] || VALID_COUNTRIES_MAP.get(name.toLowerCase());
+          if (canonical && !map.has(canonical)) map.set(canonical, code);
+        }
+      }
+    }
+  }
+  regionCodeByName = map;
+  return map;
+}
+
+/**
+ * Every stored spelling that should be treated as the given country: the canonical
+ * name, its aliases and its ISO code. Lets list filters match rows that were saved
+ * before values were normalized (for example "IN" or "usa").
+ */
+function countryMatchValues(c) {
+  const canonical = normalizeCountry(c);
+  const values = new Set([canonical]);
+  for (const [alias, target] of Object.entries(COUNTRY_ALIASES)) {
+    if (target === canonical) values.add(alias);
+  }
+  const code = getRegionCodeByName().get(canonical);
+  if (code) values.add(code);
+  return [...values];
+}
+
+/** True when the value is (after normalization) one of VALID_COUNTRIES. */
+function isKnownCountry(c) {
+  return VALID_COUNTRIES_MAP.has(normalizeCountry(c).toLowerCase());
 }
 
 let regionDisplayNames = null;
@@ -82,5 +153,7 @@ function countryNameFromRegionCode(code) {
 module.exports = {
   VALID_COUNTRIES,
   normalizeCountry,
+  isKnownCountry,
+  countryMatchValues,
   countryNameFromRegionCode,
 };

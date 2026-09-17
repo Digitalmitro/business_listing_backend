@@ -2,6 +2,7 @@
 
 const logger = require("../utils/logger");
 const crmContactService = require("../services/crmContactService");
+const { readScope, resolveWriteScope } = require("../services/crmScope");
 
 /**
  * POST /api/crm/contacts
@@ -13,11 +14,12 @@ exports.createContact = async (req, res) => {
       return res.status(401).json({ success: false, message: "User not authenticated" });
     }
 
-    const contact = await crmContactService.createContact(req.user._id, req.body);
+    const scope = await resolveWriteScope(req, req.body.businessId);
+    const contact = await crmContactService.createContact(scope.ownerId, { ...req.body, businessId: scope.businessId });
     return res.status(201).json({ success: true, contact });
   } catch (error) {
     logger.error("Error creating CRM contact", { error: error.message });
-    const status = error.message.includes("is required") ? 400 : 500;
+    const status = error.status || (error.message.includes("is required") ? 400 : 500);
     return res.status(status).json({ success: false, message: error.message });
   }
 };
@@ -32,7 +34,7 @@ exports.getContacts = async (req, res) => {
       return res.status(401).json({ success: false, message: "User not authenticated" });
     }
 
-    const data = await crmContactService.getContacts(req.user._id, req.query);
+    const data = await crmContactService.getContacts(readScope(req), req.query);
     return res.status(200).json({ success: true, ...data });
   } catch (error) {
     logger.error("Error retrieving CRM contacts", { error: error.message });
@@ -50,7 +52,7 @@ exports.getContactById = async (req, res) => {
       return res.status(401).json({ success: false, message: "User not authenticated" });
     }
 
-    const contact = await crmContactService.getContactById(req.user._id, req.params.id);
+    const contact = await crmContactService.getContactById(readScope(req), req.params.id);
     return res.status(200).json({ success: true, contact });
   } catch (error) {
     const status = error.status || 500;
@@ -68,7 +70,7 @@ exports.updateContact = async (req, res) => {
       return res.status(401).json({ success: false, message: "User not authenticated" });
     }
 
-    const contact = await crmContactService.updateContact(req.user._id, req.params.id, req.body);
+    const contact = await crmContactService.updateContact(readScope(req), req.params.id, req.body);
     return res.status(200).json({ success: true, contact });
   } catch (error) {
     logger.error("Error updating CRM contact", { error: error.message });
@@ -88,7 +90,7 @@ exports.deleteContact = async (req, res) => {
       return res.status(401).json({ success: false, message: "User not authenticated" });
     }
 
-    const result = await crmContactService.deleteContact(req.user._id, req.params.id);
+    const result = await crmContactService.deleteContact(readScope(req), req.params.id);
     return res.status(200).json({ success: true, ...result });
   } catch (error) {
     const status = error.status || 500;
@@ -106,7 +108,7 @@ exports.convertContactToLead = async (req, res) => {
       return res.status(401).json({ success: false, message: "User not authenticated" });
     }
 
-    const lead = await crmContactService.convertContactToLead(req.user._id, req.params.id, req.body);
+    const lead = await crmContactService.convertContactToLead(readScope(req), req.params.id, req.body);
     return res.status(201).json({ success: true, lead, message: "Contact successfully converted to lead" });
   } catch (error) {
     logger.error("Error converting contact to lead", { error: error.message });
@@ -126,7 +128,7 @@ exports.bulkDeleteContacts = async (req, res) => {
     }
 
     const { contactIds } = req.body;
-    const result = await crmContactService.bulkDeleteContacts(req.user._id, contactIds);
+    const result = await crmContactService.bulkDeleteContacts(readScope(req), contactIds);
     return res.status(200).json({ success: true, ...result });
   } catch (error) {
     logger.error("Error bulk deleting CRM contacts", { error: error.message });

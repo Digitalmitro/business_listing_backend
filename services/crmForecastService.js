@@ -2,6 +2,7 @@
 "use strict";
 
 const mongoose = require("mongoose");
+const { scopeFilter } = require("./crmScope");
 const CrmLead = require("../models/CrmLead");
 const logger = require("../utils/logger");
 
@@ -82,7 +83,7 @@ async function getRevenueForecast(ownerId, query = {}) {
   const stageProbabilities = await getStageProbabilities();
 
   if (mongoose.connection && mongoose.connection.readyState === 1) {
-    const filter = { ownerId };
+    const filter = scopeFilter(ownerId, query.businessId);
 
     if (query.source && typeof query.source === "string" && query.source.trim()) {
       filter.source = query.source.trim();

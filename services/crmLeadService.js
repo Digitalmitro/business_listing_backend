@@ -55,16 +55,7 @@ class LeadNotFoundError extends Error {
   }
 }
 
-/**
- * Sentinel accepted in place of an ownerId by the read/update/delete functions below.
- * Admin callers pass it so the query is not restricted to a single owner.
- */
-const ALL_OWNERS = "__all_owners__";
-
-/** Builds the owner clause of a query: empty for ALL_OWNERS, `{ ownerId }` otherwise. */
-function ownerFilter(ownerId) {
-  return ownerId === ALL_OWNERS ? {} : { ownerId };
-}
+const { ALL_OWNERS, ownerFilter, scopeFilter, validBusinessId } = require("./crmScope");
 
 /**
  * Creates a new CRM lead under the specified owner and logs initial creation activity.
@@ -109,14 +100,17 @@ async function createLead(ownerId, leadData = {}, performedBy = null) {
       ? Number(leadData.dealValue) || 0
       : 0;
 
+  const businessId = validBusinessId(leadData.businessId);
   const docData = {
     ...leadData,
     leadName: leadData.leadName.trim(),
     expectedRevenue: revenue,
     status,
     ownerId,
+    businessId,
     activities: [initialActivity],
   };
+  if (!docData.sourceRef || !docData.sourceRef.id) delete docData.sourceRef;
 
   if (mongoose.connection && mongoose.connection.readyState === 1) {
     const newLead = await CrmLead.create(docData);
@@ -124,6 +118,7 @@ async function createLead(ownerId, leadData = {}, performedBy = null) {
     // ── Audit log ─────────────────────────────────────────────────────
     logAudit({
       ownerId,
+      businessId,
       leadId:   newLead._id,
       leadName: newLead.leadName,
       action:   "lead_created",
@@ -161,6 +156,7 @@ async function getLeads(
     endDate = "",
     sortBy = "createdAt",
     sortOrder = "desc",
+    businessId = "",
   } = {}
 ) {
   if (!ownerId) {
@@ -170,7 +166,7 @@ async function getLeads(
   const pageNum  = Math.max(1, Number(page) || 1);
   const limitNum = Math.min(100, Math.max(1, Number(limit) || 20));
 
-  const query = ownerFilter(ownerId);
+  const query = scopeFilter(ownerId, businessId);
 
   if (status       && typeof status       === "string" && status.trim())       query.status       = status.trim();
   if (source       && typeof source       === "string" && source.trim())       query.source       = source.trim();
@@ -206,6 +202,7 @@ async function getLeads(
       .skip((pageNum - 1) * limitNum)
       .limit(limitNum)
       .populate("assignedUser", "full_name email userImage")
+      .populate("businessId", "businessName")
       .populate("activities.user",        "full_name email")
       .populate("activities.performedBy", "full_name email")
       .lean();
@@ -227,6 +224,7 @@ async function getLeadById(ownerId, leadId) {
   if (mongoose.connection && mongoose.connection.readyState === 1) {
     const lead = await CrmLead.findOne({ _id: leadId, ...ownerFilter(ownerId) })
       .populate("assignedUser", "full_name email userImage")
+      .populate("businessId", "businessName")
       .populate("activities.user",        "full_name email")
       .populate("activities.performedBy", "full_name email")
       .lean();
@@ -249,6 +247,15 @@ async function getLeadById(ownerId, leadId) {
  * when status, follow-up date, assigned user, revenue, or notes change.
  */
 async function updateLead(ownerId, leadId, updateData = {}, performedBy = null) {
+  if (updateData && typeof updateData === "object") {
+    delete updateData.ownerId;
+    delete updateData.sourceRef;
+    if ("businessId" in updateData) {
+      const nextBusinessId = validBusinessId(updateData.businessId);
+      if (nextBusinessId) updateData.businessId = nextBusinessId;
+      else delete updateData.businessId;
+    }
+  }
   if (!ownerId || !leadId) {
     throw new Error("ownerId and leadId are required");
   }
@@ -445,6 +452,7 @@ async function updateLead(ownerId, leadId, updateData = {}, performedBy = null) 
       { new: true, runValidators: true }
     )
       .populate("assignedUser", "full_name email userImage")
+      .populate("businessId", "businessName")
       .populate("activities.user",        "full_name email")
       .populate("activities.performedBy", "full_name email");
 
@@ -452,6 +460,7 @@ async function updateLead(ownerId, leadId, updateData = {}, performedBy = null) 
     for (const call of auditCalls) {
       logAudit({
         ownerId:         updated.ownerId,
+        businessId:      updated.businessId || null,
         leadId,
         leadName:        updated.leadName,
         performedBy:     actor,
@@ -531,6 +540,7 @@ async function addLeadActivity(
       { new: true }
     )
       .populate("assignedUser", "full_name email userImage")
+      .populate("businessId", "businessName")
       .populate("activities.user",        "full_name email")
       .populate("activities.performedBy", "full_name email");
 
@@ -547,6 +557,7 @@ async function addLeadActivity(
 
     logAudit({
       ownerId:         updated.ownerId,
+      businessId:      updated.businessId || null,
       leadId,
       leadName:        updated.leadName,
       action:          auditAction,
@@ -589,6 +600,7 @@ async function deleteLead(ownerId, leadId) {
     // ── Audit log (fire-and-forget) ───────────────────────────────────
     logAudit({
       ownerId:     existing.ownerId,
+      businessId:  existing.businessId || null,
       leadId,
       leadName,
       action:      "lead_deleted",
@@ -653,6 +665,7 @@ async function reorderKanbanLeads(ownerId, updates = [], performedBy = null) {
 
         logAudit({
           ownerId: existing.ownerId,
+          businessId: existing.businessId || null,
           leadId: item.leadId,
           leadName: existing.leadName,
           action: "pipeline_move",
@@ -680,6 +693,7 @@ async function reorderKanbanLeads(ownerId, updates = [], performedBy = null) {
     const leads = await CrmLead.find(ownerFilter(ownerId))
       .sort({ pipelineOrder: 1, updatedAt: -1 })
       .populate("assignedUser", "full_name email userImage")
+      .populate("businessId", "businessName")
       .populate("activities.user", "full_name email")
       .populate("activities.performedBy", "full_name email")
       .lean();

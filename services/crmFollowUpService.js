@@ -2,6 +2,7 @@
 "use strict";
 
 const mongoose = require("mongoose");
+const { ownerFilter, leadIdsForBusiness } = require("./crmScope");
 const { CrmLead } = require("../models/CrmLead");
 const CrmFollowUpConfig = require("../models/CrmFollowUpConfig");
 const { CrmSchedulerConfig } = require("../models/CrmConfig");
@@ -69,13 +70,17 @@ async function getFollowUpLogs(ownerId, query = {}) {
     throw new Error("ownerId is required");
   }
 
-  const { leadId, status, page = 1, limit = 20 } = query;
+  const { leadId, status, page = 1, limit = 20, businessId } = query;
   const pageNum = Math.max(1, parseInt(page, 10) || 1);
   const limitNum = Math.max(1, Math.min(100, parseInt(limit, 10) || 20));
 
-  const filter = { ownerId };
+  const filter = ownerFilter(ownerId);
   if (leadId) filter.leadId = leadId;
   if (status) filter.status = status;
+  if (businessId && !leadId) {
+    const ids = await leadIdsForBusiness(businessId);
+    if (ids) filter.leadId = { $in: ids };
+  }
 
   if (mongoose.connection && mongoose.connection.readyState === 1) {
     const total = await CrmLeadFollowUpLog.countDocuments(filter);

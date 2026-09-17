@@ -9,6 +9,12 @@ const CrmEventSchema = new mongoose.Schema(
       required: [true, "Owner ID is required"],
       index: true,
     },
+    businessId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Business",
+      default: null,
+      index: true,
+    },
     leadId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "CrmLead",

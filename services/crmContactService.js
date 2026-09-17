@@ -4,6 +4,7 @@ const mongoose = require("mongoose");
 const logger = require("../utils/logger");
 const CrmContact = require("../models/CrmContact");
 const { createLead } = require("./crmLeadService");
+const { scopeFilter, validBusinessId } = require("./crmScope");
 
 class ContactNotFoundError extends Error {
   constructor(message = "Contact not found") {
@@ -29,6 +30,7 @@ async function createContact(ownerId, contactData = {}) {
     ...contactData,
     name: contactData.name.trim(),
     ownerId,
+    businessId: validBusinessId(contactData.businessId),
   };
 
   if (mongoose.connection && mongoose.connection.readyState === 1) {
@@ -54,6 +56,7 @@ async function getContacts(
     assignedUser = "",
     sortBy = "createdAt",
     sortOrder = "desc",
+    businessId = "",
   } = {}
 ) {
   if (!ownerId) {
@@ -63,7 +66,7 @@ async function getContacts(
   const pageNum = Math.max(1, Number(page) || 1);
   const limitNum = Math.min(100, Math.max(1, Number(limit) || 20));
 
-  const query = { ownerId };
+  const query = scopeFilter(ownerId, businessId);
 
   if (industry && typeof industry === "string" && industry.trim()) {
     query.industry = industry.trim();
@@ -99,6 +102,7 @@ async function getContacts(
       .skip((pageNum - 1) * limitNum)
       .limit(limitNum)
       .populate("assignedUser", "full_name email userImage")
+      .populate("businessId", "businessName")
       .lean();
 
     return { contacts, total, page: pageNum, limit: limitNum, totalPages };
@@ -116,7 +120,7 @@ async function getContactById(ownerId, contactId) {
   }
 
   if (mongoose.connection && mongoose.connection.readyState === 1) {
-    const contact = await CrmContact.findOne({ _id: contactId, ownerId })
+    const contact = await CrmContact.findOne({ _id: contactId, ...scopeFilter(ownerId) })
       .populate("assignedUser", "full_name email userImage")
       .lean();
 
@@ -147,7 +151,7 @@ async function updateContact(ownerId, contactId, updateData = {}) {
 
   if (mongoose.connection && mongoose.connection.readyState === 1) {
     const updated = await CrmContact.findOneAndUpdate(
-      { _id: contactId, ownerId },
+      { _id: contactId, ...scopeFilter(ownerId) },
       { $set: updateData },
       { new: true, runValidators: true }
     ).populate("assignedUser", "full_name email userImage");
@@ -176,7 +180,7 @@ async function deleteContact(ownerId, contactId) {
   }
 
   if (mongoose.connection && mongoose.connection.readyState === 1) {
-    const deleted = await CrmContact.findOneAndDelete({ _id: contactId, ownerId });
+    const deleted = await CrmContact.findOneAndDelete({ _id: contactId, ...scopeFilter(ownerId) });
     if (!deleted) {
       throw new ContactNotFoundError("Contact not found or you lack permission to delete it");
     }
@@ -219,9 +223,12 @@ async function convertContactToLead(ownerId, contactId, payload = {}) {
     source: contact.source || "Contact Conversion",
     notes: notes || contact.notes || `Converted from contact (${contact.name})`,
     assignedUser: contact.assignedUser ? (contact.assignedUser._id || contact.assignedUser) : null,
+    businessId: contact.businessId ? (contact.businessId._id || contact.businessId) : null,
   };
 
-  const newLead = await createLead(ownerId, leadData);
+  // Admin callers pass ALL_OWNERS; the lead must be owned by the contact's real owner.
+  const leadOwnerId = contact.ownerId || ownerId;
+  const newLead = await createLead(leadOwnerId, leadData);
   logger.info("Converted contact to CRM lead", { contactId, leadId: newLead._id, ownerId });
   return newLead;
 }
@@ -236,7 +243,7 @@ async function bulkDeleteContacts(ownerId, contactIds = []) {
   }
 
   if (mongoose.connection && mongoose.connection.readyState === 1) {
-    const result = await CrmContact.deleteMany({ _id: { $in: contactIds }, ownerId });
+    const result = await CrmContact.deleteMany({ _id: { $in: contactIds }, ...scopeFilter(ownerId) });
     logger.info("Bulk deleted CRM contacts", { ownerId, deletedCount: result.deletedCount });
     return { success: true, deletedCount: result.deletedCount };
   }

@@ -2,6 +2,7 @@
 "use strict";
 
 const mongoose = require("mongoose");
+const { scopeFilter, scopeMatch, ALL_OWNERS } = require("./crmScope");
 const User = require("../models/User");
 const SocialConnection = require("../models/SocialConnection");
 const GoogleBusinessConnection = require("../models/GoogleBusinessConnection");
@@ -28,12 +29,14 @@ const SOCIAL_PLATFORMS = (process.env.SOCIAL_PLATFORMS || "facebook,instagram,th
  * Retrieve comprehensive executive dashboard metrics for CRM & Social Media modules.
  * Returns exact summary cards, recent activity, calendar preview, and social status.
  */
-exports.getDashboardSummary = async (ownerId) => {
+exports.getDashboardSummary = async (ownerId, options = {}) => {
   if (!ownerId) {
     throw new Error("ownerId is required to fetch dashboard summary");
   }
 
-  const cacheKey = `crm:dashboard:${ownerId}`;
+  const businessId = options.businessId || "";
+  const leadScope = scopeFilter(ownerId, businessId);
+  const cacheKey = `crm:dashboard:${ownerId}:${businessId || "all"}`;
   const cachedData = await getCache(cacheKey);
   if (cachedData) return cachedData;
 
@@ -44,12 +47,15 @@ exports.getDashboardSummary = async (ownerId) => {
     const prevPeriodStart = new Date(now.getTime() - DASHBOARD_CALENDAR_PREVIEW_DAYS * 24 * 60 * 60 * 1000);
 
     // 1. Fetch User Social Accounts
-    const user = await User.findById(ownerId).select("_id tenantId").lean();
+    // Social/Google widgets are per user; for admin (ALL_OWNERS) reads they are skipped.
+    const user = ownerId === ALL_OWNERS ? null : await User.findById(ownerId).select("_id tenantId").lean();
     const tenantId = user?.tenantId || ownerId;
-    const [socialConnections, googleConnection] = await Promise.all([
-      SocialConnection.find({ userId: ownerId }).select("platform status profileName providerUsername connectedAt updatedAt").lean(),
-      GoogleBusinessConnection.findOne({ userId: ownerId }).select("status googleEmail googleName selectedProfileId").lean(),
-    ]);
+    const [socialConnections, googleConnection] = user
+      ? await Promise.all([
+          SocialConnection.find({ userId: ownerId }).select("platform status profileName providerUsername connectedAt updatedAt").lean(),
+          GoogleBusinessConnection.findOne({ userId: ownerId }).select("status googleEmail googleName selectedProfileId").lean(),
+        ])
+      : [[], null];
     const connectedSocialAccounts = [];
     const platforms = SOCIAL_PLATFORMS;
 
@@ -93,15 +99,18 @@ exports.getDashboardSummary = async (ownerId) => {
     }
 
     // 2. Fetch Recent Social Posts
-    const recentPosts = await SocialPostHistory.find({ tenantId, userId: ownerId })
-      .sort({ createdAt: -1 })
-      .limit(DASHBOARD_RECENT_POSTS_LIMIT)
-      .lean();
+    const recentPosts = user
+      ? await SocialPostHistory.find({ tenantId, userId: ownerId })
+          .sort({ createdAt: -1 })
+          .limit(DASHBOARD_RECENT_POSTS_LIMIT)
+          .lean()
+      : [];
 
     // 3. Fetch Recent Leads
-    const recentLeads = await CrmLead.find({ ownerId })
-      .select("leadName company email phone status expectedRevenue createdAt nextFollowUpDate assignedUser")
+    const recentLeads = await CrmLead.find(leadScope)
+      .select("leadName company email phone status expectedRevenue createdAt nextFollowUpDate assignedUser businessId source")
       .populate("assignedUser", "full_name email")
+      .populate("businessId", "businessName")
       .sort({ createdAt: -1 })
       .limit(DASHBOARD_RECENT_LEADS_LIMIT)
       .lean();
@@ -122,7 +131,7 @@ exports.getDashboardSummary = async (ownerId) => {
     };
 
     try {
-      forecastData = await crmForecastService.getRevenueForecast(ownerId);
+      forecastData = await crmForecastService.getRevenueForecast(ownerId, { businessId });
     } catch (err) {
       logger.warn("Could not compute forecast metrics for dashboard summary", { error: err.message });
     }
@@ -131,6 +140,7 @@ exports.getDashboardSummary = async (ownerId) => {
     let previousForecastData = { totalLeads: 0, closedWon: 0, closedRevenue: 0, conversionRate: 0 };
     try {
       const prevResult = await crmForecastService.getRevenueForecast(ownerId, {
+        businessId,
         startDate: prevPeriodStart.toISOString(),
         endDate: now.toISOString(),
       });
@@ -143,7 +153,7 @@ exports.getDashboardSummary = async (ownerId) => {
 
     // 6. Fetch Upcoming Follow-ups (specifically leads scheduled for follow-up)
     const upcomingFollowUps = await CrmLead.find({
-      ownerId,
+      ...leadScope,
       nextFollowUpDate: { $gte: now },
       status: { $nin: ["Completed", "Closed Won", "Closed Lost"] },
     })
@@ -156,6 +166,7 @@ exports.getDashboardSummary = async (ownerId) => {
     let calendarPreview = [];
     try {
       const scheduleRes = await crmScheduleService.getEvents(ownerId, {
+        businessId,
         startDate: now.toISOString(),
         endDate: plus30Days.toISOString(),
         includeVirtual: "true",
@@ -169,7 +180,7 @@ exports.getDashboardSummary = async (ownerId) => {
 
     // 8. Recent Activity Feed – MongoDB aggregation pipeline (no in-memory sort)
     const recentActivityFeed = await CrmLead.aggregate([
-      { $match: { ownerId: new mongoose.Types.ObjectId(String(ownerId)), "activities.0": { $exists: true } } },
+      { $match: { ...scopeMatch(ownerId, businessId), "activities.0": { $exists: true } } },
       { $unwind: "$activities" },
       { $sort: { "activities.timestamp": -1, "activities.performedAt": -1 } },
       { $limit: DASHBOARD_ACTIVITY_FEED_LIMIT },

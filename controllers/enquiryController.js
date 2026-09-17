@@ -2,6 +2,7 @@ const Enquiry = require("../models/Enquiry");
 const Business = require("../models/Business");
 const { notifyAdmins, createNotification } = require("../helpers/notificationHelper");
 const { addJob } = require("../utils/queue");
+const { createLeadFromEnquiry } = require("../services/crmLeadIntakeService");
 
 // CREATE ENQUIRY
 exports.createEnquiry = async (req, res) => {
@@ -56,10 +57,11 @@ exports.createEnquiry = async (req, res) => {
       category: "enquiry",
     });
 
-    // 2. Notify Business Owner (if applicable)
+    // 2. Notify Business Owner (if applicable) and add the enquiry to that business's CRM
     if (businessId) {
       const business = await Business.findById(businessId);
       if (business && business.userId) {
+        await createLeadFromEnquiry(newEnquiry);
         await createNotification({
           recipientId: business.userId,
           recipientType: "User",

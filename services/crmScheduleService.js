@@ -2,6 +2,7 @@
 "use strict";
 
 const mongoose = require("mongoose");
+const { scopeFilter, validBusinessId } = require("./crmScope");
 const CrmEvent = require("../models/CrmEvent");
 const CrmLead = require("../models/CrmLead");
 const logger = require("../utils/logger");
@@ -125,6 +126,7 @@ exports.createEvent = async (ownerId, payload) => {
 
   const docData = {
     ownerId,
+    businessId: validBusinessId(payload.businessId),
     leadId: payload.leadId || null,
     title: payload.title.trim(),
     eventType,
@@ -148,7 +150,7 @@ exports.createEvent = async (ownerId, payload) => {
     // If linked to a lead, log activity timeline
     if (payload.leadId) {
       try {
-        const lead = await CrmLead.findOne({ _id: payload.leadId, ownerId });
+        const lead = await CrmLead.findOne({ _id: payload.leadId, ...scopeFilter(ownerId) });
         if (lead) {
           lead.activities = lead.activities || [];
           lead.activities.push({
@@ -190,7 +192,7 @@ exports.getEvents = async (ownerId, query = {}) => {
     throw new Error("ownerId is required to fetch calendar events");
   }
 
-  const filter = { ownerId };
+  const filter = scopeFilter(ownerId, query.businessId);
 
   if (query.leadId) {
     filter.leadId = query.leadId;
@@ -219,6 +221,7 @@ exports.getEvents = async (ownerId, query = {}) => {
   if (mongoose.connection && mongoose.connection.readyState === 1) {
     explicitEvents = await CrmEvent.find(filter)
       .populate("leadId", "leadName company email phone status")
+      .populate("businessId", "businessName")
       .sort({ startTime: 1 })
       .lean();
 
@@ -232,7 +235,7 @@ exports.getEvents = async (ownerId, query = {}) => {
     const includeVirtual = query.includeVirtual !== "false" && !query.leadId;
     if (includeVirtual) {
       const leadFilter = {
-        ownerId,
+        ...scopeFilter(ownerId, query.businessId),
         nextFollowUpDate: { $ne: null },
         status: { $nin: ["Completed", "Closed Won", "Closed Lost"] },
       };
@@ -261,7 +264,8 @@ exports.getEvents = async (ownerId, query = {}) => {
         virtualEvents.push({
           _id: `virtual_${lead._id}`,
           isVirtual: true,
-          ownerId,
+          ownerId: lead.ownerId,
+          businessId: lead.businessId || null,
           leadId: {
             _id: lead._id,
             leadName: lead.leadName,
@@ -323,7 +327,7 @@ exports.updateEvent = async (ownerId, eventId, payload) => {
   }
 
   if (mongoose.connection && mongoose.connection.readyState === 1) {
-    const event = await CrmEvent.findOne({ _id: eventId, ownerId });
+    const event = await CrmEvent.findOne({ _id: eventId, ...scopeFilter(ownerId) });
     if (!event) {
       const error = new Error("Calendar event not found or unauthorized");
       error.statusCode = 404;
@@ -375,7 +379,7 @@ exports.deleteEvent = async (ownerId, eventId) => {
   }
 
   if (mongoose.connection && mongoose.connection.readyState === 1) {
-    const deleted = await CrmEvent.findOneAndDelete({ _id: eventId, ownerId });
+    const deleted = await CrmEvent.findOneAndDelete({ _id: eventId, ...scopeFilter(ownerId) });
     if (!deleted) {
       const error = new Error("Calendar event not found or unauthorized");
       error.statusCode = 404;

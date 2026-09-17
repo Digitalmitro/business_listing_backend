@@ -124,8 +124,11 @@ function createApp() {
         if (!origin || allowedOrigins.includes(origin)) {
           callback(null, true);
         } else {
-          logger.warn("cors.rejected", "CORS blocked request from disallowed origin", { origin });
-          callback(new Error(`CORS policy: origin '${origin}' is not allowed`));
+          logger.warn("cors.rejected", "CORS blocked request from disallowed origin", { origin, allowedOrigins });
+          // Reject by omitting CORS headers (browser blocks with a clear CORS
+          // error) instead of throwing, which turned every preflight from an
+          // unlisted origin into a 500 with no diagnostic in the browser.
+          callback(null, false);
         }
       },
     credentials: true,

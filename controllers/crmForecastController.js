@@ -2,6 +2,7 @@
 "use strict";
 
 const logger = require("../utils/logger");
+const { readScope } = require("../services/crmScope");
 const crmForecastService = require("../services/crmForecastService");
 
 /**
@@ -14,7 +15,7 @@ exports.getForecast = async (req, res) => {
       return res.status(401).json({ success: false, message: "User not authenticated" });
     }
 
-    const data = await crmForecastService.getRevenueForecast(req.user._id, req.query);
+    const data = await crmForecastService.getRevenueForecast(readScope(req), req.query);
     return res.status(200).json(data);
   } catch (error) {
     logger.error("Error retrieving CRM revenue forecast", { error: error.message });

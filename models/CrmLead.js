@@ -79,6 +79,18 @@ const crmLeadSchema = new mongoose.Schema(
       required: true,
       index: true,
     },
+    /** Business this lead belongs to (business-wise CRM). Null for legacy/global leads. */
+    businessId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Business",
+      default: null,
+      index: true,
+    },
+    /** Record this lead was auto-created from (enquiry / appointment), to prevent duplicates. */
+    sourceRef: {
+      model: { type: String, enum: ["Enquiry", "Appointment"], default: undefined },
+      id: { type: mongoose.Schema.Types.ObjectId, default: undefined },
+    },
     leadName: {
       type: String,
       required: true,
@@ -186,6 +198,12 @@ crmLeadSchema.virtual("dealValue")
 
 // Compound index for fast multi-tenant pipeline filtering and Kanban ordering
 crmLeadSchema.index({ ownerId: 1, status: 1, pipelineOrder: 1, expectedRevenue: -1 });
+crmLeadSchema.index({ businessId: 1, status: 1, pipelineOrder: 1 });
+// One lead per source record (enquiry/appointment); only enforced when sourceRef.id is set.
+crmLeadSchema.index(
+  { "sourceRef.id": 1 },
+  { unique: true, partialFilterExpression: { "sourceRef.id": { $type: "objectId" } } }
+);
 
 // Full-text search index across name, company, email, and notes
 crmLeadSchema.index({ leadName: "text", company: "text", email: "text", notes: "text" }, { name: "lead_text_index" });

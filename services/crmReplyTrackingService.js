@@ -2,6 +2,7 @@
 "use strict";
 
 const mongoose = require("mongoose");
+const { ownerFilter, leadIdsForBusiness } = require("./crmScope");
 const CrmLead = require("../models/CrmLead");
 const CrmEmailReplyLog = require("../models/CrmEmailReplyLog");
 const { CrmReplyKeyword } = require("../models/CrmConfig");
@@ -244,10 +245,13 @@ async function getReplyLogs(ownerId, query = {}) {
   if (mongoose.connection && mongoose.connection.readyState === 1) {
     const page = Math.max(1, Number(query.page || 1));
     const limit = Math.min(100, Math.max(1, Number(query.limit || 20)));
-    const filter = { ownerId };
+    const filter = ownerFilter(ownerId);
 
     if (query.leadId && mongoose.isValidObjectId(query.leadId)) {
       filter.leadId = query.leadId;
+    } else if (query.businessId) {
+      const ids = await leadIdsForBusiness(query.businessId);
+      if (ids) filter.leadId = { $in: ids };
     }
     if (query.classification && ["Positive", "Negative", "Unknown"].includes(query.classification)) {
       filter.classification = query.classification;
