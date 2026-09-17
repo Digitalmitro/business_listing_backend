@@ -18,6 +18,7 @@ function respondToGoogleError(res, error, fallbackMessage) {
     if (error.existingBusinessId) body.existingBusinessId = error.existingBusinessId;
     if (error.claimable) body.claimable = error.claimable;
     if (error.requiresCategory) body.requiresCategory = error.requiresCategory;
+    if (error.requiresBusinessHours) body.requiresBusinessHours = error.requiresBusinessHours;
     if (error.suggestedCategoryName) body.suggestedCategoryName = error.suggestedCategoryName;
     return res.status(error.status).json(body);
   }
@@ -222,7 +223,7 @@ exports.importLocation = async (req, res) => {
     if (!req.user) {
       return res.status(401).json({ success: false, message: "User not authenticated" });
     }
-    const { accountName, locationName, categoryId, subCategoryIds } = req.body || {};
+    const { accountName, locationName, categoryId, subCategoryIds, businessTiming } = req.body || {};
     if (!locationName) {
       return res.status(400).json({ success: false, message: "locationName is required." });
     }
@@ -232,6 +233,7 @@ exports.importLocation = async (req, res) => {
       locationName,
       categoryId,
       subCategoryIds,
+      businessTiming,
     });
 
     return res.status(created ? 201 : 200).json({

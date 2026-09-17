@@ -114,6 +114,40 @@ function mapGoogleHoursToBusinessTiming(periods = []) {
 }
 
 /** True when a stored value is empty or one of the "unknown" import sentinels — i.e. safe to overwrite during sync. */
+const DAY_KEYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+/**
+ * Validates a caller-supplied businessTiming ({ isOpen24Hours, daysOfWeek, schedule })
+ * entered on the import review step when Google has no hours for the location.
+ * Returns the normalized timing, or null when nothing usable was supplied.
+ */
+function normalizeManualTiming(input) {
+  if (!input || typeof input !== "object") return null;
+  if (input.isOpen24Hours === true) {
+    const schedule = Object.fromEntries(DAY_KEYS.map((d) => [d, [{ openAt: "00:00", closeAt: "23:59" }]]));
+    return { isOpen24Hours: true, daysOfWeek: [...DAY_KEYS], schedule };
+  }
+  const days = (Array.isArray(input.daysOfWeek) ? input.daysOfWeek : []).filter((d) => DAY_KEYS.includes(d));
+  if (days.length === 0) return null;
+  const schedule = {};
+  for (const day of days) {
+    const ranges = Array.isArray(input.schedule?.[day]) ? input.schedule[day] : [];
+    const valid = ranges
+      .filter((r) => r && TIME_RE.test(r.openAt || "") && TIME_RE.test(r.closeAt || "") && r.openAt < r.closeAt)
+      .map((r) => ({ openAt: r.openAt, closeAt: r.closeAt }));
+    if (valid.length === 0) {
+      throw new ValidationError(`Enter a valid open and close time (HH:MM) for ${day}.`);
+    }
+    schedule[day] = valid;
+  }
+  return { isOpen24Hours: false, daysOfWeek: days, schedule };
+}
+
+function hasUsableTiming(timing) {
+  return Boolean(timing && (timing.isOpen24Hours || (timing.daysOfWeek || []).length > 0));
+}
+
 function isUnset(value) {
   if (value === undefined || value === null) return true;
   const v = String(value).trim().toLowerCase();
@@ -131,11 +165,13 @@ function hasUsableCoordinates(profile) {
   return Number.isFinite(latitude) && Number.isFinite(longitude) && !(latitude === 0 && longitude === 0);
 }
 
-function mapProfileToBusinessPayload(profile, user, { categoryId, subCategoryIds = [], media = {}, accountName } = {}) {
+function mapProfileToBusinessPayload(profile, user, { categoryId, subCategoryIds = [], media = {}, accountName, manualTiming = null } = {}) {
   const hasCoords = hasUsableCoordinates(profile);
   const regionName = countryNameFromRegionCode(profile.address?.country);
   const country = normalizeCountry(regionName || profile.address?.country || DEFAULT_COUNTRY);
-  const timing = mapGoogleHoursToBusinessTiming(profile.businessHours?.periods);
+  const googleTiming = mapGoogleHoursToBusinessTiming(profile.businessHours?.periods);
+  // Google hours win; the review-step hours only fill the gap when Google has none.
+  const timing = hasUsableTiming(googleTiming) ? googleTiming : manualTiming || googleTiming;
   const phones = [profile.phoneNumber, ...(profile.additionalPhones || [])].filter(Boolean);
 
   const businessData = {
@@ -393,7 +429,7 @@ async function syncLinkedBusiness(business, profile, media = {}, { accountName }
  * user. Never trusts client-supplied profile data: the location is re-fetched from
  * Google with the user's own token, so Google itself is the authorization check.
  */
-async function importLocation(user, { accountName, locationName, categoryId, subCategoryIds = [] } = {}) {
+async function importLocation(user, { accountName, locationName, categoryId, subCategoryIds = [], businessTiming = null } = {}) {
   if (!/^locations\/[A-Za-z0-9_-]+$/.test(locationName || "")) {
     throw new ValidationError("A valid Google location id is required.");
   }
@@ -462,6 +498,15 @@ async function importLocation(user, { accountName, locationName, categoryId, sub
     }
   }
 
+  // Bookings need opening hours. Google supplies them for most locations; when it
+  // does not, the review step must collect them so no business is created without.
+  const manualTiming = normalizeManualTiming(businessTiming);
+  if (!hasUsableTiming(mapGoogleHoursToBusinessTiming(profile.businessHours?.periods)) && !manualTiming) {
+    throw new ValidationError("Google has no opening hours for this location. Please enter the business hours before importing.", {
+      requiresBusinessHours: true,
+    });
+  }
+
   let media = {};
   if (accountName) {
     media = await googleBusinessService.fetchLocationMedia(user, accountName, locationName);
@@ -472,6 +517,7 @@ async function importLocation(user, { accountName, locationName, categoryId, sub
     subCategoryIds: validSubCategoryIds,
     media,
     accountName: media.accountVerified ? accountName : undefined,
+    manualTiming,
   });
 
   let business;

@@ -145,6 +145,7 @@ test("createBusiness preserves each manual contact person's own phone and email 
       businessName: "DigitalMitro",
       address: { pincode: "110001", city: "Delhi", state: "Delhi", country: "India", coordinates: { latitude: 0, longitude: 77.2 } },
       category: [categoryId],
+      businessTiming: { isOpen24Hours: false, daysOfWeek: ["Mon"], schedule: { Mon: [{ openAt: "09:00", closeAt: "18:00" }] } },
       contact: {
         mobile: ["fallback"],
         contactDetails: [
@@ -187,6 +188,7 @@ test("createBusiness sets userId to null and skips the owner attach step for adm
         coordinates: { latitude: 28.6, longitude: 77.2 },
       },
       category: [categoryId],
+      businessTiming: { isOpen24Hours: false, daysOfWeek: ["Mon"], schedule: { Mon: [{ openAt: "09:00", closeAt: "18:00" }] } },
     },
   });
 
@@ -211,6 +213,7 @@ test("createBusiness accepts extra.needsGeocoding in place of coordinates and qu
       businessName: "DigitalMitro",
       address: { pincode: "000000", city: "Unknown City", state: "Unknown State", country: "Unknown Country" },
       category: [categoryId],
+      businessTiming: { isOpen24Hours: false, daysOfWeek: ["Mon"], schedule: { Mon: [{ openAt: "09:00", closeAt: "18:00" }] } },
     },
     extra: { needsGeocoding: true, googleLocationId: "locations/123", website: "https://digitalmitro.example" },
   });
@@ -222,4 +225,21 @@ test("createBusiness accepts extra.needsGeocoding in place of coordinates and qu
   assert.ok(queuedJob);
   assert.equal(queuedJob.name, "geocoding-batch");
   assert.equal(queuedJob.data.businessId, getSavedDoc()._id);
+});
+
+test("createBusiness rejects a listing without opening hours", async (context) => {
+  stubCategoryLookup(context);
+  await assert.rejects(
+    () =>
+      service.createBusiness({
+        ownerId,
+        businessData: {
+          businessName: "No Hours Co",
+          address: { pincode: "110001", city: "Delhi", state: "Delhi", country: "India", coordinates: { latitude: 28.6, longitude: 77.2 } },
+          category: [categoryId],
+          businessTiming: { isOpen24Hours: false, daysOfWeek: [], schedule: {} },
+        },
+      }),
+    /Business hours are required/
+  );
 });

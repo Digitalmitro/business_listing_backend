@@ -212,10 +212,12 @@ test("importLocation creates a new Business via businessService.createBusiness w
     accountName: "accounts/999",
     locationName: "locations/111111",
     categoryId: String(categoryId),
+    businessTiming: { daysOfWeek: ["Mon"], schedule: { Mon: [{ openAt: "09:00", closeAt: "18:00" }] } },
   });
 
   assert.equal(result.created, true);
   assert.equal(result.business.businessName, "Art Brain");
+  assert.deepEqual(createArgs.businessData.businessTiming.daysOfWeek, ["Mon"]);
   assert.equal(String(createArgs.ownerId), String(user._id));
   assert.equal(createArgs.isAdmin, false);
   assert.equal(createArgs.extra.googleLocationId, "locations/111111");
@@ -254,7 +256,7 @@ test("importLocation defaults the category from an exact name match against Goog
     return { _id: new mongoose.Types.ObjectId() };
   });
 
-  await service.importLocation(user, { accountName: "accounts/999", locationName: "locations/111111" });
+  await service.importLocation(user, { accountName: "accounts/999", locationName: "locations/111111", businessTiming: { daysOfWeek: ["Mon"], schedule: { Mon: [{ openAt: "09:00", closeAt: "18:00" }] } } });
   assert.equal(String(createArgs.businessData.category[0]), String(categoryId));
 });
 
@@ -313,7 +315,7 @@ test("importLocation still creates the business when media (photos/logo) could n
     return { _id: new mongoose.Types.ObjectId() };
   });
 
-  const result = await service.importLocation(user, { accountName: "accounts/999", locationName: "locations/111111", categoryId: String(categoryId) });
+  const result = await service.importLocation(user, { accountName: "accounts/999", locationName: "locations/111111", categoryId: String(categoryId), businessTiming: { daysOfWeek: ["Mon"], schedule: { Mon: [{ openAt: "09:00", closeAt: "18:00" }] } } });
   assert.equal(result.created, true);
   assert.equal(createArgs.extra.businessLogo, undefined);
   assert.equal(createArgs.extra.photos, undefined);
@@ -360,4 +362,41 @@ test("syncLinkedBusiness refreshes Google-owned fields and sync metadata for a G
   assert.deepEqual(business.businessTiming.daysOfWeek, ["Mon"]);
   assert.equal(business.businessLogo, "https://example.com/new-logo.jpg");
   assert.ok(business.googleLastSyncedAt instanceof Date);
+});
+
+test("importLocation refuses to create a business without opening hours, and accepts review-step hours", async (context) => {
+  stubConnectionAndFetch(context);
+  const categoryId = new mongoose.Types.ObjectId();
+  context.mock.method(Category, "findById", async () => ({ _id: categoryId, name: "Art" }));
+  context.mock.method(Business, "findOne", async () => null);
+  context.mock.method(Business, "find", async () => []);
+  let createArgs = null;
+  context.mock.method(businessService, "createBusiness", async (args) => {
+    createArgs = args;
+    return { _id: new mongoose.Types.ObjectId() };
+  });
+
+  await assert.rejects(
+    () => service.importLocation(user, { accountName: "accounts/999", locationName: "locations/111111", categoryId: String(categoryId) }),
+    (err) => err.requiresBusinessHours === true && err.status === 400
+  );
+
+  await assert.rejects(
+    () => service.importLocation(user, {
+      accountName: "accounts/999",
+      locationName: "locations/111111",
+      categoryId: String(categoryId),
+      businessTiming: { daysOfWeek: ["Mon"], schedule: { Mon: [{ openAt: "18:00", closeAt: "09:00" }] } },
+    }),
+    /valid open and close time/
+  );
+
+  await service.importLocation(user, {
+    accountName: "accounts/999",
+    locationName: "locations/111111",
+    categoryId: String(categoryId),
+    businessTiming: { isOpen24Hours: true },
+  });
+  assert.equal(createArgs.businessData.businessTiming.isOpen24Hours, true);
+  assert.equal(createArgs.businessData.businessTiming.daysOfWeek.length, 7);
 });

@@ -66,6 +66,7 @@ async function createBusiness({ ownerId, isAdmin = false, businessData, files = 
   if (validCategories.length === 0) {
     throw new ValidationError("At least one category is required.");
   }
+
   const existingCategories = await Category.find({ _id: { $in: validCategories } });
   if (existingCategories.length !== validCategories.length) {
     throw new ValidationError("One or more categories are invalid.");
@@ -77,6 +78,13 @@ async function createBusiness({ ownerId, isAdmin = false, businessData, files = 
       throw new ValidationError("One or more subcategories are invalid.");
     }
   }
+  // Opening hours are required so "Book Now" works from day one. Every creation
+  // path (manual form, admin form, Google import) collects them before reaching here.
+  const timing = businessData.businessTiming || {};
+  if (!timing.isOpen24Hours && !(Array.isArray(timing.daysOfWeek) && timing.daysOfWeek.length > 0)) {
+    throw new ValidationError("Business hours are required: select at least one open day or mark the business open 24 hours.");
+  }
+
 
   // Attach uploaded file names
   const businessLogoFile = files?.businessLogo?.[0];
