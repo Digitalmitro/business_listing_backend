@@ -2,7 +2,10 @@
 "use strict";
 
 const mongoose = require("mongoose");
-const { scopeFilter, scopeMatch, ALL_OWNERS } = require("./crmScope");
+const { scopeFilter, scopeMatch, ALL_OWNERS, validBusinessId, appointmentStartTime } = require("./crmScope");
+const CrmContact = require("../models/CrmContact");
+const Appointment = require("../models/Appointment");
+const Business = require("../models/Business");
 const User = require("../models/User");
 const SocialConnection = require("../models/SocialConnection");
 const GoogleBusinessConnection = require("../models/GoogleBusinessConnection");
@@ -200,6 +203,49 @@ exports.getDashboardSummary = async (ownerId, options = {}) => {
       },
     ]);
 
+    // ── Contacts and customer bookings in scope ──────────────────────────────
+    let totalContacts = 0;
+    let bookingsSummary = { total: 0, upcoming: 0, recent: [] };
+    try {
+      totalContacts = await CrmContact.countDocuments(leadScope);
+
+      const bookingFilter = { status: { $ne: "Canceled" } };
+      const bizId = validBusinessId(businessId);
+      if (bizId) {
+        bookingFilter.businessId = bizId;
+      } else if (ownerId !== ALL_OWNERS) {
+        const owned = await Business.find({ userId: ownerId }).select("_id").lean();
+        bookingFilter.businessId = { $in: owned.map((b) => b._id) };
+      }
+      const [total, recentBookings] = await Promise.all([
+        Appointment.countDocuments(bookingFilter),
+        Appointment.find(bookingFilter)
+          .populate("userId", "full_name email phone")
+          .populate("businessId", "businessName")
+          .sort({ appointmentDate: -1, createdAt: -1 })
+          .limit(DASHBOARD_RECENT_LEADS_LIMIT)
+          .lean(),
+      ]);
+      const recent = recentBookings.map((a) => ({
+        _id: a._id,
+        serviceName: a.serviceName,
+        status: a.status,
+        startTime: appointmentStartTime(a),
+        timeSlot: a.timeSlot,
+        businessName: a.businessId?.businessName || "",
+        customer: a.userId && typeof a.userId === "object"
+          ? { name: a.userId.full_name, email: a.userId.email, phone: a.userId.phone }
+          : null,
+      }));
+      bookingsSummary = {
+        total,
+        upcoming: recent.filter((b) => b.startTime && b.startTime >= now).length,
+        recent,
+      };
+    } catch (err) {
+      logger.warn("Could not compute contacts/bookings for dashboard summary", { error: err.message });
+    }
+
     // ── Compute trend deltas (current vs previous period) ─────────────────────
     const currentSummary  = forecastData.summary || forecastData;
     const previousSummary = previousForecastData;
@@ -210,12 +256,14 @@ exports.getDashboardSummary = async (ownerId, options = {}) => {
       conversionRate_delta: Number(((currentSummary.conversionRate || 0) - (previousSummary.conversionRate || 0)).toFixed(1)),
     };
 
-    return {
+    const dashboardData = {
       success: true,
       timestamp: new Date(),
       connectedSocialAccounts,
       recentPosts,
       recentLeads,
+      totalContacts,
+      bookingsSummary,
       revenueSummary: {
         expectedRevenue:  currentSummary.expectedRevenue  || forecastData.expectedRevenue,
         closedRevenue:    currentSummary.closedRevenue    || forecastData.closedRevenue,
