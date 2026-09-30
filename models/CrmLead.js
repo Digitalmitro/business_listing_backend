@@ -12,10 +12,27 @@ const LEAD_STATUSES = [
   "Follow-Up Sent",
   "Warm Lead",
   "Cold Lead",
+  "Booked",
   "Closed Won",
   "Closed Lost",
   "Completed",
 ];
+
+/**
+ * Stages the CRM moves leads into automatically. They are always accepted as a lead
+ * status, even when an owner's configured pipeline stages leave them out, so intake
+ * and booking automation can never be rejected by stage configuration.
+ */
+const LEAD_STAGE = {
+  NEW: "New",
+  BOOKED: "Booked",
+  WON: "Closed Won",
+  COMPLETED: "Completed",
+  LOST: "Closed Lost",
+};
+const WON_STATUSES = [LEAD_STAGE.WON, LEAD_STAGE.COMPLETED];
+const LOST_STATUSES = [LEAD_STAGE.LOST];
+const SYSTEM_STATUSES = Object.values(LEAD_STAGE);
 
 const leadActivitySchema = new mongoose.Schema(
   {
@@ -30,6 +47,7 @@ const leadActivitySchema = new mongoose.Schema(
         "email_reply",
         "assigned_user_change",
         "revenue_update",
+        "booking",
         "updated",
       ],
       required: true,
@@ -90,6 +108,11 @@ const crmLeadSchema = new mongoose.Schema(
     sourceRef: {
       model: { type: String, enum: ["Enquiry", "Appointment"], default: undefined },
       id: { type: mongoose.Schema.Types.ObjectId, default: undefined },
+    },
+    /** Appointments booked by this lead. Links repeat and rescheduled bookings to one lead. */
+    appointmentIds: {
+      type: [{ type: mongoose.Schema.Types.ObjectId, ref: "Appointment" }],
+      default: undefined,
     },
     leadName: {
       type: String,
@@ -210,5 +233,9 @@ crmLeadSchema.index({ leadName: "text", company: "text", email: "text", notes: "
 
 module.exports = {
   LEAD_STATUSES,
+  LEAD_STAGE,
+  WON_STATUSES,
+  LOST_STATUSES,
+  SYSTEM_STATUSES,
   CrmLead: mongoose.model("CrmLead", crmLeadSchema),
 };

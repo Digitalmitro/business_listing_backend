@@ -3,7 +3,7 @@
 
 const mongoose = require("mongoose");
 const logger = require("../utils/logger");
-const { LEAD_STATUSES, CrmLead } = require("../models/CrmLead");
+const { LEAD_STATUSES, SYSTEM_STATUSES, CrmLead } = require("../models/CrmLead");
 const { CrmPipelineStage } = require("../models/CrmConfig");
 const { logAudit, truncate, resolveDisplayName } = require("./crmAuditService");
 
@@ -36,7 +36,7 @@ async function getAllowedLeadStatuses() {
     try {
       const stages = await CrmPipelineStage.find({}).select("name").lean();
       if (stages && stages.length > 0) {
-        cachedAllowedStatuses = stages.map((s) => s.name);
+        cachedAllowedStatuses = [...new Set([...stages.map((s) => s.name), ...SYSTEM_STATUSES])];
         cachedAllowedStatusesTime = now;
         return cachedAllowedStatuses;
       }
@@ -516,7 +516,7 @@ async function addLeadActivity(
   const finalAction = action || type || "note_added";
   const validActions = [
     "created", "status_change", "note_added", "followup_scheduled",
-    "email_sent", "email_reply", "assigned_user_change", "revenue_update", "updated",
+    "email_sent", "email_reply", "assigned_user_change", "revenue_update", "booking", "updated",
   ];
   const chosenAction = validActions.includes(finalAction) ? finalAction : "note_added";
 
@@ -581,6 +581,93 @@ async function addLeadActivity(
   }
 
   return { _id: leadId, ownerId, leadName: "Mock Lead", activities: [activityEntry] };
+}
+
+/**
+ * Records a customer booking on an existing lead in one write: links the appointment,
+ * logs it on the timeline, moves the lead to `nextStatus` when that differs from its
+ * current stage, and points the follow-up date at the booking. The lead keeps its id,
+ * notes and history, so it moves between pipeline sections instead of being duplicated.
+ */
+async function recordLeadBooking(
+  lead,
+  { appointmentId = null, nextStatus = null, nextFollowUpDate = null, description },
+  performedBy = null
+) {
+  if (!lead || !lead._id) throw new Error("lead is required to record a booking");
+  if (!description || typeof description !== "string" || !description.trim()) {
+    throw new Error("Booking description is required");
+  }
+
+  const actor = performedBy || lead.ownerId;
+  const now   = new Date();
+  const statusChanged = Boolean(nextStatus) && nextStatus !== lead.status;
+
+  const activityEntries = [{
+    action:        "booking",
+    type:          "booking",
+    description:   description.trim(),
+    previousValue: null,
+    newValue:      null,
+    user:          actor,
+    performedBy:   actor,
+    timestamp:     now,
+    performedAt:   now,
+  }];
+
+  const $set = {};
+  if (nextFollowUpDate) $set.nextFollowUpDate = nextFollowUpDate;
+  if (statusChanged) {
+    $set.status = nextStatus;
+    activityEntries.push({
+      action:        "status_change",
+      type:          "status_change",
+      description:   `Status changed from ${lead.status} to ${nextStatus} after a booking`,
+      previousValue: lead.status,
+      newValue:      nextStatus,
+      user:          actor,
+      performedBy:   actor,
+      timestamp:     now,
+      performedAt:   now,
+    });
+  }
+
+  const update = { $push: { activities: { $each: activityEntries } } };
+  if (Object.keys($set).length > 0) update.$set = $set;
+  if (appointmentId) update.$addToSet = { appointmentIds: appointmentId };
+
+  const updated = await CrmLead.findOneAndUpdate({ _id: lead._id }, update, { new: true, runValidators: true });
+  if (!updated) {
+    throw new LeadNotFoundError("Lead not found while recording a booking");
+  }
+
+  logAudit({
+    ownerId:     updated.ownerId,
+    businessId:  updated.businessId || null,
+    leadId:      updated._id,
+    leadName:    updated.leadName,
+    action:      "activity_logged",
+    description: activityEntries[0].description,
+    performedBy: actor,
+    metadata:    { activityType: "booking", appointmentId: appointmentId ? String(appointmentId) : "" },
+  });
+  if (statusChanged) {
+    logAudit({
+      ownerId:       updated.ownerId,
+      businessId:    updated.businessId || null,
+      leadId:        updated._id,
+      leadName:      updated.leadName,
+      action:        "status_change",
+      description:   activityEntries[1].description,
+      previousValue: lead.status,
+      newValue:      nextStatus,
+      performedBy:   actor,
+    });
+  }
+
+  logger.info("Booking recorded on CRM Lead", { leadId: updated._id, status: updated.status, appointmentId });
+  await invalidateCrmSnapshots();
+  return updated;
 }
 
 /**
@@ -740,6 +827,7 @@ module.exports = {
   getLeadById,
   updateLead,
   addLeadActivity,
+  recordLeadBooking,
   deleteLead,
   reorderKanbanLeads,
 };

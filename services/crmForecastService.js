@@ -17,6 +17,7 @@ const STAGE_PROBABILITIES = {
   "Follow-Up Sent": 0.35,
   "Warm Lead": 0.70,
   "Cold Lead": 0.05,
+  Booked: 0.85,
   "Closed Won": 1.00,
   Completed: 1.00,
   "Closed Lost": 0.00,
@@ -100,6 +101,8 @@ async function getRevenueForecast(ownerId, query = {}) {
     const leads = await CrmLead.find(filter).lean();
 
     let totalLeads = 0;
+    let newLeads = 0;
+    let bookedLeads = 0;
     let warmLeads = 0;
     let coldLeads = 0;
     let closedWon = 0;
@@ -120,6 +123,8 @@ async function getRevenueForecast(ownerId, query = {}) {
       const weightedRev = revenue * probability;
 
       // Counters
+      if (status === "New") newLeads++;
+      if (status === "Booked") bookedLeads++;
       if (status === "Warm Lead") warmLeads++;
       if (status === "Cold Lead") coldLeads++;
       if (status === "Closed Won" || status === "Completed") {
@@ -229,6 +234,8 @@ async function getRevenueForecast(ownerId, query = {}) {
       success: true,
       summary: {
         totalLeads,
+        newLeads,
+        bookedLeads,
         warmLeads,
         coldLeads,
         closedWon,
@@ -296,6 +303,8 @@ async function getRevenueForecast(ownerId, query = {}) {
     success: true,
     summary: {
       totalLeads,
+      newLeads: mockLeads.filter((l) => l.status === "New").length,
+      bookedLeads: mockLeads.filter((l) => l.status === "Booked").length,
       warmLeads,
       coldLeads,
       closedWon,

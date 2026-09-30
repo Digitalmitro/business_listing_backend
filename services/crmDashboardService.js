@@ -121,6 +121,8 @@ exports.getDashboardSummary = async (ownerId, options = {}) => {
     // 4 & 5. Fetch Revenue Summary & Pipeline Summary via crmForecastService
     let forecastData = {
       totalLeads: 0,
+      newLeads: 0,
+      bookedLeads: 0,
       warmLeads: 0,
       coldLeads: 0,
       closedWon: 0,
@@ -273,7 +275,9 @@ exports.getDashboardSummary = async (ownerId, options = {}) => {
       },
       pipelineSummary: {
         totalLeads:     currentSummary.totalLeads  || forecastData.totalLeads,
-        warmLeads:      currentSummary.warmLeads   || forecastData.warmLeads,
+        newLeads:       currentSummary.newLeads    || 0,
+        bookedLeads:    currentSummary.bookedLeads || 0,
+        warmLeads:     currentSummary.warmLeads   || forecastData.warmLeads,
         coldLeads:      currentSummary.coldLeads   || forecastData.coldLeads,
         closedWon:      currentSummary.closedWon   || forecastData.closedWon,
         closedLost:     currentSummary.closedLost  || forecastData.closedLost,

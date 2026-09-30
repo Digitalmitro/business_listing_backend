@@ -14,6 +14,7 @@ test("STAGE_PROBABILITIES contains exact weights for all standard CRM pipeline s
   assert.equal(STAGE_PROBABILITIES["Proposal"], 0.75);
   assert.equal(STAGE_PROBABILITIES["Negotiation"], 0.90);
   assert.equal(STAGE_PROBABILITIES["Warm Lead"], 0.70);
+  assert.equal(STAGE_PROBABILITIES["Booked"], 0.85);
   assert.equal(STAGE_PROBABILITIES["Closed Won"], 1.00);
   assert.equal(STAGE_PROBABILITIES["Closed Lost"], 0.00);
 });
@@ -31,6 +32,8 @@ test("getRevenueForecast returns exact 10 summary metrics and breakdown chart st
 
   const { summary, charts } = res;
   assert.equal(typeof summary.totalLeads, "number");
+  assert.equal(typeof summary.newLeads, "number");
+  assert.equal(typeof summary.bookedLeads, "number");
   assert.equal(typeof summary.warmLeads, "number");
   assert.equal(typeof summary.coldLeads, "number");
   assert.equal(typeof summary.closedWon, "number");

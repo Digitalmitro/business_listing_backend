@@ -31,6 +31,35 @@ test("createLeadFromAppointment returns null without a business and never throws
   assert.equal(result, null);
 });
 
+test("createLeadFromAppointment accepts a populated businessId and never throws", async () => {
+  const result = await intake.createLeadFromAppointment({
+    _id: new mongoose.Types.ObjectId(),
+    businessId: { _id: new mongoose.Types.ObjectId(), businessName: "Salon" },
+    rescheduledFrom: new mongoose.Types.ObjectId(),
+    serviceName: "Haircut",
+    appointmentDate: new Date(),
+  }, { full_name: "Jane", email: "jane@example.com" });
+  assert.equal(result, null);
+});
+
+test("recordAppointmentCanceled returns null without a linked lead and never throws", async () => {
+  assert.equal(await intake.recordAppointmentCanceled(null), null);
+  const result = await intake.recordAppointmentCanceled({
+    _id: new mongoose.Types.ObjectId(),
+    businessId: { _id: new mongoose.Types.ObjectId() },
+    serviceName: "Haircut",
+  });
+  assert.equal(result, null);
+});
+
+test("a booking moves open and lost leads to Booked but keeps converted customers converted", () => {
+  for (const status of ["New", "Prospecting", "Negotiation", "Cold Lead", "Closed Lost", "Booked"]) {
+    assert.equal(intake.statusAfterBooking(status), "Booked", status);
+  }
+  assert.equal(intake.statusAfterBooking("Closed Won"), "Closed Won");
+  assert.equal(intake.statusAfterBooking("Completed"), "Completed");
+});
+
 test("source constants match what the frontends display", () => {
   assert.equal(intake.ENQUIRY_SOURCE, "Business Profile Enquiry");
   assert.equal(intake.APPOINTMENT_SOURCE, "Appointment Booking");

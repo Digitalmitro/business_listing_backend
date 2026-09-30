@@ -9,6 +9,18 @@ const {
   CrmSchedulerConfig,
 } = require("../models/CrmConfig");
 const { STAGE_PROBABILITIES } = require("../services/crmForecastService");
+const { LEAD_STAGE } = require("../models/CrmLead");
+
+const BOOKED_STAGE = {
+  name: LEAD_STAGE.BOOKED,
+  internalKey: LEAD_STAGE.BOOKED,
+  color: "#fa8c16",
+  sortOrder: 11,
+  probability: STAGE_PROBABILITIES[LEAD_STAGE.BOOKED],
+  isClosed: false,
+  isWon: false,
+  isLost: false,
+};
 
 /**
  * Helper to get default pipeline stages if none exist in DB.
@@ -25,11 +37,23 @@ function getDefaultStages() {
     { name: "Follow-Up Sent", internalKey: "Follow-Up Sent", color: "#14b8a6", sortOrder: 8, probability: 0.35, isClosed: false, isWon: false, isLost: false },
     { name: "Warm Lead", internalKey: "Warm Lead", color: "#22c55e", sortOrder: 9, probability: 0.70, isClosed: false, isWon: false, isLost: false },
     { name: "Cold Lead", internalKey: "Cold Lead", color: "#64748b", sortOrder: 10, probability: 0.05, isClosed: false, isWon: false, isLost: false },
-    { name: "Closed Won", internalKey: "Closed Won", color: "#10b981", sortOrder: 11, probability: 1.00, isClosed: true, isWon: true, isLost: false },
-    { name: "Completed", internalKey: "Completed", color: "#059669", sortOrder: 12, probability: 1.00, isClosed: true, isWon: true, isLost: false },
-    { name: "Closed Lost", internalKey: "Closed Lost", color: "#ef4444", sortOrder: 13, probability: 0.00, isClosed: true, isWon: false, isLost: true },
+    BOOKED_STAGE,
+    { name: "Closed Won", internalKey: "Closed Won", color: "#10b981", sortOrder: 12, probability: 1.00, isClosed: true, isWon: true, isLost: false },
+    { name: "Completed", internalKey: "Completed", color: "#059669", sortOrder: 13, probability: 1.00, isClosed: true, isWon: true, isLost: false },
+    { name: "Closed Lost", internalKey: "Closed Lost", color: "#ef4444", sortOrder: 14, probability: 0.00, isClosed: true, isWon: false, isLost: true },
   ];
   return defaultList;
+}
+
+/**
+ * Booked is set automatically when a customer books, so it must be a pipeline column even
+ * for owners whose saved stage list predates it. Inserted just before the closed stages.
+ */
+function withBookedStage(stages) {
+  if (stages.some((s) => s.name === LEAD_STAGE.BOOKED)) return stages;
+  const firstClosed = stages.findIndex((s) => s.isClosed);
+  const at = firstClosed === -1 ? stages.length : firstClosed;
+  return [...stages.slice(0, at), BOOKED_STAGE, ...stages.slice(at)];
 }
 
 /**
@@ -52,7 +76,7 @@ exports.getPipelineStages = async (req, res) => {
       stages = getDefaultStages();
     }
 
-    return res.status(200).json({ success: true, stages });
+    return res.status(200).json({ success: true, stages: withBookedStage(stages) });
   } catch (error) {
     logger.error("Error retrieving pipeline stages config", { error: error.message });
     return res.status(500).json({ success: false, message: error.message });

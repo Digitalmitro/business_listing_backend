@@ -8,13 +8,17 @@
  * Both entry points are idempotent: `sourceRef` + a partial unique index guarantee
  * that one enquiry/appointment produces at most one lead, and every failure is
  * logged and swallowed so lead intake can never break the customer's request.
+ *
+ * Enquiries arrive in the New stage. A booking moves the customer's existing lead for
+ * that business to the Booked stage (or creates it there), so a booked customer never
+ * stays in, or re-enters, New Leads.
  */
 
 const mongoose = require("mongoose");
 const moment = require("moment");
 const Business = require("../models/Business");
-const { CrmLead } = require("../models/CrmLead");
-const { createLead } = require("./crmLeadService");
+const { CrmLead, LEAD_STAGE, WON_STATUSES } = require("../models/CrmLead");
+const { createLead, recordLeadBooking } = require("./crmLeadService");
 const { appointmentStartTime } = require("./crmScope");
 const logger = require("../utils/logger");
 
@@ -25,6 +29,55 @@ async function findExisting(model, id) {
   return CrmLead.findOne({ "sourceRef.model": model, "sourceRef.id": id }).select("_id").lean();
 }
 
+/** Stage a lead moves to on a new booking. Customers who already converted stay converted. */
+function statusAfterBooking(currentStatus) {
+  return WON_STATUSES.includes(currentStatus) ? currentStatus : LEAD_STAGE.BOOKED;
+}
+
+/** The lead an appointment was recorded on, whether it created the lead or was linked later. */
+async function findLeadForAppointment(businessId, appointmentId) {
+  if (!appointmentId) return null;
+  return CrmLead.findOne({
+    businessId,
+    $or: [
+      { "sourceRef.model": "Appointment", "sourceRef.id": appointmentId },
+      { appointmentIds: appointmentId },
+    ],
+  }).lean();
+}
+
+/**
+ * The customer's existing lead in this business's CRM: the lead of the appointment being
+ * rescheduled, otherwise the most recently active lead with the same email or phone.
+ */
+async function findCustomerLead(business, appointment, customer) {
+  if (appointment.rescheduledFrom) {
+    const previous = await findLeadForAppointment(business._id, appointment.rescheduledFrom);
+    if (previous) return previous;
+  }
+
+  const email = (customer?.email || "").trim().toLowerCase();
+  const phone = (customer?.phone || "").trim();
+  const contactMatch = [];
+  if (email) contactMatch.push({ email });
+  if (phone) contactMatch.push({ phone });
+  if (contactMatch.length === 0) return null;
+
+  return CrmLead.findOne({ ownerId: business.userId, businessId: business._id, $or: contactMatch })
+    .sort({ updatedAt: -1 })
+    .lean();
+}
+
+function describeBooking(appointment) {
+  const when = appointment.appointmentDate
+    ? moment(appointment.appointmentDate).format("dddd, MMMM Do YYYY")
+    : "";
+  return {
+    service: appointment.serviceName || "Service",
+    when: when ? `${when}${appointment.timeSlot ? ` at ${appointment.timeSlot}` : ""}` : "",
+  };
+}
+
 async function resolveOwner(businessId) {
   if (!businessId || !mongoose.isValidObjectId(businessId)) return null;
   const business = await Business.findById(businessId).select("_id userId businessName").lean();
@@ -32,14 +85,14 @@ async function resolveOwner(businessId) {
   return business;
 }
 
-async function createIntakeLead({ business, sourceModel, sourceId, leadData }) {
+async function createIntakeLead({ business, sourceModel, sourceId, leadData, status = LEAD_STAGE.NEW }) {
   const lead = await createLead(
     business.userId,
     {
       ...leadData,
       businessId: business._id,
       sourceRef: { model: sourceModel, id: sourceId },
-      status: "New",
+      status,
     },
     business.userId
   );
@@ -93,8 +146,15 @@ async function createLeadFromEnquiry(enquiry) {
 }
 
 /**
- * Creates a CRM lead for an appointment booking. `customer` is the booking user
- * (full_name, email, phone) when already loaded by the caller.
+ * Puts an appointment booking into the business's CRM in the Booked stage.
+ *
+ * - The customer already has a lead there (an earlier enquiry or booking, matched by the
+ *   rescheduled appointment, email or phone): that lead is moved to Booked and the
+ *   booking is added to its timeline. No second lead is created.
+ * - Otherwise a new lead is created directly in Booked.
+ *
+ * `customer` is the booking user (full_name, email, phone) when already loaded by the
+ * caller. Idempotent per appointment; never throws.
  */
 async function createLeadFromAppointment(appointment, customer = null) {
   try {
@@ -102,15 +162,41 @@ async function createLeadFromAppointment(appointment, customer = null) {
     const existing = await findExisting("Appointment", appointment._id);
     if (existing) return existing;
 
-    const business = await resolveOwner(appointment.businessId);
+    // Callers may pass the appointment with `businessId` populated (e.g. reschedule).
+    const business = await resolveOwner(appointment.businessId._id || appointment.businessId);
     if (!business) return null;
 
-    const when = appointment.appointmentDate
-      ? moment(appointment.appointmentDate).format("dddd, MMMM Do YYYY")
-      : "";
+    const linked = await findLeadForAppointment(business._id, appointment._id);
+    if (linked) return linked;
+
+    const { service, when } = describeBooking(appointment);
+    const startTime = appointmentStartTime(appointment) || appointment.appointmentDate || null;
+
+    const customerLead = await findCustomerLead(business, appointment, customer);
+    if (customerLead) {
+      const verb = appointment.rescheduledFrom ? "Booking rescheduled" : "Booked";
+      const lead = await recordLeadBooking(
+        customerLead,
+        {
+          appointmentId: appointment._id,
+          nextStatus: statusAfterBooking(customerLead.status),
+          nextFollowUpDate: startTime,
+          description: `${verb}: ${service}${when ? ` on ${when}` : ""}`,
+        },
+        business.userId
+      );
+      logger.info("crm_intake.booking_linked", {
+        leadId: lead._id,
+        businessId: business._id,
+        appointmentId: appointment._id,
+        status: lead.status,
+      });
+      return lead;
+    }
+
     const notes = [
-      `Booked: ${appointment.serviceName || "Service"}`,
-      when ? `Date: ${when}${appointment.timeSlot ? ` at ${appointment.timeSlot}` : ""}` : "",
+      `Booked: ${service}`,
+      when ? `Date: ${when}` : "",
       `Created from an appointment booking at ${business.businessName}.`,
     ].filter(Boolean).join("\n");
 
@@ -118,6 +204,7 @@ async function createLeadFromAppointment(appointment, customer = null) {
       business,
       sourceModel: "Appointment",
       sourceId: appointment._id,
+      status: LEAD_STAGE.BOOKED,
       leadData: {
         leadName: customer?.full_name || "Appointment customer",
         email: customer?.email || "",
@@ -125,7 +212,8 @@ async function createLeadFromAppointment(appointment, customer = null) {
         company: "",
         source: APPOINTMENT_SOURCE,
         notes,
-        nextFollowUpDate: appointmentStartTime(appointment) || appointment.appointmentDate || null,
+        appointmentIds: [appointment._id],
+        nextFollowUpDate: startTime,
       },
     });
   } catch (error) {
@@ -134,9 +222,35 @@ async function createLeadFromAppointment(appointment, customer = null) {
   }
 }
 
+/**
+ * Logs a customer's cancellation on the lead the appointment belongs to. The lead's
+ * stage is left for the business to decide (reschedule, follow up, or mark lost).
+ * Never throws.
+ */
+async function recordAppointmentCanceled(appointment) {
+  try {
+    if (!appointment || !appointment.businessId) return null;
+    const businessId = appointment.businessId._id || appointment.businessId;
+    const lead = await findLeadForAppointment(businessId, appointment._id);
+    if (!lead) return null;
+
+    const { service, when } = describeBooking(appointment);
+    return await recordLeadBooking(
+      lead,
+      { description: `Booking canceled by the customer: ${service}${when ? ` on ${when}` : ""}` },
+      lead.ownerId
+    );
+  } catch (error) {
+    logger.error("crm_intake.cancel_failed", { appointmentId: appointment?._id, error: error.message });
+    return null;
+  }
+}
+
 module.exports = {
   ENQUIRY_SOURCE,
   APPOINTMENT_SOURCE,
+  statusAfterBooking,
   createLeadFromEnquiry,
   createLeadFromAppointment,
+  recordAppointmentCanceled,
 };

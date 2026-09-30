@@ -4,7 +4,7 @@ const Business = require("../models/Business");
 const User = require("../models/User");
 const { notifyAdmins, createNotification } = require("../helpers/notificationHelper");
 const { addJob } = require("../utils/queue");
-const { createLeadFromAppointment } = require("../services/crmLeadIntakeService");
+const { createLeadFromAppointment, recordAppointmentCanceled } = require("../services/crmLeadIntakeService");
 const { invalidateCrmSnapshots } = require("../services/crmScope");
 
 exports.CreateAppointment = async (req, res) => {
@@ -60,7 +60,7 @@ exports.CreateAppointment = async (req, res) => {
     // Fetch user details
     const user = await User.findById(userId).select("full_name email phone");
 
-    // Add the booking to the business's CRM as a lead (idempotent, never throws)
+    // Move the customer's lead to Booked, or create it there (idempotent, never throws)
     await createLeadFromAppointment(appointment, user);
     await invalidateCrmSnapshots();
 
@@ -177,6 +177,9 @@ exports.CancelAppointment = async (req, res) => {
         .json({ message: "Appointment not found or already canceled" });
     }
 
+    // Log the cancellation on the customer's CRM lead (never throws)
+    await recordAppointmentCanceled(appointment);
+
     // Notify business owner
     const business = appointment.businessId;
     if (business?.userId) {
@@ -292,6 +295,9 @@ exports.RescheduleAppointment = async (req, res) => {
     // Notify business
     const business = oldAppointment.businessId;
     const user = await User.findById(userId);
+
+    // Record the new slot on the same CRM lead (never throws)
+    await createLeadFromAppointment(newAppointment, user);
 
     const formattedDate = moment(normalizedNewDate).format("dddd, MMMM Do YYYY");
     const oldFormattedDate = moment(oldAppointment.appointmentDate).format("dddd, MMMM Do YYYY");
