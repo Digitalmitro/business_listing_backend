@@ -158,6 +158,9 @@ exports.recordListingView = async (req, res) => {
   const { businessId, serviceName } = req.body || {};
   if (!req.isAdmin && req.user && businessId) {
     automationService.onListingViewed({ businessId, viewer: req.user, serviceName }).catch(() => {});
+    require("../services/crmSignalService")
+      .onListingActivity({ businessId, event: serviceName ? "service_viewed" : "business_viewed", item: serviceName ? { kind: "service", name: serviceName } : null, viewer: req.user })
+      .catch(() => {});
   }
   return res.status(202).json({ success: true });
 };

@@ -3,7 +3,7 @@
 
 const mongoose = require("mongoose");
 const logger = require("../utils/logger");
-const { LEAD_STATUSES, SYSTEM_STATUSES, CrmLead } = require("../models/CrmLead");
+const { LEAD_STATUSES, SYSTEM_STATUSES, WON_STATUSES, CrmLead } = require("../models/CrmLead");
 const { CrmPipelineStage } = require("../models/CrmConfig");
 const { logAudit, truncate, resolveDisplayName } = require("./crmAuditService");
 
@@ -457,6 +457,11 @@ async function updateLead(ownerId, leadId, updateData = {}, performedBy = null) 
       .populate("activities.user",        "full_name email")
       .populate("activities.performedBy", "full_name email");
 
+    // A won lead converts its CRM contact (stops marketing journeys). Never throws.
+    if (updated && updateData.status && updateData.status !== existing.status && WON_STATUSES.includes(updateData.status)) {
+      await require("./crmSignalService").onLeadWon(updated);
+    }
+
     // ── Emit all collected audit events ───────────────────────────────
     for (const call of auditCalls) {
       logAudit({
@@ -779,6 +784,13 @@ async function reorderKanbanLeads(ownerId, updates = [], performedBy = null) {
 
     if (bulkOps.length > 0) {
       await CrmLead.bulkWrite(bulkOps);
+      const signals = require("./crmSignalService");
+      for (const item of validUpdates) {
+        const before = existingLeadsMap.get(String(item.leadId));
+        if (before && item.status && item.status !== before.status && WON_STATUSES.includes(item.status)) {
+          await signals.onLeadWon({ ...before, status: item.status });
+        }
+      }
     }
 
     const leads = await CrmLead.find(ownerFilter(ownerId))

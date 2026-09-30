@@ -3,6 +3,7 @@ const Business = require("../models/Business");
 const { notifyAdmins, createNotification } = require("../helpers/notificationHelper");
 const { addJob } = require("../utils/queue");
 const { createLeadFromEnquiry } = require("../services/crmLeadIntakeService");
+const crmSignals = require("../services/crmSignalService");
 
 // CREATE ENQUIRY
 exports.createEnquiry = async (req, res) => {
@@ -62,6 +63,8 @@ exports.createEnquiry = async (req, res) => {
       const business = await Business.findById(businessId);
       if (business && business.userId) {
         await createLeadFromEnquiry(newEnquiry);
+        // CRM contact activity for signed-in enquirers (never throws)
+        await crmSignals.onEnquiry(newEnquiry);
         await createNotification({
           recipientId: business.userId,
           recipientType: "User",

@@ -65,7 +65,20 @@ const aiLimiter = createLimiter({
   message:  "Too many AI requests. Please wait a few minutes.",
 });
 
+// ── Public listing endpoints (email capture / activity tracking) ────────────
+const publicCaptureLimiter = createLimiter({
+  windowMs: Number(process.env.CRM_CAPTURE_RATE_WINDOW_MS || 15 * 60 * 1000),
+  max:      Number(process.env.CRM_CAPTURE_RATE_MAX        || 10),
+  message:  "Too many requests. Please try again later.",
+});
+const publicTrackLimiter = createLimiter({
+  windowMs: Number(process.env.CRM_TRACK_RATE_WINDOW_MS || 5 * 60 * 1000),
+  max:      Number(process.env.CRM_TRACK_RATE_MAX        || 120),
+});
+
 module.exports = {
+  publicCaptureLimiter,
+  publicTrackLimiter,
   aiLimiter,
   authLimiter,
   apiLimiter,

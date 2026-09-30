@@ -6,6 +6,30 @@ const CrmContact = require("../models/CrmContact");
 const { createLead } = require("./crmLeadService");
 const { scopeFilter, validBusinessId } = require("./crmScope");
 
+/** Fields the owner may set directly; engagement state is managed by the engagement services. */
+const EDITABLE_FIELDS = ["name", "company", "email", "phone", "alternatePhone", "website", "address", "industry", "source", "notes", "assignedUser", "tags"];
+
+function pickEditable(data = {}) {
+  const out = {};
+  for (const key of EDITABLE_FIELDS) {
+    if (data[key] !== undefined) out[key] = data[key];
+  }
+  if (out.email !== undefined) out.email = String(out.email || "").trim().toLowerCase();
+  if (out.tags !== undefined) {
+    out.tags = (Array.isArray(out.tags) ? out.tags : String(out.tags || "").split(","))
+      .map((t) => String(t).trim().slice(0, 40))
+      .filter(Boolean)
+      .slice(0, 30);
+  }
+  return out;
+}
+
+function duplicateEmailError() {
+  const err = new Error("Another contact of this business already uses this email address");
+  err.status = 409;
+  return err;
+}
+
 class ContactNotFoundError extends Error {
   constructor(message = "Contact not found") {
     super(message);
@@ -22,19 +46,34 @@ async function createContact(ownerId, contactData = {}) {
     throw new Error("ownerId is required to create a contact");
   }
 
-  if (!contactData.name || typeof contactData.name !== "string" || !contactData.name.trim()) {
-    throw new Error("Contact name is required");
+  const hasName = typeof contactData.name === "string" && contactData.name.trim();
+  const email = String(contactData.email || "").trim().toLowerCase();
+  if (!hasName && !email) {
+    throw new Error("Contact name is required (or provide an email address)");
   }
 
+  const businessId = validBusinessId(contactData.businessId);
   const docData = {
-    ...contactData,
-    name: contactData.name.trim(),
+    ...pickEditable(contactData),
+    name: hasName ? contactData.name.trim() : "",
     ownerId,
-    businessId: validBusinessId(contactData.businessId),
+    businessId,
   };
+  if (businessId && email) docData.emailKey = `${businessId}:${email}`;
+  // Manually added contacts are only emailed by journeys when the owner confirms permission.
+  docData.consent = contactData.permissionConfirmed === true
+    ? { basis: "manual_confirmed", capturedAt: new Date() }
+    : { basis: "unknown", capturedAt: null };
+  if (!docData.source) docData.source = "Other";
 
   if (mongoose.connection && mongoose.connection.readyState === 1) {
-    const newContact = await CrmContact.create(docData);
+    let newContact;
+    try {
+      newContact = await CrmContact.create(docData);
+    } catch (error) {
+      if (error.code === 11000) throw duplicateEmailError();
+      throw error;
+    }
     logger.info("CRM Contact created successfully", { contactId: newContact._id, ownerId });
     return newContact;
   }
@@ -57,6 +96,10 @@ async function getContacts(
     sortBy = "createdAt",
     sortOrder = "desc",
     businessId = "",
+    tag = "",
+    emailStatus = "",
+    lifecycle = "",
+    segment = "",
   } = {}
 ) {
   if (!ownerId) {
@@ -80,8 +123,26 @@ async function getContacts(
     query.assignedUser = assignedUser.trim();
   }
 
+  if (tag && typeof tag === "string" && tag.trim()) query.tags = tag.trim();
+  if (["subscribed", "unsubscribed", "bounced"].includes(emailStatus)) query.emailStatus = emailStatus;
+  if (["subscriber", "engaged", "lead", "customer", "inactive"].includes(lifecycle)) query.lifecycle = lifecycle;
+  if (segment === "marketable") {
+    query.emailStatus = "subscribed";
+    query.email = { $gt: "" };
+    query["consent.basis"] = { $in: CrmContact.MARKETING_CONSENT_BASES };
+  } else if (segment === "no_permission") {
+    query["consent.basis"] = { $in: ["unknown", null] };
+  } else if (segment === "in_journey") {
+    const CrmJourneyEnrollment = require("../models/CrmJourneyEnrollment");
+    const ids = await CrmJourneyEnrollment.distinct("contactId", { ...(query.businessId ? { businessId: query.businessId } : {}), status: "active" });
+    query._id = { $in: ids };
+  } else if (segment === "waiting") {
+    query["triage.status"] = "waiting";
+  }
+
   if (search && typeof search === "string" && search.trim()) {
-    const regex = new RegExp(search.trim(), "i");
+    // Escape user input so it is matched literally (and can't be a slow regex).
+    const regex = new RegExp(search.trim().slice(0, 100).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
     query.$or = [
       { name: regex },
       { company: regex },
@@ -92,7 +153,8 @@ async function getContacts(
   }
 
   const sortDirection = sortOrder === "asc" ? 1 : -1;
-  const sortObj = { [sortBy]: sortDirection };
+  const SORTABLE = ["createdAt", "updatedAt", "name", "company", "email", "engagement.lastActivityAt"];
+  const sortObj = { [SORTABLE.includes(sortBy) ? sortBy : "createdAt"]: sortDirection };
 
   if (mongoose.connection && mongoose.connection.readyState === 1) {
     const total = await CrmContact.countDocuments(query);
@@ -148,13 +210,31 @@ async function updateContact(ownerId, contactId, updateData = {}) {
   if (updateData.name !== undefined && (typeof updateData.name !== "string" || !updateData.name.trim())) {
     throw new Error("Contact name cannot be empty");
   }
+  const changes = pickEditable(updateData);
 
   if (mongoose.connection && mongoose.connection.readyState === 1) {
-    const updated = await CrmContact.findOneAndUpdate(
-      { _id: contactId, ...scopeFilter(ownerId) },
-      { $set: updateData },
-      { new: true, runValidators: true }
-    ).populate("assignedUser", "full_name email userImage");
+    if (changes.email !== undefined) {
+      const current = await CrmContact.findOne({ _id: contactId, ...scopeFilter(ownerId) }).select("businessId email emailStatus").lean();
+      if (current && current.email !== changes.email) {
+        const unset = {};
+        if (current.businessId && changes.email) changes.emailKey = `${current.businessId}:${changes.email}`;
+        else unset.emailKey = 1;
+        // A bounce on the old address no longer applies; an unsubscribe still does.
+        if (current.emailStatus === "bounced") changes.emailStatus = "subscribed";
+        if (Object.keys(unset).length) await CrmContact.updateOne({ _id: contactId }, { $unset: unset });
+      }
+    }
+    let updated;
+    try {
+      updated = await CrmContact.findOneAndUpdate(
+        { _id: contactId, ...scopeFilter(ownerId) },
+        { $set: changes },
+        { new: true, runValidators: true }
+      ).populate("assignedUser", "full_name email userImage");
+    } catch (error) {
+      if (error.code === 11000) throw duplicateEmailError();
+      throw error;
+    }
 
     if (!updated) {
       throw new ContactNotFoundError("Contact not found or you lack permission to modify it");
@@ -168,7 +248,7 @@ async function updateContact(ownerId, contactId, updateData = {}) {
     throw new ContactNotFoundError("Contact not found or you lack permission to modify it");
   }
 
-  return { _id: contactId, ownerId, ...updateData };
+  return { _id: contactId, ownerId, ...changes };
 }
 
 /**

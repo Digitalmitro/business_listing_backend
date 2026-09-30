@@ -194,6 +194,9 @@ async function processIncomingReply({
       receivedAt: receivedAt || new Date(),
     });
 
+    // The contact replied: stop journeys that end on a reply (never throws).
+    await require("./crmSignalService").onLeadReplied(targetLead);
+
     logger.info("crm.reply_tracking.processed", "Successfully processed incoming email reply", {
       leadId: targetLead._id,
       classification,

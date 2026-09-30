@@ -63,6 +63,7 @@ const crmAuditRoutes = require("./routes/crmAuditRoutes");
 const crmConfigRoutes = require("./routes/crmConfigRoutes");
 const crmLeadImportRoutes = require("./routes/crmLeadImportRoutes");
 const crmEmailAutomationRoutes = require("./routes/crmEmailAutomationRoutes");
+const crmEngagementRoutes = require("./routes/crmEngagementRoutes");
 const unsubscribeRoutes = require("./routes/unsubscribeRoutes");
 
 const PORT = Number(process.env.PORT || 5000);
@@ -262,6 +263,8 @@ function createApp() {
   app.use("/api/crm/audit", crmAuditRoutes);
   app.use("/api/crm/config", crmConfigRoutes);
   app.use("/api/crm/email-automation", crmEmailAutomationRoutes);
+  // Contact engagement: journeys, templates, imports; /public/* is unauthenticated
+  app.use("/api/crm/engagement", crmEngagementRoutes);
   // Unsubscribe (public)
   app.use("/api/unsubscribe", unsubscribeRoutes);
 

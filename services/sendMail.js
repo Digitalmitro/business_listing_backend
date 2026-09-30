@@ -32,10 +32,11 @@ function getTransporter() {
  * @param {string} to - Recipient email address.
  * @param {string} subject - Subject of the email.
  * @param {string} text - Plain-text body. If it contains HTML tags it is also sent as HTML.
+ * @param {object} [options] - Optional `headers` (e.g. List-Unsubscribe) and `replyTo`.
  * @returns {Promise<{success: boolean, info?: object, error?: Error}>}
  *   Callers MUST check `.success`; the returned object is always truthy.
  */
-async function sendMail(to, subject, text) {
+async function sendMail(to, subject, text, options = {}) {
   try {
     const mailer = getTransporter();
     const mailOptions = {
@@ -45,6 +46,8 @@ async function sendMail(to, subject, text) {
       text: String(text || '').replace(/<[^>]+>/g, ''),
     };
     if (/<[a-z][\s\S]*>/i.test(String(text || ''))) mailOptions.html = text;
+    if (options.headers) mailOptions.headers = options.headers;
+    if (options.replyTo) mailOptions.replyTo = options.replyTo;
 
     const info = await mailer.sendMail(mailOptions);
     logger.info('sendMail.sent', 'Email sent', { to, subject, messageId: info.messageId, response: info.response });

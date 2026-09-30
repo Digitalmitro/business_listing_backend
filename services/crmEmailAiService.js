@@ -137,13 +137,14 @@ function validateRequest(input) {
 }
 
 /**
- * Generates or rewrites an email draft for a trigger.
- * @returns {Promise<{subject: string, body: string, warnings: string[], model: string}>}
+ * One structured-output request to Claude. Returns the parsed JSON object, or throws
+ * an httpError with a user-safe message (never the provider's raw error or key).
+ * Shared by every CRM AI feature so they handle refusals, rate limits and bad output
+ * the same way.
  */
-async function generateEmail(input = {}, { client: injectedClient } = {}) {
-  const request = validateRequest(input);
+async function callStructured({ system, user, schema, event = "crm_ai", maxTokens = 16000, effort = EFFORT }, { client: injectedClient } = {}) {
   if (!injectedClient && !isConfigured()) {
-    throw httpError(503, "The AI email assistant is not configured on this server");
+    throw httpError(503, "The AI assistant is not configured on this server");
   }
   const api = injectedClient || getClient();
 
@@ -151,31 +152,31 @@ async function generateEmail(input = {}, { client: injectedClient } = {}) {
   try {
     response = await api.beta.messages.create({
       model: MODEL,
-      max_tokens: 16000,
+      max_tokens: maxTokens,
       betas: ["server-side-fallback-2026-07-01"],
       fallbacks: "default",
-      output_config: { effort: EFFORT, format: { type: "json_schema", schema: OUTPUT_SCHEMA } },
-      system: systemPrompt(),
-      messages: [{ role: "user", content: userPrompt({ ...request, businessName: input.businessName }) }],
+      output_config: { effort, format: { type: "json_schema", schema } },
+      system,
+      messages: [{ role: "user", content: user }],
     });
   } catch (error) {
     if (error instanceof Anthropic.RateLimitError) {
       throw httpError(429, "The AI assistant is busy. Please try again in a minute.");
     }
     if (error instanceof Anthropic.AuthenticationError || error instanceof Anthropic.PermissionDeniedError) {
-      logger.error("crm_email_ai.auth_failed", "AI email assistant credentials were rejected", { status: error.status });
-      throw httpError(503, "The AI email assistant is not available right now");
+      logger.error(`${event}.auth_failed`, "AI assistant credentials were rejected", { status: error.status });
+      throw httpError(503, "The AI assistant is not available right now");
     }
     if (error instanceof Anthropic.APIError) {
-      logger.error("crm_email_ai.api_error", "AI email generation failed", { status: error.status, error: error.message });
-      throw httpError(502, "The AI assistant could not generate an email. Please try again.");
+      logger.error(`${event}.api_error`, "AI request failed", { status: error.status, error: error.message });
+      throw httpError(502, "The AI assistant could not complete this request. Please try again.");
     }
     throw error;
   }
 
   if (response.stop_reason === "refusal") {
-    logger.warn("crm_email_ai.refused", "AI declined to write an email", { category: response.stop_details?.category });
-    throw httpError(422, "The AI assistant could not write this email. Try rephrasing your instruction.");
+    logger.warn(`${event}.refused`, "AI declined the request", { category: response.stop_details?.category });
+    throw httpError(422, "The AI assistant could not help with this request. Try rephrasing it.");
   }
   if (response.stop_reason === "max_tokens") {
     throw httpError(502, "The AI response was cut off. Please try again.");
@@ -186,9 +187,32 @@ async function generateEmail(input = {}, { client: injectedClient } = {}) {
   try {
     parsed = JSON.parse(text);
   } catch {
-    logger.error("crm_email_ai.bad_output", "AI returned output that is not valid JSON", { length: text.length });
+    logger.error(`${event}.bad_output`, "AI returned output that is not valid JSON", { length: text.length });
     throw httpError(502, "The AI assistant returned an unexpected response. Please try again.");
   }
+  logger.info(`${event}.completed`, "AI request completed", {
+    model: response.model,
+    usageIn: response.usage?.input_tokens,
+    usageOut: response.usage?.output_tokens,
+  });
+  return { parsed, model: response.model };
+}
+
+/**
+ * Generates or rewrites an email draft for a trigger.
+ * @returns {Promise<{subject: string, body: string, warnings: string[], model: string}>}
+ */
+async function generateEmail(input = {}, { client: injectedClient } = {}) {
+  const request = validateRequest(input);
+  const { parsed, model } = await callStructured(
+    {
+      system: systemPrompt(),
+      user: userPrompt({ ...request, businessName: input.businessName }),
+      schema: OUTPUT_SCHEMA,
+      event: "crm_email_ai",
+    },
+    { client: injectedClient }
+  );
 
   const subject = stripUnknownVariables(parsed.subject);
   const body = stripUnknownVariables(parsed.body);
@@ -201,15 +225,16 @@ async function generateEmail(input = {}, { client: injectedClient } = {}) {
     trigger: request.trigger,
     action: request.action,
     tone: request.tone,
-    model: response.model,
-    usageIn: response.usage?.input_tokens,
-    usageOut: response.usage?.output_tokens,
+    model,
   });
-  return { subject: draft.subject, body: draft.body, warnings, model: response.model };
+  return { subject: draft.subject, body: draft.body, warnings, model };
 }
 
 module.exports = {
   MODEL,
+  TONE_GUIDE,
+  httpError,
+  callStructured,
   isConfigured,
   generateEmail,
   stripUnknownVariables,

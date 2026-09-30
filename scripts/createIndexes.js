@@ -23,6 +23,12 @@ const UnsubscribedEmail = require("../models/UnsubscribedEmail");
 const Business = require("../models/Business");
 const CrmEmailAutomation = require("../models/CrmEmailAutomation");
 const CrmEmailDispatch = require("../models/CrmEmailDispatch");
+const CrmContactActivity = require("../models/CrmContactActivity");
+const CrmContactImport = require("../models/CrmContactImport");
+const CrmEngagementSettings = require("../models/CrmEngagementSettings");
+const CrmEngagementTemplate = require("../models/CrmEngagementTemplate");
+const CrmJourney = require("../models/CrmJourney");
+const CrmJourneyEnrollment = require("../models/CrmJourneyEnrollment");
 
 async function ensureBusinessGoogleLocationIndex() {
   const duplicates = await Business.aggregate([
@@ -83,6 +89,12 @@ async function createAllIndexes() {
       { name: "Business", model: Business },
       { name: "CrmEmailAutomation", model: CrmEmailAutomation },
       { name: "CrmEmailDispatch", model: CrmEmailDispatch },
+      { name: "CrmContactActivity", model: CrmContactActivity },
+      { name: "CrmContactImport", model: CrmContactImport },
+      { name: "CrmEngagementSettings", model: CrmEngagementSettings },
+      { name: "CrmEngagementTemplate", model: CrmEngagementTemplate },
+      { name: "CrmJourney", model: CrmJourney },
+      { name: "CrmJourneyEnrollment", model: CrmJourneyEnrollment },
     ];
 
     for (const { name, model } of models) {

@@ -7,6 +7,7 @@ const { addJob } = require("../utils/queue");
 const { createLeadFromAppointment, recordAppointmentCanceled } = require("../services/crmLeadIntakeService");
 const { invalidateCrmSnapshots } = require("../services/crmScope");
 const { onBookingCreated } = require("../services/crmEmailAutomationService");
+const crmSignals = require("../services/crmSignalService");
 
 exports.CreateAppointment = async (req, res) => {
   try {
@@ -66,6 +67,8 @@ exports.CreateAppointment = async (req, res) => {
     await invalidateCrmSnapshots();
     // Business's "Booking created" email automation, if enabled (never throws)
     await onBookingCreated(appointment, user);
+    // CRM contact: record the booking and hand marketing journeys over to booking emails (never throws)
+    await crmSignals.onBookingCreated(appointment, user);
 
     const formattedDate = moment(normalizedDate).format("dddd, MMMM Do YYYY");
     const replacements = {
@@ -180,8 +183,9 @@ exports.CancelAppointment = async (req, res) => {
         .json({ message: "Appointment not found or already canceled" });
     }
 
-    // Log the cancellation on the customer's CRM lead (never throws)
+    // Log the cancellation on the customer's CRM lead and contact (never throw)
     await recordAppointmentCanceled(appointment);
+    await crmSignals.onBookingCanceled(appointment);
 
     // Notify business owner
     const business = appointment.businessId;
@@ -299,8 +303,9 @@ exports.RescheduleAppointment = async (req, res) => {
     const business = oldAppointment.businessId;
     const user = await User.findById(userId);
 
-    // Record the new slot on the same CRM lead (never throws)
+    // Record the new slot on the same CRM lead and contact (never throw)
     await createLeadFromAppointment(newAppointment, user);
+    await crmSignals.onBookingCreated(newAppointment, user);
 
     const formattedDate = moment(normalizedNewDate).format("dddd, MMMM Do YYYY");
     const oldFormattedDate = moment(oldAppointment.appointmentDate).format("dddd, MMMM Do YYYY");

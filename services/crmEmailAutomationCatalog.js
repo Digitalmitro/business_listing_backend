@@ -17,6 +17,7 @@ const TONES = ["professional", "friendly", "promotional"];
 
 /** Dynamic variables. `sample` is what the preview shows when no real lead is chosen. */
 const VARIABLES = {
+  name: { label: "Contact first name", sample: "Priya" },
   lead_name: { label: "Lead name", sample: "Priya Sharma" },
   business_name: { label: "Business name", sample: "Glow Beauty Studio" },
   store_name: { label: "Store / listing name", sample: "Glow Beauty Studio" },
@@ -25,6 +26,8 @@ const VARIABLES = {
   booking_time: { label: "Booking time", sample: "10:30 AM" },
   booking_link: { label: "Booking link", sample: "https://urbancitations.com/bookinghistory" },
   listing_url: { label: "Listing page link", sample: "https://urbancitations.com/glow-beauty-studio/1" },
+  viewed_item: { label: "Item they viewed", sample: "Hair Spa" },
+  viewed_items: { label: "Items they viewed (up to 3)", sample: "Hair Spa, Facial and Manicure" },
 };
 const VARIABLE_KEYS = Object.keys(VARIABLES);
 const BOOKING_VARIABLES = ["booking_date", "booking_time", "booking_link"];

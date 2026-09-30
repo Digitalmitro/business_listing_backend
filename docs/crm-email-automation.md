@@ -4,6 +4,8 @@ Business owners can have the CRM send the right email automatically when a lead 
 
 The setup flow in the UI is **Trigger → Template → Timing → Preview → Enable**.
 
+These are one-email-per-trigger, mostly transactional automations. Multi-step marketing journeys for CRM contacts (listing visitors, imported contacts, re-engagement) are described in `docs/crm-contact-engagement.md`; they share this document's dispatch pipeline.
+
 ## Triggers
 
 | Trigger key | Fires when | Timing measured from | Default |

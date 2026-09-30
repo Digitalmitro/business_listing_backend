@@ -5,6 +5,7 @@ const UnsubscribedEmail = require("../models/UnsubscribedEmail");
 const User = require("../models/User");
 const { CrmLead } = require("../models/CrmLead");
 const logger = require("../utils/logger");
+const { escapeHtml } = require("../services/crmEmailAutomationCatalog");
 
 /**
  * GET or POST /api/unsubscribe
@@ -77,7 +78,10 @@ exports.unsubscribe = async (req, res) => {
       await lead.save();
     }
 
-    logger.info("Global email unsubscription completed", { email: targetEmail, crmLeadsAffected: matchingLeads.length });
+    // 4. Every business's CRM contact with this address stops receiving journeys.
+    const contactsAffected = await require("../services/crmSignalService").onGlobalUnsubscribe(targetEmail, { reason });
+
+    logger.info("Global email unsubscription completed", { email: targetEmail, crmLeadsAffected: matchingLeads.length, crmContactsAffected: contactsAffected });
 
     // Return HTML or JSON depending on Accept header or ?format=html
     if (req.query?.format === "html" || (req.headers.accept && req.headers.accept.includes("text/html"))) {
@@ -98,7 +102,7 @@ exports.unsubscribe = async (req, res) => {
           <div class="card">
             <div class="icon">✓</div>
             <h1>You have been unsubscribed</h1>
-            <p>Your email address (<strong>${targetEmail}</strong>) has been removed from our mailing list and automated CRM campaigns. You will no longer receive these communications.</p>
+            <p>Your email address (<strong>${escapeHtml(targetEmail)}</strong>) has been removed from our mailing list and automated CRM campaigns. You will no longer receive these communications.</p>
           </div>
         </body>
         </html>

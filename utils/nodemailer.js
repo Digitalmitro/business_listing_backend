@@ -53,6 +53,7 @@ async function sendMail(senderEmailId, to, subject, html, unsubscribeLink, optio
 
     // Optional headers
     if (options.replyTo) mailOptions.replyTo = options.replyTo;
+    if (options.headers) mailOptions.headers = options.headers;
     if (options.cc  && options.cc.length)  mailOptions.cc  = options.cc.join(', ');
     if (options.bcc && options.bcc.length) mailOptions.bcc = options.bcc.join(', ');
 

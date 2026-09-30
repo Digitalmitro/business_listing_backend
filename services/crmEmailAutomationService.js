@@ -112,8 +112,13 @@ function appointmentScanWindow(trigger, timing, now = new Date()) {
 
 /** Values for the template variables. */
 function buildVariableValues({ business, lead, customer, appointment, context } = {}) {
+  const fullName = lead?.leadName || customer?.full_name || "";
+  const viewed = appointment?.serviceName || context?.serviceName || business?.businessName || "";
   return {
-    lead_name: lead?.leadName || customer?.full_name || "there",
+    name: String(fullName).trim().split(/\s+/)[0] || "there",
+    viewed_item: viewed,
+    viewed_items: viewed,
+    lead_name: fullName || "there",
     business_name: business?.businessName || "",
     store_name: business?.businessName || "",
     service_name: appointment?.serviceName || context?.serviceName || "",
@@ -474,6 +479,7 @@ async function onListingViewed({ businessId, viewer, serviceName } = {}) {
       dedupeKey: buildDedupeKey("lead_viewed", { leadId: lead._id }),
       leadId: lead._id,
       customerId: viewer._id,
+      category: "marketing",
       context,
     });
   } catch (error) {
@@ -603,21 +609,25 @@ async function loadContext(dispatch) {
   return { automation, business, appointment, customer, lead, owner };
 }
 
-/** Sends through the configured SenderEmail (SMTP) or, if none, the Gmail fallback. */
-async function deliver({ to, subject, html, business, owner }) {
-  const unsubscribeLink = buildUnsubscribeLink(to);
+/**
+ * Sends through the configured SenderEmail (SMTP) or, if none, the Gmail fallback.
+ * Journey emails pass their own per-business `unsubscribeLink` and one-click
+ * List-Unsubscribe `headers`; automation emails use the global unsubscribe link.
+ */
+async function deliver({ to, subject, html, business, owner, unsubscribeLink = buildUnsubscribeLink(to), headers }) {
   const sender = await SenderEmail.findOne({ isActive: true }).select("email").lean();
+  const replyTo = owner?.email && validator.isEmail(String(owner.email)) ? owner.email : undefined;
   if (sender) {
-    const replyTo = owner?.email && validator.isEmail(String(owner.email)) ? owner.email : undefined;
     const nodemailerUtil = require("../utils/nodemailer");
     return nodemailerUtil.sendMail(sender.email, to, subject, html, unsubscribeLink, {
       senderName: business?.businessName || undefined,
       replyTo,
+      headers,
     });
   }
   const sendMailService = require("./sendMail");
   const footer = `<br><br><a href="${unsubscribeLink}" style="color:#888;font-size:12px;">Unsubscribe</a>`;
-  return sendMailService(to, subject, `${html}${footer}`);
+  return sendMailService(to, subject, `${html}${footer}`, { headers, replyTo });
 }
 
 async function addLeadTimelineEntry(leadId, description) {
@@ -650,6 +660,11 @@ async function processDispatch(dispatchId, { now = new Date() } = {}) {
     { new: true }
   ).lean();
   if (!dispatch) return { status: "not_due" };
+  if (dispatch.trigger === "journey") {
+    // Engagement journey emails share the claim/retry pipeline but render and
+    // re-check differently (contact consent, frequency, journey state).
+    return require("./crmJourneyService").processJourneyDispatch(dispatch, { now });
+  }
 
   const label = catalog.TRIGGERS[dispatch.trigger]?.label || dispatch.trigger;
   let ctx;
@@ -754,6 +769,7 @@ async function sendDueDispatches(now = new Date()) {
  */
 async function ensureIndexes() {
   await Promise.all([CrmEmailAutomation.createIndexes(), CrmEmailDispatch.createIndexes()]);
+  await require("./crmJourneyService").ensureIndexes();
 }
 
 /** One scheduler sweep: recover, detect time-based triggers, send what is due. */
@@ -761,8 +777,16 @@ async function runScheduler({ now = new Date() } = {}) {
   if (!dbReady()) return { skipped: true };
   const recovered = await recoverStaleSending(now);
   const evaluated = await evaluateScheduledTriggers(now);
+  // Engagement journeys: derived signals, due steps, import triage. Creates
+  // dispatches that the send below picks up in the same sweep.
+  let engagement = null;
+  try {
+    engagement = await require("./crmJourneyService").runSweep({ now });
+  } catch (error) {
+    logger.error("crm_engagement.sweep_failed", "Engagement journey sweep failed", { error: error.message });
+  }
   const sent = await sendDueDispatches(now);
-  return { recovered, evaluated, ...sent };
+  return { recovered, evaluated, engagement, ...sent };
 }
 
 // ── Delivery log ────────────────────────────────────────────────────────────
@@ -771,7 +795,9 @@ async function listDispatches(businessId, query = {}) {
   const page = Math.max(1, parseInt(query.page, 10) || 1);
   const limit = Math.max(1, Math.min(100, parseInt(query.limit, 10) || 20));
   const filter = { businessId };
-  if (query.trigger && catalog.TRIGGERS[query.trigger]) filter.trigger = query.trigger;
+  if (query.trigger && (catalog.TRIGGERS[query.trigger] || query.trigger === "journey")) filter.trigger = query.trigger;
+  if (query.journeyId && mongoose.isValidObjectId(query.journeyId)) filter.journeyId = query.journeyId;
+  if (query.contactId && mongoose.isValidObjectId(query.contactId)) filter.contactId = query.contactId;
   if (query.status && CrmEmailDispatch.DISPATCH_STATUSES.includes(query.status)) filter.status = query.status;
 
   const [total, logs] = await Promise.all([
@@ -782,6 +808,8 @@ async function listDispatches(businessId, query = {}) {
       .limit(limit)
       .select("-body -dedupeKey")
       .populate("leadId", "leadName email status")
+      .populate("contactId", "name email")
+      .populate("journeyId", "name")
       .lean(),
   ]);
   return { logs, total, page, limit, totalPages: Math.ceil(total / limit) || 1 };
@@ -790,6 +818,10 @@ async function listDispatches(businessId, query = {}) {
 module.exports = {
   QUEUE_NAME,
   MAX_ATTEMPTS,
+  createDispatch,
+  enqueueSend,
+  deliver,
+  finish,
   buildDedupeKey,
   nextRetryAt,
   appointmentScanWindow,
