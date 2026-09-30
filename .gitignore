@@ -66,3 +66,6 @@ temp/
 .DS_Store
 Thumbs.db
 Desktop.inistorage/
+
+# Local backups written by maintenance scripts
+scripts/backups/
