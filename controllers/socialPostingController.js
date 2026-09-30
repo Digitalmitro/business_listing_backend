@@ -22,7 +22,7 @@ exports.publishPost = async (req, res) => {
 
     const failureMessages = (result.results || [])
       .filter((r) => r.status === "FAILURE")
-      .map((r) => `${r.platform}: ${r.failureReason}`)
+      .map((r) => `${socialPostingService.platformDisplayName(r.platform)}: ${r.failureReason}`)
       .join("; ");
 
     return res.status(result.success ? 200 : 400).json({
@@ -34,7 +34,8 @@ exports.publishPost = async (req, res) => {
     });
   } catch (error) {
     logger.error("Error publishing unified social media post", { error: error.message });
-    const isClientError = /Unsupported platform|must contain either|Media URL|Invalid media URL|Instagram requires/.test(error.message);
+    const isClientError = error.status === 400
+      || /Unsupported platform|must contain either|Media URL|Invalid media URL|Instagram requires/.test(error.message);
     return res.status(isClientError ? 400 : 500).json({
       success: false,
       message: error.message,

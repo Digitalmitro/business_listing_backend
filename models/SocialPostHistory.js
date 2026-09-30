@@ -6,7 +6,12 @@ const platformResultSchema = new mongoose.Schema(
     platform: { type: String, required: true },
     status: { type: String, enum: ["SUCCESS", "FAILURE"], required: true },
     externalPostId: { type: String },
+    externalPostUrl: { type: String },
+    providerState: { type: String },
+    targetName: { type: String },
     failureReason: { type: String },
+    errorCode: { type: String },
+    reconnectRequired: { type: Boolean },
   },
   { _id: false }
 );

@@ -3,6 +3,7 @@
 const mongoose = require("mongoose");
 const logger = require("../utils/logger");
 const socialIntegrationService = require("./socialIntegrationService");
+const googleBusinessPostService = require("./googleBusinessPostService");
 const SocialPostHistory = require("../models/SocialPostHistory");
 const ScheduledSocialPost = require("../models/ScheduledSocialPost");
 const { addJob } = require("../utils/queue");
@@ -47,6 +48,69 @@ function normalizeMediaList(media) {
 }
 
 /**
+ * Google Business Profile has its own OAuth connection (GoogleBusinessConnection) rather than a
+ * SocialConnection, so it is publishable here without being an OAuth entry in SUPPORTED_PLATFORMS.
+ */
+const GOOGLE_BUSINESS = "google_business";
+
+function publishablePlatforms() {
+  return [...Object.keys(socialIntegrationService.SUPPORTED_PLATFORMS), GOOGLE_BUSINESS];
+}
+
+function platformDisplayName(platform) {
+  if (platform === GOOGLE_BUSINESS) return "Google Business Profile";
+  return socialIntegrationService.SUPPORTED_PLATFORMS[platform]?.name || platform;
+}
+
+function normalizePlatforms(platforms) {
+  if (!Array.isArray(platforms) || platforms.length === 0) {
+    throw new Error("At least one social media platform must be selected");
+  }
+  const supported = publishablePlatforms();
+  const normalized = [];
+  for (const p of platforms) {
+    const value = String(p).toLowerCase().trim();
+    if (!supported.includes(value)) {
+      throw new Error(`Unsupported platform: '${p}'. Supported platforms: ${supported.join(", ")}`);
+    }
+    if (!normalized.includes(value)) normalized.push(value);
+  }
+  return normalized;
+}
+
+/**
+ * Validates content once for publish and schedule so a scheduled post fails at submit time,
+ * not hours later in the worker.
+ */
+function validatePostContent(platforms, captionStr, media, platformOptions) {
+  if (!captionStr && media.length === 0) {
+    throw new Error("Post must contain either caption text or attached media");
+  }
+  if (platforms.includes("instagram") && media.length === 0) {
+    throw new Error("Instagram requires at least one attached image or video URL");
+  }
+  if (platforms.includes(GOOGLE_BUSINESS)) {
+    googleBusinessPostService.validatePostInput({
+      text: captionStr,
+      imageUrl: media.find((m) => m.type === "image")?.url || "",
+      videoUrl: media.find((m) => m.type === "video")?.url || "",
+      ...((platformOptions && platformOptions[GOOGLE_BUSINESS]) || {}),
+    });
+  }
+}
+
+function publishToPlatform(user, platform, postData) {
+  if (platform === GOOGLE_BUSINESS) return googleBusinessPostService.publishLocalPost(user, postData);
+  return socialIntegrationService.verifyOrPostToPlatform(user, platform, postData);
+}
+
+/** Display-only label for the post target (e.g. the Google location title), never trusted for routing. */
+function targetNameFor(platform, options = {}) {
+  const raw = platform === GOOGLE_BUSINESS ? options.locationTitle : null;
+  return raw ? String(raw).trim().slice(0, 200) : undefined;
+}
+
+/**
  * Publishes content immediately across selected social media platforms.
  * Handles partial posting failures by recording exact per-platform outcomes without aborting other broadcasts.
  * @param {Object} user - Authenticated user; connections are loaded by user ID from SocialConnection.
@@ -58,58 +122,46 @@ async function publishUnifiedPost(user, { caption = "", media = [], platforms = 
     throw new Error("User authentication required for publishing social media posts");
   }
 
-  if (!Array.isArray(platforms) || platforms.length === 0) {
-    throw new Error("At least one social media platform must be selected");
-  }
-
-  const normalizedPlatforms = [];
-  for (const p of platforms) {
-    const normalized = String(p).toLowerCase().trim();
-    if (!socialIntegrationService.SUPPORTED_PLATFORMS[normalized]) {
-      throw new Error(`Unsupported platform: '${p}'. Supported platforms: ${Object.keys(socialIntegrationService.SUPPORTED_PLATFORMS).join(", ")}`);
-    }
-    if (!normalizedPlatforms.includes(normalized)) {
-      normalizedPlatforms.push(normalized);
-    }
-  }
-
+  const normalizedPlatforms = normalizePlatforms(platforms);
   const captionStr = typeof caption === "string" ? caption.trim() : "";
   const normalizedMedia = normalizeMediaList(media);
-
-  if (!captionStr && normalizedMedia.length === 0) {
-    throw new Error("Post must contain either caption text or attached media");
-  }
-
-  if (normalizedPlatforms.includes("instagram") && normalizedMedia.length === 0) {
-    throw new Error("Instagram requires at least one attached image or video URL");
-  }
+  const options = platformOptions && typeof platformOptions === "object" ? platformOptions : {};
+  validatePostContent(normalizedPlatforms, captionStr, normalizedMedia, options);
 
   const imageUrl = normalizedMedia.find((m) => m.type === "image")?.url || "";
   const videoUrl = normalizedMedia.find((m) => m.type === "video")?.url || "";
 
   const results = [];
   for (const platform of normalizedPlatforms) {
+    const targetName = targetNameFor(platform, options[platform]);
     try {
-      const postRes = await socialIntegrationService.verifyOrPostToPlatform(user, platform, {
+      const postRes = await publishToPlatform(user, platform, {
         text: captionStr,
         imageUrl,
         videoUrl,
-        ...(platformOptions[platform] || {}),
+        ...(options[platform] || {}),
       });
 
       results.push({
         platform,
         status: "SUCCESS",
         externalPostId: String(postRes.postId || postRes.id || `${platform}_post_${Date.now()}`),
+        ...(postRes.postUrl ? { externalPostUrl: postRes.postUrl } : {}),
+        ...(postRes.state ? { providerState: postRes.state } : {}),
+        ...(targetName ? { targetName } : {}),
       });
       logger.info(`Unified post published successfully to ${platform}`, { userId: user._id, postId: postRes.postId });
     } catch (err) {
       const errorDetail = err.response?.data?.detail || err.response?.data?.error?.message || err.response?.data?.message || err.message || "Unknown error occurred while publishing to platform";
+      const reconnectRequired = Boolean(err.reconnectRequired) || err.name === "RevokedPermissionError";
       logger.error(`Unified post failed for ${platform}`, { error: errorDetail, userId: user._id });
       results.push({
         platform,
         status: "FAILURE",
         failureReason: errorDetail,
+        ...(err.code && typeof err.code === "string" ? { errorCode: err.code } : {}),
+        ...(reconnectRequired ? { reconnectRequired: true } : {}),
+        ...(targetName ? { targetName } : {}),
       });
     }
   }
@@ -198,9 +250,6 @@ async function scheduleUnifiedPost(user, { caption = "", media = [], platforms =
   if (!user || !user._id) {
     throw new Error("User authentication required for scheduling posts");
   }
-  if (!Array.isArray(platforms) || platforms.length === 0) {
-    throw new Error("At least one social media platform must be selected");
-  }
   if (!scheduledFor || isNaN(new Date(scheduledFor).getTime())) {
     throw new Error("Valid scheduledFor timestamp (UTC format) is required");
   }
@@ -212,25 +261,10 @@ async function scheduleUnifiedPost(user, { caption = "", media = [], platforms =
     throw new Error("Scheduled time must be in the future");
   }
 
-  const normalizedPlatforms = [];
-  for (const p of platforms) {
-    const normalized = String(p).toLowerCase().trim();
-    if (!socialIntegrationService.SUPPORTED_PLATFORMS[normalized]) {
-      throw new Error(`Unsupported platform: '${p}'`);
-    }
-    if (!normalizedPlatforms.includes(normalized)) normalizedPlatforms.push(normalized);
-  }
-
+  const normalizedPlatforms = normalizePlatforms(platforms);
   const captionStr = typeof caption === "string" ? caption.trim() : "";
   const normalizedMedia = normalizeMediaList(media);
-
-  if (!captionStr && normalizedMedia.length === 0) {
-    throw new Error("Post must contain either caption text or attached media");
-  }
-
-  if (normalizedPlatforms.includes("instagram") && normalizedMedia.length === 0) {
-    throw new Error("Instagram requires at least one attached image or video URL");
-  }
+  validatePostContent(normalizedPlatforms, captionStr, normalizedMedia, platformOptions || {});
 
   const docData = {
     userId: user._id,
@@ -311,6 +345,8 @@ async function cancelScheduledPost(userOrId, scheduledPostId) {
 }
 
 module.exports = {
+  GOOGLE_BUSINESS,
+  platformDisplayName,
   publishUnifiedPost,
   getUserPostingHistory,
   scheduleUnifiedPost,

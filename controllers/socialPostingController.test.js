@@ -61,3 +61,26 @@ test("getHistory scopes the request through the authenticated user object", asyn
   assert.equal(res.statusCode, 200);
   assert.equal(receivedUser, user);
 });
+
+test("publishPost answers Google validation errors as 400 and names platforms readably", async (context) => {
+  context.mock.method(service, "publishUnifiedPost", async () => {
+    const error = new Error("Select the Google Business Profile location to post to.");
+    error.status = 400;
+    throw error;
+  });
+  const invalid = response();
+  await controller.publishPost({ user: { _id: "u1" }, body: { caption: "hi", platforms: ["google_business"] } }, invalid);
+  assert.equal(invalid.statusCode, 400);
+
+  context.mock.method(service, "publishUnifiedPost", async () => ({
+    success: false,
+    overallStatus: "FAILURE",
+    postHistory: {},
+    results: [{ platform: "google_business", status: "FAILURE", failureReason: "Reconnect it.", reconnectRequired: true }],
+  }));
+  const failed = response();
+  await controller.publishPost({ user: { _id: "u1" }, body: { caption: "hi", platforms: ["google_business"] } }, failed);
+  assert.equal(failed.statusCode, 400);
+  assert.equal(failed.body.message, "Google Business Profile: Reconnect it.");
+  assert.equal(failed.body.results[0].reconnectRequired, true);
+});

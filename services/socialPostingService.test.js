@@ -106,3 +106,95 @@ test("scheduleUnifiedPost rejects browser-only media URLs", async () => {
     /Media URL must be a public http\(s\) address/
   );
 });
+
+test("publishUnifiedPost routes google_business to the local-post publisher and records the post link", async (context) => {
+  const googleBusinessPostService = require("./googleBusinessPostService");
+  const social = context.mock.method(socialIntegrationService, "verifyOrPostToPlatform", async () => ({ postId: "fb-1" }));
+  let received;
+  context.mock.method(googleBusinessPostService, "publishLocalPost", async (_user, postData) => {
+    received = postData;
+    return { postId: "accounts/1/locations/2/localPosts/3", postUrl: "https://local.google.com/post/3", state: "LIVE" };
+  });
+
+  const result = await publishUnifiedPost(
+    { _id: "507f1f77bcf86cd799439011", tenantId: "507f1f77bcf86cd799439012" },
+    {
+      caption: "Open late tonight",
+      media: [{ type: "image", url: "https://cdn.example.com/post.jpg" }],
+      platforms: ["google_business"],
+      platformOptions: { google_business: { accountName: "accounts/1", locationName: "locations/2", locationTitle: "Acme Downtown" } },
+    }
+  );
+
+  assert.equal(social.mock.callCount(), 0);
+  assert.equal(received.locationName, "locations/2");
+  assert.equal(received.imageUrl, "https://cdn.example.com/post.jpg");
+  assert.equal(result.overallStatus, "SUCCESS");
+  assert.deepEqual(
+    { ...result.results[0] },
+    {
+      platform: "google_business",
+      status: "SUCCESS",
+      externalPostId: "accounts/1/locations/2/localPosts/3",
+      externalPostUrl: "https://local.google.com/post/3",
+      providerState: "LIVE",
+      targetName: "Acme Downtown",
+    }
+  );
+  assert.equal(result.postHistory.results[0].externalPostUrl, "https://local.google.com/post/3");
+});
+
+test("publishUnifiedPost flags reconnect-required Google failures without failing other platforms", async (context) => {
+  const googleBusinessPostService = require("./googleBusinessPostService");
+  context.mock.method(socialIntegrationService, "verifyOrPostToPlatform", async () => ({ postId: "threads-1" }));
+  context.mock.method(googleBusinessPostService, "publishLocalPost", async () => {
+    throw new googleBusinessPostService.GoogleBusinessPostError("Reconnect it to keep posting.", { code: "RECONNECT_REQUIRED", reconnectRequired: true });
+  });
+  const result = await publishUnifiedPost(
+    { _id: "507f1f77bcf86cd799439011", tenantId: "507f1f77bcf86cd799439012" },
+    {
+      caption: "Hello",
+      platforms: ["threads", "google_business"],
+      platformOptions: { google_business: { accountName: "accounts/1", locationName: "locations/2" } },
+    }
+  );
+  const google = result.results.find((r) => r.platform === "google_business");
+  assert.equal(result.overallStatus, "PARTIAL_SUCCESS");
+  assert.equal(google.status, "FAILURE");
+  assert.equal(google.reconnectRequired, true);
+  assert.equal(google.errorCode, "RECONNECT_REQUIRED");
+});
+
+test("publish and schedule reject invalid Google posts before contacting any provider", async (context) => {
+  const verify = context.mock.method(socialIntegrationService, "verifyOrPostToPlatform", async () => ({ postId: "x" }));
+  const user = { _id: "507f1f77bcf86cd799439011", tenantId: "507f1f77bcf86cd799439012" };
+  await assert.rejects(
+    publishUnifiedPost(user, { caption: "hi", platforms: ["facebook", "google_business"], platformOptions: { facebook: { pageId: "p" } } }),
+    (error) => error.status === 400 && /Select the Google Business Profile location/.test(error.message)
+  );
+  await assert.rejects(
+    scheduleUnifiedPost(user, {
+      caption: "hi",
+      platforms: ["google_business"],
+      media: [{ type: "video", url: "https://cdn.example.com/v.mp4" }],
+      platformOptions: { google_business: { accountName: "accounts/1", locationName: "locations/2" } },
+      scheduledFor: new Date(Date.now() + 3600_000).toISOString(),
+    }),
+    /photos only/
+  );
+  assert.equal(verify.mock.callCount(), 0);
+});
+
+test("scheduleUnifiedPost accepts google_business and keeps the location selection for the worker", async () => {
+  const result = await scheduleUnifiedPost(
+    { _id: "507f1f77bcf86cd799439011", tenantId: "507f1f77bcf86cd799439012" },
+    {
+      caption: "Scheduled Google post",
+      platforms: ["google_business"],
+      platformOptions: { google_business: { accountName: "accounts/1", locationName: "locations/2" } },
+      scheduledFor: new Date(Date.now() + 60_000).toISOString(),
+    }
+  );
+  assert.deepEqual(result.scheduledPost.platforms, ["google_business"]);
+  assert.equal(result.scheduledPost.platformOptions.google_business.locationName, "locations/2");
+});

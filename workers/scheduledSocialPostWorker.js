@@ -52,8 +52,11 @@ const scheduledSocialPostWorker = new Worker(
 
       scheduledPost.status = result.success ? "published" : "failed";
       scheduledPost.results = result.results;
-      if (!result.success && result.results && result.results[0]?.error) {
-        scheduledPost.error = result.results[0].error;
+      if (!result.success) {
+        scheduledPost.error = (result.results || [])
+          .filter((r) => r.status === "FAILURE")
+          .map((r) => `${socialPostingService.platformDisplayName(r.platform)}: ${r.failureReason}`)
+          .join("; ") || "Publishing failed";
       }
       await scheduledPost.save();
 

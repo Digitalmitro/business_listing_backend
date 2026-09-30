@@ -197,6 +197,9 @@ exports.getProfiles = async (req, res) => {
     });
   } catch (error) {
     logger.error("Error fetching Google Business Profiles", { error: error.message });
+    if (!error.response && /reconnect is required/i.test(error.message || "")) {
+      return res.status(401).json({ success: false, message: "Google authorization expired or was revoked; reconnect is required" });
+    }
     const httpStatus = error.response?.status;
     if (httpStatus === 429) {
       return res.status(429).json({ success: false, message: "Google API rate limit exceeded. Please wait a moment and try again." });

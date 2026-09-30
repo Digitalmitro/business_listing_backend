@@ -168,3 +168,14 @@ test("importLocation requires locationName in the request body", async () => {
   await controller.importLocation({ user: { _id: "u1" }, body: {} }, res);
   assert.equal(res.statusCode, 400);
 });
+
+test("getProfiles answers 401 (so the UI offers Reconnect) when the Google grant was revoked during refresh", async (context) => {
+  context.mock.method(service, "connection", async () => ({ status: "connected" }));
+  context.mock.method(service, "fetchAllProfilesForUser", async () => {
+    throw new Error("Google authorization was revoked; reconnect is required");
+  });
+  const res = response();
+  await controller.getProfiles({ user: { _id: "u1", tenantId: "t1" } }, res);
+  assert.equal(res.statusCode, 401);
+  assert.match(res.body.message, /reconnect is required/);
+});
