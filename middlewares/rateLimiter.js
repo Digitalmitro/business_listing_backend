@@ -58,7 +58,15 @@ const crmWriteLimiter = createLimiter({
   max:      Number(process.env.CRM_WRITE_RATE_MAX        || 200),
 });
 
+// ── AI drafting: each call spends model tokens ───────────────────────────────
+const aiLimiter = createLimiter({
+  windowMs: Number(process.env.CRM_AI_RATE_WINDOW_MS || 15 * 60 * 1000),
+  max:      Number(process.env.CRM_AI_RATE_MAX        || 30),
+  message:  "Too many AI requests. Please wait a few minutes.",
+});
+
 module.exports = {
+  aiLimiter,
   authLimiter,
   apiLimiter,
   webhookLimiter,

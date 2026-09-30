@@ -6,6 +6,7 @@ const { notifyAdmins, createNotification } = require("../helpers/notificationHel
 const { addJob } = require("../utils/queue");
 const { createLeadFromAppointment, recordAppointmentCanceled } = require("../services/crmLeadIntakeService");
 const { invalidateCrmSnapshots } = require("../services/crmScope");
+const { onBookingCreated } = require("../services/crmEmailAutomationService");
 
 exports.CreateAppointment = async (req, res) => {
   try {
@@ -63,6 +64,8 @@ exports.CreateAppointment = async (req, res) => {
     // Move the customer's lead to Booked, or create it there (idempotent, never throws)
     await createLeadFromAppointment(appointment, user);
     await invalidateCrmSnapshots();
+    // Business's "Booking created" email automation, if enabled (never throws)
+    await onBookingCreated(appointment, user);
 
     const formattedDate = moment(normalizedDate).format("dddd, MMMM Do YYYY");
     const replacements = {

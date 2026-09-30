@@ -20,6 +20,7 @@ const Business = require("../models/Business");
 const { CrmLead, LEAD_STAGE, WON_STATUSES } = require("../models/CrmLead");
 const { createLead, recordLeadBooking } = require("./crmLeadService");
 const { appointmentStartTime } = require("./crmScope");
+const { onLeadCreated } = require("./crmEmailAutomationService");
 const logger = require("../utils/logger");
 
 const ENQUIRY_SOURCE = "Business Profile Enquiry";
@@ -126,7 +127,7 @@ async function createLeadFromEnquiry(enquiry) {
       `Submitted via the ${business.businessName} profile enquiry form.`,
     ].filter(Boolean).join("\n");
 
-    return await createIntakeLead({
+    const lead = await createIntakeLead({
       business,
       sourceModel: "Enquiry",
       sourceId: enquiry._id,
@@ -139,6 +140,9 @@ async function createLeadFromEnquiry(enquiry) {
         notes,
       },
     });
+    // Business's "New lead" email automation, if enabled (never throws)
+    await onLeadCreated(lead);
+    return lead;
   } catch (error) {
     logger.error("crm_intake.enquiry_failed", { enquiryId: enquiry?._id, error: error.message });
     return null;

@@ -130,6 +130,14 @@ const scheduledSocialPostQueue = createQueue('scheduled-social-post', {
   },
 });
 
+const crmEmailAutomationQueue = createQueue('crm-email-automation', {
+  connection: redisConnection,
+  defaultJobOptions: {
+    attempts: defaultAttempts,
+    backoff: { type: defaultBackoffType, delay: defaultDelay },
+  },
+});
+
 const queues = {
   'email-campaigns': emailQueue,
   'welcome-email': welcomeQueue,
@@ -141,6 +149,7 @@ const queues = {
   'booking-email': bookingQueue,
   'lead-follow-up': leadFollowUpQueue,
   'scheduled-social-post': scheduledSocialPostQueue,
+  'crm-email-automation': crmEmailAutomationQueue,
 };
 
 /**
@@ -204,6 +213,7 @@ module.exports = {
   bookingQueue,
   leadFollowUpQueue,
   scheduledSocialPostQueue,
+  crmEmailAutomationQueue,
   redisConnection,
   addJob,
   closeQueueConnections,

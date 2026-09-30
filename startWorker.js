@@ -20,7 +20,9 @@ const enquiryWorker = require("./workers/enquiryWorker");
 const bookingWorker = require("./workers/bookingWorker");
 const leadFollowUpWorker = require("./workers/leadFollowUpWorker");
 const scheduledSocialPostWorker = require("./workers/scheduledSocialPostWorker");
+const crmEmailAutomationWorker = require("./workers/crmEmailAutomationWorker");
 const { startFollowUpScheduler } = require("./workers/leadFollowUpWorker");
+const { startEmailAutomationScheduler } = require("./workers/crmEmailAutomationWorker");
 
 const workers = [
   emailWorker,
@@ -33,6 +35,7 @@ const workers = [
   bookingWorker,
   leadFollowUpWorker,
   scheduledSocialPostWorker,
+  crmEmailAutomationWorker,
 ];
 const workerNames = [
   "email-campaigns",
@@ -45,6 +48,7 @@ const workerNames = [
   "booking-email",
   "lead-followup-scheduler",
   "scheduled-social-post",
+  "crm-email-automation",
 ];
 
 let resourceMonitor;
@@ -56,6 +60,7 @@ async function startWorkers() {
   resourceMonitor = new ResourceMonitor({ logger });
   resourceMonitor.start();
   startFollowUpScheduler();
+  startEmailAutomationScheduler();
   logger.info("workers.ready", "Queue workers are ready", { workerNames });
   if (typeof process.send === "function") process.send("ready");
 }

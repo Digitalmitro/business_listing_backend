@@ -537,6 +537,21 @@ Base path: `/api/crm/leads/followup`
 | POST | `/api/crm/leads/followup/retry` | Retry a failed follow-up from request data. |
 | POST | `/api/crm/leads/followup/:id/trigger` | Trigger follow-up for one lead. |
 
+### Email automation
+
+Base path: `/api/crm/email-automation`. All routes require JWT and a `businessId` the caller owns (admins act on the owner's CRM). Full behaviour: [docs/crm-email-automation.md](docs/crm-email-automation.md).
+
+| Method | Path | Main input / purpose |
+| --- | --- | --- |
+| GET | `/api/crm/email-automation/catalog` | Triggers, variables, ready-made templates, `aiEnabled`. |
+| GET | `/api/crm/email-automation` | Query `businessId`; every trigger with template, timing, enabled flag and sent/failed/skipped/scheduled counts. |
+| PUT | `/api/crm/email-automation/:trigger` | JSON: `businessId`, `subject`, `body`, `timing`; optional `presetKey`, `name`, `tone`, `source`, `approved`, `isEnabled`. |
+| PATCH | `/api/crm/email-automation/:trigger/enabled` | JSON: `businessId`, `isEnabled`; enabling requires an approved template. |
+| POST | `/api/crm/email-automation/preview` | JSON: `businessId`, `trigger`, `subject`, `body`, optional `leadId`; rendered preview. |
+| POST | `/api/crm/email-automation/ai/generate` | JSON: `businessId`, `trigger`, `action` (`generate`/`rewrite`), `tone`, `instruction`, `subject`, `body`, `previousSubject`; returns a draft only. AI rate limiter applies. |
+| GET | `/api/crm/email-automation/logs` | Query `businessId`, optional `trigger`, `status`, `page`, `limit`; delivery log. |
+| POST | `/api/crm/email-automation/events/view` | JSON: `businessId`, optional `serviceName`; signed-in listing view for the "Lead viewed your store" trigger. Always `202`. |
+
 ### Replies
 
 Base path: `/api/crm/leads/replies`
@@ -589,7 +604,7 @@ This section records the implemented route state; it is not a recommendation to 
 - `routes/footerRoutes.js` defines `GET /footer-links`, but `server.js` does not mount that router. The endpoint currently returns `404`; only `PUT /admin/update-footer` is reachable.
 - `server.js` prepares/rate-limits `/api/email-campaign/delivery-webhook`, but no route handler is mounted at that path.
 - `getAdminBlogs` and `insertManyVerticals` controller functions exist but have no mounted routes.
-- `GET /api/unsubscribe` is declared twice; the email-campaign handler is mounted first and shadows the generic GET handler.
+- `GET /api/unsubscribe` is declared twice; the email-campaign handler is mounted first and handles `?userId=` links. Requests without `userId` (for example `?email=` links in CRM automation emails) fall through to the generic unsubscribe controller.
 
 ## Rate limiting
 
@@ -598,6 +613,7 @@ Rate limiting is enabled when `NODE_ENV=production` or `ENABLE_RATE_LIMITING=tru
 - `/api/auth` receives both the auth limiter and the general `/api` limiter.
 - `/api/crm/leads/replies/reply-webhook` receives both the webhook limiter and the general `/api` limiter.
 - all `/api/*` routes receive the general API limiter.
+- `POST /api/crm/email-automation/ai/generate` additionally receives the AI limiter (`CRM_AI_RATE_MAX` per `CRM_AI_RATE_WINDOW_MS`, default 30 per 15 minutes).
 - `/admin`, `/notification`, and `/message` paths are not covered by the general `/api` limiter.
 
 See `.env.example` and `.env.observability.example` for runtime configuration.

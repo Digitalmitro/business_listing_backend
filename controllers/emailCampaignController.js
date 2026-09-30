@@ -771,10 +771,12 @@ const getUsers = async (req, res) => {
   }
 };
 
-const unsubscribe = async (req, res) => {
+const unsubscribe = async (req, res, next) => {
   try {
     const { userId } = req.query;
-    if (!userId) return res.status(400).json({ message: "Invalid user ID" });
+    // Email-based links (e.g. CRM automation emails) are handled by the generic
+    // unsubscribe controller mounted at /api/unsubscribe.
+    if (!userId) return typeof next === "function" ? next() : res.status(400).json({ message: "Invalid user ID" });
     const user = await User.findById(userId);
     if (!user) return res.status(404).json({ message: "User not found" });
     user.subscribedToEmails = false;

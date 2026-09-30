@@ -3,6 +3,7 @@
 const logger = require("../utils/logger");
 const crmLeadService = require("../services/crmLeadService");
 const { readScope, resolveWriteScope } = require("../services/crmScope");
+const { onLeadCreated } = require("../services/crmEmailAutomationService");
 
 /**
  * Owner scope for lead queries: admins see every owner's leads (the admin panel is the
@@ -28,6 +29,8 @@ exports.createLead = async (req, res) => {
       { ...req.body, businessId: scope.businessId },
       req.user._id
     );
+    // Business's "New lead" email automation, if enabled (never throws)
+    await onLeadCreated(lead);
     return res.status(201).json({ success: true, lead });
   } catch (error) {
     logger.error("Error creating CRM lead", { error: error.message });

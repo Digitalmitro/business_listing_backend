@@ -228,6 +228,8 @@ The application includes a fully configuration-driven, production-ready CRM suit
 4. **CRM Audit Logs & CSV Import/Export (`CrmAuditLog`)**: Immutable audit tracking (`create_lead`, `convert_contact`, `send_followup`, `receive_reply`, `import_leads`) with CSV export capabilities, plus batch CSV/Excel spreadsheet upload (`/api/crm/leads/import`) supporting custom fields and status fallbacks.
 5. **Admin CRM Panel (`business_listing_admin/src/views/CRM/`)**: A modern 7-tab CoreUI suite (`CrmPanel.jsx`) providing an Executive Dashboard, Kanban Pipeline board, Contact Directory (with 1-click `Convert to Lead`), Cadence Automation Settings, AI Reply Logs, Scheduled Events Calendar, and System Audit Logs.
 
+6. **Email Automation / AI Email (`CrmEmailAutomation`, `CrmEmailDispatch`)**: Per-business trigger emails for new leads, listing views, bookings, reminders, the booking day, and after-booking thank-yous and follow-ups. Each trigger ships three ready-made templates and an AI (Claude) drafting assistant, and nothing is sent until the owner approves the template. Emails are scheduled by the worker's sweep plus the `crm-email-automation` queue, deduplicated per lead or booking, and logged with their delivery status. Set `ANTHROPIC_API_KEY` to enable the AI assistant. See [docs/crm-email-automation.md](docs/crm-email-automation.md).
+
 ### CRM API Endpoints Summary:
 - `GET/POST /api/crm/leads` — Manage sales opportunities, add activities (`/:id/activities`), and reorder Kanban (`/kanban/reorder`).
 - `POST /api/crm/leads/import` — Multipart CSV/Excel batch upload.
@@ -238,6 +240,7 @@ The application includes a fully configuration-driven, production-ready CRM suit
 - `GET /api/crm/forecast` — Weighted probability revenue forecasting.
 - `GET /api/crm/audit` & `/export` — Filtered audit logs and CSV export.
 - `GET/PUT /api/crm/config/stages` — Dynamic stage ordering & probabilities.
+- `GET/PUT/PATCH /api/crm/email-automation` — Trigger-based lead/booking emails, preview, AI drafts (`/ai/generate`) and delivery log (`/logs`).
 
 ## Tests
 

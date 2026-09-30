@@ -21,6 +21,8 @@ const {
 const ScheduledSocialPost = require("../models/ScheduledSocialPost");
 const UnsubscribedEmail = require("../models/UnsubscribedEmail");
 const Business = require("../models/Business");
+const CrmEmailAutomation = require("../models/CrmEmailAutomation");
+const CrmEmailDispatch = require("../models/CrmEmailDispatch");
 
 async function ensureBusinessGoogleLocationIndex() {
   const duplicates = await Business.aggregate([
@@ -79,6 +81,8 @@ async function createAllIndexes() {
       { name: "ScheduledSocialPost", model: ScheduledSocialPost },
       { name: "UnsubscribedEmail", model: UnsubscribedEmail },
       { name: "Business", model: Business },
+      { name: "CrmEmailAutomation", model: CrmEmailAutomation },
+      { name: "CrmEmailDispatch", model: CrmEmailDispatch },
     ];
 
     for (const { name, model } of models) {
