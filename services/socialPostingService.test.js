@@ -24,34 +24,32 @@ test("publishUnifiedPost passes provider selectors and records success", async (
     {
       caption: "Tenant update",
       media: [{ type: "image", url: "https://cdn.example.com/post.jpg" }],
-      platforms: ["facebook", "pinterest", "threads"],
+      platforms: ["facebook", "threads"],
       platformOptions: {
         facebook: { pageId: "page-1" },
-        pinterest: { boardId: "board-1" },
       },
     }
   );
 
   assert.equal(result.overallStatus, "SUCCESS");
-  assert.equal(result.results.length, 3);
+  assert.equal(result.results.length, 2);
   assert.equal(calls.find((call) => call.platform === "facebook").postData.pageId, "page-1");
-  assert.equal(calls.find((call) => call.platform === "pinterest").postData.boardId, "board-1");
   assert.equal(calls.find((call) => call.platform === "threads").postData.imageUrl, "https://cdn.example.com/post.jpg");
   assert.equal(String(result.postHistory.tenantId), "507f1f77bcf86cd799439012");
 });
 
 test("publishUnifiedPost preserves partial provider outcomes", async (context) => {
   context.mock.method(socialIntegrationService, "verifyOrPostToPlatform", async (_user, platform) => {
-    if (platform === "pinterest") throw new Error("board permission revoked");
+    if (platform === "linkedin") throw new Error("permission revoked");
     return { postId: "threads-post-id" };
   });
   const result = await publishUnifiedPost(
     { _id: "507f1f77bcf86cd799439011", tenantId: "507f1f77bcf86cd799439012" },
-    { caption: "Partial result", platforms: ["threads", "pinterest"] }
+    { caption: "Partial result", platforms: ["threads", "linkedin"] }
   );
   assert.equal(result.overallStatus, "PARTIAL_SUCCESS");
   assert.equal(result.results.find((item) => item.platform === "threads").status, "SUCCESS");
-  assert.match(result.results.find((item) => item.platform === "pinterest").failureReason, /revoked/);
+  assert.match(result.results.find((item) => item.platform === "linkedin").failureReason, /revoked/);
 });
 
 test("getUserPostingHistory validates identity and returns an offline empty page", async () => {

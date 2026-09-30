@@ -11,7 +11,7 @@ const { decrypt } = require("../utils/cryptoUtils");
 const service = require("./socialIntegrationService");
 
 test("provider registry exposes all implemented OAuth integrations", () => {
-  const platforms = ["facebook", "instagram", "threads", "linkedin", "twitter", "pinterest"];
+  const platforms = ["facebook", "instagram", "threads", "linkedin", "twitter"];
   assert.deepEqual(Object.keys(service.SUPPORTED_PLATFORMS), platforms);
   for (const platform of platforms) {
     const config = service.getPlatformConfig(platform);
@@ -130,13 +130,11 @@ test("redacted connection metadata contains selectors but no tokens", () => {
     refreshToken: "encrypted-refresh",
     providerData: {
       pages: [{ id: "page-1", name: "Main Page", access_token: "encrypted-page-token" }],
-      boards: [{ id: "board-1", name: "Main Board", token: "secret" }],
     },
   });
   assert.equal(result.isConnected, true);
   assert.equal(result.platformUsername, "tenant-user");
   assert.deepEqual(result.providerData.pages, [{ id: "page-1", name: "Main Page", image: "" }]);
-  assert.deepEqual(result.providerData.boards, [{ id: "board-1", name: "Main Board" }]);
   assert.equal(result.accessToken, undefined);
   assert.equal(result.refreshToken, undefined);
   assert.equal(JSON.stringify(result).includes("encrypted-page-token"), false);

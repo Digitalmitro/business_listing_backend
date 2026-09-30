@@ -11,7 +11,7 @@ const { addJob } = require("../utils/queue");
  * Social platforms fetch attached media by URL from their own servers, so every media
  * URL must be a publicly reachable http(s) address. Browser-only `blob:` / `data:`
  * object URLs (produced by URL.createObjectURL) can never be fetched by Facebook,
- * Instagram, Threads or Pinterest and would fail with opaque provider errors such as
+ * Instagram or Threads and would fail with opaque provider errors such as
  * "Unsupported state or unable to authenticate data" or
  * "Only photo or video can be accepted as media type".
  */

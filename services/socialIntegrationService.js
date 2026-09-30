@@ -48,14 +48,6 @@ const SUPPORTED_PLATFORMS = Object.freeze({
     scopes: ["tweet.read", "tweet.write", "users.read", "offline.access"],
     credentialHelp: "Use the OAuth 2.0 Client ID and Client Secret, not the API consumer key or app-only bearer token.",
   },
-  pinterest: {
-    name: "Pinterest",
-    authUrl: "https://www.pinterest.com/oauth/",
-    tokenUrl: "https://api.pinterest.com/v5/oauth/token",
-    scopes: ["user_accounts:read", "boards:read", "pins:read", "pins:write"],
-    scopeSeparator: ",",
-    credentialHelp: "Use the Pinterest App ID and App Secret. Publishing requires a selected board and public image URL.",
-  },
 });
 
 const BUFFER_MS = 5 * 60 * 1000;
@@ -175,7 +167,6 @@ function redact(connection) {
         name: page.name,
         image: page.picture?.data?.url || page.image || "",
       })),
-      boards: (providerData.boards || []).map((board) => ({ id: board.id, name: board.name })),
     },
   };
 }
@@ -219,7 +210,7 @@ async function tokenRequest(config, body, codeVerifier, credential) {
   if (codeVerifier) params.set("code_verifier", codeVerifier);
   const headers = { "Content-Type": "application/x-www-form-urlencoded" };
 
-  if (config.platform === "pinterest" || config.platform === "twitter") {
+  if (config.platform === "twitter") {
     headers.Authorization = `Basic ${Buffer.from(`${credential.id}:${credential.secret}`).toString("base64")}`;
   } else {
     params.set("client_secret", credential.secret);
@@ -272,10 +263,6 @@ async function profileFor(config, token, credential) {
   if (config.platform === "twitter") {
     const profile = await apiGet("https://api.x.com/2/users/me", token, { "user.fields": "profile_image_url,username,name" });
     return { id: profile.data.id, username: profile.data.username, name: profile.data.name, image: profile.data.profile_image_url };
-  }
-  if (config.platform === "pinterest") {
-    const profile = await apiGet("https://api.pinterest.com/v5/user_account", token);
-    return { id: profile.username, username: profile.username, name: profile.business_name || profile.username, image: profile.profile_image };
   }
   if (config.platform === "threads") {
     const profile = await apiGet("https://graph.threads.net/v1.0/me", token, {
@@ -380,23 +367,6 @@ async function connectFromCallback(platform, code, state) {
     },
     { upsert: true, new: true, setDefaultsOnInsert: true }
   );
-
-  if (config.platform === "pinterest") {
-    try {
-      const boards = await apiGet("https://api.pinterest.com/v5/boards", decrypt(saved.accessToken));
-      saved.providerData = {
-        ...(saved.providerData || {}),
-        boards: (boards.items || []).map((board) => ({ id: board.id, name: board.name })),
-      };
-      await saved.save();
-    } catch (error) {
-      logger.warn("pinterest.boards.fetch.failed", {
-        userId: transaction.userId,
-        tenantId: transaction.tenantId,
-        error: error.message,
-      });
-    }
-  }
   return { userId: transaction.userId, tenantId: transaction.tenantId, account: saved, returnTo: transaction.returnTo };
 }
 
@@ -777,19 +747,6 @@ async function verifyOrPostToPlatform(user, platform, postData = {}) {
       response = await requestWithRetry(() => axios.post(
         "https://api.x.com/2/tweets",
         { text: tweetText.trim() },
-        { headers: { Authorization: `Bearer ${token}` }, timeout: 15_000 }
-      ));
-    } else if (config.platform === "pinterest") {
-      if (!postData.boardId || !postData.imageUrl) {
-        throw new Error("Pinterest publishing requires a selected board and public image URL");
-      }
-      response = await requestWithRetry(() => axios.post(
-        "https://api.pinterest.com/v5/pins",
-        {
-          board_id: postData.boardId,
-          description: text,
-          media_source: { source_type: "image_url", url: postData.imageUrl },
-        },
         { headers: { Authorization: `Bearer ${token}` }, timeout: 15_000 }
       ));
     }

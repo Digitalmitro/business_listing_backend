@@ -26,7 +26,7 @@ const DASHBOARD_CALENDAR_PREVIEW_DAYS = Number(process.env.DASHBOARD_CALENDAR_PR
 const DASHBOARD_CALENDAR_LIMIT        = Number(process.env.DASHBOARD_CALENDAR_LIMIT        || 6);
 
 // ── Social platforms list – kept in sync with socialIntegrationService ────────
-const SOCIAL_PLATFORMS = (process.env.SOCIAL_PLATFORMS || "facebook,instagram,threads,linkedin,twitter,pinterest").split(",").map(p => p.trim());
+const SOCIAL_PLATFORMS = (process.env.SOCIAL_PLATFORMS || "facebook,instagram,threads,linkedin,twitter").split(",").map(p => p.trim());
 
 /**
  * Retrieve comprehensive executive dashboard metrics for CRM & Social Media modules.
@@ -297,7 +297,6 @@ exports.getDashboardSummary = async (ownerId, options = {}) => {
       { platform: "linkedin", isConnected: true, status: "connected", profileName: "Acme LinkedIn" },
       { platform: "instagram", isConnected: false, status: "not_connected", profileName: "" },
       { platform: "twitter", isConnected: false, status: "not_connected", profileName: "" },
-      { platform: "pinterest", isConnected: false, status: "not_connected", profileName: "" },
     ],
     recentPosts: [
       { _id: "post_1", platform: "linkedin", content: "Excited to launch our new CRM module!", status: "SUCCESS", createdAt: new Date() },

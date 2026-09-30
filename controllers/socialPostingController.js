@@ -141,7 +141,7 @@ exports.cancelScheduledPost = async (req, res) => {
 /**
  * POST /api/social-posting/upload-media
  * Uploads an image or video to Cloudinary and returns a public HTTPS URL that
- * Facebook / Instagram / Threads / Pinterest can fetch when publishing.
+ * Facebook / Instagram / Threads can fetch when publishing.
  */
 exports.uploadMedia = async (req, res) => {
   try {
