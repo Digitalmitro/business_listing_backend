@@ -21,6 +21,8 @@ const { installProcessHandlers } = require("./utils/processHandlers");
 const { ResourceMonitor } = require("./utils/resourceMonitor");
 const { closeQueueConnections, redisConnection } = require("./utils/queue");
 const { authLimiter, apiLimiter, webhookLimiter, crmWriteLimiter } = require("./middlewares/rateLimiter");
+const { hasScriptExtension } = require("./utils/uploadValidation");
+const { uploadDir } = require("./utils/uploadDir");
 
 const authRoutes = require("./routes/authRoutes.js");
 const categoryRoutes = require("./routes/categoryRoutes");
@@ -180,8 +182,15 @@ function createApp() {
     logger.info("rate_limit.enabled", "Rate limiting middleware active");
   }
 
-  const uploadDirectory = path.join(__dirname, "public/uploads");
+  const uploadDirectory = uploadDir();
   fs.mkdirSync(uploadDirectory, { recursive: true });
+  // Uploads are user content: never serve script or web files from here.
+  app.use("/uploads", (req, res, next) => {
+    let requested = req.path;
+    try { requested = decodeURIComponent(req.path); } catch { /* keep raw path */ }
+    if (hasScriptExtension(requested)) return res.status(404).end();
+    return next();
+  });
   app.use("/uploads", express.static(uploadDirectory, {
     setHeaders: (res) => {
       res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");

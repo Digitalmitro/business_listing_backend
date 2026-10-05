@@ -6,8 +6,9 @@ const path = require("node:path");
 const fs = require("node:fs");
 const { authMiddleware } = require("../middlewares/authMiddleware");
 const { importLeads } = require("../controllers/crmLeadImportController");
+const { uploadDir: uploadRoot } = require("../utils/uploadDir");
 
-const uploadDir = path.join(__dirname, "../public/uploads/imports");
+const uploadDir = uploadRoot("imports");
 fs.mkdirSync(uploadDir, { recursive: true });
 
 const storage = multer.diskStorage({

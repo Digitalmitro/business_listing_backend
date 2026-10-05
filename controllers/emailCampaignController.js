@@ -4,7 +4,6 @@
 const mongoose = require("mongoose");
 const moment   = require("moment-timezone");
 const ExcelJS  = require("exceljs");
-const path     = require("path");
 const fs       = require("fs");
 
 const EmailTemplate  = require("../models/EmailTemplate");
@@ -18,6 +17,7 @@ const {
   applyEmailPlaceholders,
   getBusinessPlaceholderData,
 } = require("../utils/emailPlaceholders");
+const { resolveStoredUploadPath } = require("../utils/uploadDir");
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -732,9 +732,7 @@ const deleteCampaign = async (req, res) => {
     // Delete stored attachment files
     for (const att of campaign.attachments || []) {
       try {
-        const absPath = path.isAbsolute(att.storedPath)
-          ? att.storedPath
-          : path.resolve(process.cwd(), att.storedPath);
+        const absPath = resolveStoredUploadPath(att.storedPath);
         if (fs.existsSync(absPath)) fs.unlinkSync(absPath);
       } catch (e) {
         console.warn(`Could not delete attachment file: ${att.storedPath}`, e.message);

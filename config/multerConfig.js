@@ -1,24 +1,48 @@
 // config/multerConfig.js
 const multer = require("multer");
+const fs = require("fs");
 const path = require("path");
+const {
+  uploadFileFilter,
+  attachmentFileFilter,
+  verifyUploadedFiles,
+} = require("../utils/uploadValidation");
+const { uploadDir } = require("../utils/uploadDir");
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    cb(null, "public/uploads/");
+    cb(null, uploadDir());
   },
   filename: (req, file, cb) => {
     cb(null, Date.now() + "-" + file.originalname);
   },
 });
 
-const upload = multer({ storage });
+const multerUpload = multer({ storage, fileFilter: uploadFileFilter });
+
+// Runs the multer middleware, then checks the stored bytes (signature and
+// embedded scripts) before the route handler sees the files.
+const withVerification = (middleware) => (req, res, next) => {
+  middleware(req, res, (err) => {
+    if (err) return next(err);
+    verifyUploadedFiles(req).then(() => next(), next);
+  });
+};
+
+const upload = {
+  single: (name) => withVerification(multerUpload.single(name)),
+  array: (name, maxCount) => withVerification(multerUpload.array(name, maxCount)),
+  fields: (fields) => withVerification(multerUpload.fields(fields)),
+};
 
 // ── Email campaign attachment storage ────────────────────────────────────────
 // Files are stored in a dedicated sub-directory to keep them separate from
 // images and other uploaded assets.
 const attachmentStorage = multer.diskStorage({
   destination: (req, file, cb) => {
-    cb(null, "public/uploads/attachments/");
+    // multer only creates string destinations; a fresh UPLOAD_DIR has no attachments/ yet.
+    const dir = uploadDir("attachments");
+    fs.mkdir(dir, { recursive: true }, (err) => cb(err, dir));
   },
   filename: (req, file, cb) => {
     // Sanitise the original name to avoid path traversal and special chars
@@ -31,6 +55,7 @@ const attachmentStorage = multer.diskStorage({
 const attachmentUpload = multer({
   storage: attachmentStorage,
   limits: { fileSize: 10 * 1024 * 1024 }, // 10 MB hard limit at transport layer
+  fileFilter: attachmentFileFilter,
 });
 
 const dynamicUpload = (req, res, next) => {

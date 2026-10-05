@@ -1,10 +1,11 @@
 const TopCountry = require("../models/TopCountry");
 const fs = require("fs");
 const path = require("path");
+const { uploadDir } = require("../utils/uploadDir");
 
 const deleteFile = (filename) => {
   if (!filename) return;
-  const filePath = path.join(__dirname, "..", "public", "uploads", filename);
+  const filePath = path.join(uploadDir(), filename);
   if (fs.existsSync(filePath)) {
     fs.unlinkSync(filePath);
     console.log("DELETED:", filename);

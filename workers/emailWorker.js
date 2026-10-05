@@ -1,7 +1,6 @@
 // workers/emailWorker.js
 const { Worker } = require("bullmq");
 const { redisConnection } = require("../utils/queue");
-const path = require("path");
 const logger = require("../utils/logger");
 const EmailCampaign = require("../models/EmailCampaign");
 const EmailTemplate = require("../models/EmailTemplate");
@@ -12,6 +11,7 @@ require("../models/SubCategory");
 const Business = require("../models/Business");
 const { sendMail } = require("../utils/nodemailer");
 const { applyEmailPlaceholders, getBusinessPlaceholderData } = require("../utils/emailPlaceholders");
+const { resolveStoredUploadPath } = require("../utils/uploadDir");
 
 /**
  * Build a flat custom-variables map from an array of { key, value } pairs.
@@ -31,9 +31,7 @@ function buildCustomVarsMap(templateVars = [], campaignVars = []) {
 function resolveAttachments(attachments = []) {
   return attachments.map(att => ({
     filename:    att.originalName,
-    path:        path.isAbsolute(att.storedPath)
-                   ? att.storedPath
-                   : path.resolve(process.cwd(), att.storedPath),
+    path:        resolveStoredUploadPath(att.storedPath),
     contentType: att.mimeType || 'application/octet-stream',
   }));
 }
