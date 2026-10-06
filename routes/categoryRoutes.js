@@ -12,7 +12,8 @@ const {
   getAllCategoriesPaginated,
   searchCategories,
 } = require("../controllers/categoryController");
-const { upload } = require("../config/multerConfig");
+// `upload` stores CSV imports on disk; `memoryUpload` keeps icon images in memory for Cloudinary.
+const { upload, memoryUpload } = require("../config/multerConfig");
 
 const router = express.Router();
 
@@ -30,7 +31,7 @@ router.get("/autocomplete", searchCategories);
 
 router.post(
   "/categories",
-  upload.fields([
+  memoryUpload.fields([
     { name: "icon", maxCount: 1 },
     { name: "bgImage", maxCount: 1 },
   ]),
@@ -40,7 +41,7 @@ router.post(
 router.get("/:categoryId", getCategoryById); // ← Get single by ID
 router.put(
   "/:categoryId",
-  upload.fields([
+  memoryUpload.fields([
     { name: "icon", maxCount: 1 },
     { name: "bgImage", maxCount: 1 },
   ]),

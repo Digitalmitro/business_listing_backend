@@ -1,5 +1,7 @@
 const mongoose = require("mongoose");
 const Schema = mongoose.Schema;
+const { ImageAssetSchema } = require("./schemas/imageAsset");
+const { registerImageField } = require("../services/imageStorageService");
 
 // SubCategory Schema
 const SubCategorySchema = new Schema({
@@ -10,10 +12,17 @@ const SubCategorySchema = new Schema({
     type: String,
     required: true,
   },
+  // Display URL of the icon. For Cloudinary-stored icons this equals icon.url;
+  // legacy records keep an absolute /uploads/<file> URL or the default placeholder.
   iconUrl: {
     type: String,
     required: true,
     default: "https://img.icons8.com/fluency/512/business.png",
+  },
+  // Cloudinary asset behind iconUrl (absent for legacy and default icons).
+  icon: {
+    type: ImageAssetSchema,
+    required: false,
   },
   slug: {
     type: String,
@@ -60,4 +69,7 @@ SubCategorySchema.pre("save", function (next) {
   next();
 });
 
-module.exports = mongoose.model("SubCategory", SubCategorySchema);
+const SubCategory = mongoose.model("SubCategory", SubCategorySchema);
+registerImageField(SubCategory, "icon");
+
+module.exports = SubCategory;

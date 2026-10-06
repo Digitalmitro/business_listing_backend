@@ -1,10 +1,24 @@
 const SubCategory = require("../models/SubCategory");
 const Category = require("../models/Category");
-const { uploadToCloudinary } = require("../config/Cloudinary");
+const images = require("../services/imageStorageService");
 const csv = require("csv-parser");
 const fs = require("fs");
 
+// Image errors carry their own HTTP status (400 invalid image, 502 Cloudinary down) and a
+// message that is safe to show to the admin; anything else is reported generically.
+function respondError(res, error, fallbackMessage) {
+  const status = Number.isInteger(error.status) && error.status >= 400 ? error.status : 500;
+  if (status >= 500) console.error(error);
+  const safeMessage = error.isOperational || status < 500 ? error.message : fallbackMessage;
+  return res.status(status).json({ message: safeMessage, error: error.message });
+}
+
+function wantsIconRemoval(body) {
+  return ["true", "1", "yes"].includes(String(body && body.removeIcon).toLowerCase());
+}
+
 exports.createSubCategory = async (req, res) => {
+  let staged = null;
   try {
     const { name, description, category } = req.body;
 
@@ -18,10 +32,6 @@ exports.createSubCategory = async (req, res) => {
     if (!existingCategory) {
       return res.status(404).json({ message: "Category not found" });
     }
-
-    const iconUrl = `${req.protocol}://${req.get("host")}/uploads/${
-      req.file.filename
-    }`;
 
     let id = 1;
 
@@ -39,18 +49,25 @@ exports.createSubCategory = async (req, res) => {
       slug,
       category,
       description,
-      iconUrl,
     });
 
-    await subCategory.save();
+    // Validate the bytes and upload to Cloudinary FIRST; the record is created only
+    // once the asset exists, so a failed upload never leaves a broken record.
+    staged = await images.stageImageUpload(subCategory, req.file, { kind: "subcategory" });
+
+    try {
+      await subCategory.save();
+    } catch (saveError) {
+      // Nothing was written: drop the asset we just uploaded unless another record uses it.
+      await images.discardStagedUpload(staged);
+      throw saveError;
+    }
 
     res
       .status(201)
       .json({ message: "SubCategory created successfully", subCategory });
   } catch (error) {
-    res
-      .status(500)
-      .json({ message: "Error creating subcategory", error: error.message });
+    respondError(res, error, "Error creating subcategory");
   }
 };
 
@@ -61,7 +78,7 @@ exports.getSubCategories = async (req, res) => {
       return res.status(400).json({ message: "Category ID is required" });
     }
     const subCategories = await SubCategory.find({ category: categoryId })
-      .populate("category", "name iconUrl bgImage -_id") // Populate specific fields
+      .populate("category", "name iconUrl icon bgImage -_id") // Populate specific fields
       .select("-__v -createdAt -updatedAt");
     if (subCategories.length === 0) {
       return res
@@ -77,6 +94,7 @@ exports.getSubCategories = async (req, res) => {
         name: subCategory.name,
         slug: subCategory.slug,
         iconUrl: subCategory.iconUrl,
+        icon: subCategory.icon,
       })),
     });
   } catch (error) {
@@ -105,7 +123,7 @@ exports.getSubCategoriesByCategoryIds = async (req, res) => {
     const subCategories = await SubCategory.find({
       category: { $in: categoryIds },
     })
-      .populate("category", "name iconUrl bgImage")
+      .populate("category", "name iconUrl icon bgImage")
       .select("-__v -createdAt -updatedAt");
 
     if (!subCategories || subCategories.length === 0) {
@@ -130,6 +148,7 @@ exports.getSubCategoriesByCategoryIds = async (req, res) => {
         name: subCat.name,
         slug: subCat.slug,
         iconUrl: subCat.iconUrl,
+        icon: subCat.icon,
       });
     });
 
@@ -198,7 +217,9 @@ exports.deleteSubCategory = async (req, res) => {
       return res.status(400).json({ message: "Subcategory ID is required" });
     }
 
-    // Find and delete the subcategory
+    // DB first, so the API never points at a deleted asset. The Cloudinary asset is
+    // removed afterwards, and only when no other record references it. Legacy
+    // /uploads files and the default placeholder are never touched.
     const deletedSubCategory = await SubCategory.findByIdAndDelete(
       subCategoryId
     );
@@ -208,7 +229,9 @@ exports.deleteSubCategory = async (req, res) => {
       return res.status(404).json({ message: "Subcategory not found" });
     }
 
-    res.status(200).json({ message: "Subcategory deleted successfully" });
+    const imageRelease = await images.releaseDocumentImage(deletedSubCategory);
+
+    res.status(200).json({ message: "Subcategory deleted successfully", imageRelease });
   } catch (error) {
     res
       .status(500)
@@ -218,6 +241,7 @@ exports.deleteSubCategory = async (req, res) => {
 
 // update api
 exports.updateSubCategory = async (req, res) => {
+  let staged = null;
   try {
     const { name, description, slug, category } = req.body;
     const { id } = req.params;
@@ -238,28 +262,35 @@ exports.updateSubCategory = async (req, res) => {
       }
     }
 
-    let iconUrl = subCategory.iconUrl;
-    if (req.file) {
-      iconUrl = `${req.protocol}://${req.get("host")}/uploads/${
-        req.file.filename
-      }`;
-    }
-
     subCategory.name = name || subCategory.name;
     subCategory.category = category || subCategory.category;
     subCategory.description = description || subCategory.description;
     subCategory.slug = slug || subCategory.slug;
-    subCategory.iconUrl = iconUrl;
 
-    await subCategory.save();
+    // Icon change: upload the NEW image first, save, verify the saved record, and only
+    // then release the OLD asset (and only if no other record still references it).
+    // A failed upload therefore leaves the existing icon untouched.
+    if (req.file) {
+      staged = await images.stageImageUpload(subCategory, req.file, { kind: "subcategory" });
+    } else if (wantsIconRemoval(req.body)) {
+      staged = images.stageImageRemoval(subCategory);
+    }
+
+    try {
+      await subCategory.save();
+    } catch (saveError) {
+      // The old asset is untouched; make sure the new one is not left orphaned.
+      await images.discardStagedUpload(staged);
+      throw saveError;
+    }
+
+    const imageChange = staged ? await images.finishImageChange(subCategory, staged) : undefined;
 
     res
       .status(200)
-      .json({ message: "Subcategory updated successfully", subCategory });
+      .json({ message: "Subcategory updated successfully", subCategory, ...(imageChange ? { imageChange } : {}) });
   } catch (error) {
-    res
-      .status(500)
-      .json({ message: "Error updating subcategory", error: error.message });
+    respondError(res, error, "Error updating subcategory");
   }
 };
 

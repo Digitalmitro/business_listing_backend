@@ -3,52 +3,64 @@ const path = require("path");
 const Category = require("../models/Category");
 const SubCategory = require("../models/SubCategory");
 const TopCat = require("../models/TopBannerCategory");
-const { uploadToCloudinary, cloudinary } = require("../config/Cloudinary");
+const images = require("../services/imageStorageService");
 const csv = require("csv-parser");
 
+// Image errors carry their own HTTP status (400 invalid image, 502 Cloudinary down) and a
+// message that is safe to show to the admin; anything else is reported generically.
+function respondError(res, error, fallbackMessage) {
+  const status = Number.isInteger(error.status) && error.status >= 400 ? error.status : 500;
+  if (status >= 500) console.error(error);
+  const safeMessage = error.isOperational || status < 500 ? error.message : fallbackMessage;
+  return res.status(status).json({ message: safeMessage, error: error.message });
+}
+
+function wantsIconRemoval(body) {
+  return ["true", "1", "yes"].includes(String(body && body.removeIcon).toLowerCase());
+}
+
 exports.createCategory = async (req, res) => {
+  let staged = null;
   try {
     const { name, description } = req.body;
-    if (!name || !req.files || !req.files.icon || !req.files.icon.length) {
+    const iconFile = req.files && req.files.icon && req.files.icon[0];
+    if (!name || !iconFile) {
       return res
         .status(400)
         .json({ message: "Name and icon image are required" });
     }
 
-    // const iconUpload = req.files.icon[0];
-    // const iconUrl = iconUpload.location;
-
-    // let bgImageUrl = null;
-    // if (req.files.bgImage) {
-    //   const bgImageUpload = req.files.bgImage[0];
-    //   bgImageUrl = bgImageUpload.location;
-    // }
-
-    const iconFile = req.files.icon[0];
-    const iconUrl = `${req.protocol}://${req.get("host")}/uploads/${iconFile.filename}`;
-
     const slug = name.toLowerCase().split(" ").join("-");
     const category = new Category({
       name,
       description: description ? description : " ", // Use space if empty
-      iconUrl,
       slug,
       // bgImage removed
     });
-    await category.save();
+
+    // Validate the bytes and upload to Cloudinary FIRST; the record is created only
+    // once the asset exists, so a failed upload never leaves a broken record.
+    staged = await images.stageImageUpload(category, iconFile, { kind: "category" });
+
+    try {
+      await category.save();
+    } catch (saveError) {
+      // Nothing was written: drop the asset we just uploaded unless another record uses it.
+      await images.discardStagedUpload(staged);
+      throw saveError;
+    }
 
     res
       .status(201)
       .json({ message: "Category created successfully", category });
   } catch (error) {
-    res
-      .status(500)
-      .json({ message: "Error creating category", error: error.message });
+    respondError(res, error, "Error creating category");
   }
 };
 
 // update category
 exports.updateCategory = async (req, res) => {
+  let staged = null;
   try {
     const { categoryId } = req.params;
     const { name, description, slug } = req.body;
@@ -73,25 +85,33 @@ exports.updateCategory = async (req, res) => {
       category.slug = slug;
     }
 
-    // Update icon if provided
-    if (req.files && req.files.icon) {
-      const iconFile = req.files.icon[0];
-      category.iconUrl = `${req.protocol}://${req.get("host")}/uploads/${iconFile.filename}`;
+    // Icon change: upload the NEW image first, save, verify the saved record, and only
+    // then release the OLD asset (and only if no other record still references it).
+    // A failed upload therefore leaves the existing icon untouched.
+    const iconFile = req.files && req.files.icon && req.files.icon[0];
+    if (iconFile) {
+      staged = await images.stageImageUpload(category, iconFile, { kind: "category" });
+    } else if (wantsIconRemoval(req.body)) {
+      staged = images.stageImageRemoval(category);
     }
 
     // bgImage update login removed
 
-    // Save the updated category
-    await category.save();
+    try {
+      await category.save();
+    } catch (saveError) {
+      // The old asset is untouched; make sure the new one is not left orphaned.
+      await images.discardStagedUpload(staged);
+      throw saveError;
+    }
+
+    const imageChange = staged ? await images.finishImageChange(category, staged) : undefined;
 
     res
       .status(200)
-      .json({ message: "Category updated successfully", category });
+      .json({ message: "Category updated successfully", category, ...(imageChange ? { imageChange } : {}) });
   } catch (error) {
-    console.log(error);
-    res
-      .status(500)
-      .json({ message: "Error updating category", error: error.message });
+    respondError(res, error, "Error updating category");
   }
 };
 
@@ -118,7 +138,7 @@ exports.getAllCategories = async (req, res) => {
   try {
     const categories = await Category.find()
       .sort({ createdAt: 1 })
-      .select("_id name description slug iconUrl createdAt bgImage");
+      .select("_id name description slug iconUrl icon createdAt bgImage");
     res.status(200).json(categories);
   } catch (error) {
     res
@@ -144,7 +164,7 @@ exports.getAllCategoriesPaginated = async (req, res) => {
       .sort({ createdAt: -1, _id: 1 })
       .skip(skip)
       .limit(limit)
-      .select("_id name description slug iconUrl createdAt bgImage");
+      .select("_id name description slug iconUrl icon createdAt bgImage");
 
     res.status(200).json({
       categories,
@@ -188,27 +208,13 @@ exports.deleteCategory = async (req, res) => {
       return res.status(404).json({ message: "Category not found" });
     }
 
-    // Function to extract public_id from a Cloudinary URL
-    const getPublicIdFromUrl = (url) => {
-      const parts = url.split("/");
-      return parts[parts.length - 1].split(".")[0]; // Extract the file name without extension
-    };
-
-    // Delete icon from Cloudinary
-    if (category.iconUrl) {
-      const publicId = getPublicIdFromUrl(category.iconUrl);
-      await cloudinary.uploader.destroy(publicId);
-    }
-
-    // Delete background image from Cloudinary if it exists
-    if (category.bgImage) {
-      const bgPublicId = getPublicIdFromUrl(category.bgImage);
-      await cloudinary.uploader.destroy(bgPublicId);
-    }
-
-    // Now delete the category from the database
+    // DB first, so the API never points at a deleted asset. The Cloudinary asset is
+    // removed afterwards, and only when no other record references it. Legacy
+    // /uploads files and the default placeholder are never touched.
     await Category.findByIdAndDelete(id);
-    res.status(200).json({ message: "Category deleted successfully" });
+    const imageRelease = await images.releaseDocumentImage(category);
+
+    res.status(200).json({ message: "Category deleted successfully", imageRelease });
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: "Server error" });
@@ -362,6 +368,7 @@ exports.searchCategories = async (req, res) => {
       name: cat.name,
       slug: cat.slug,
       iconUrl: cat.iconUrl,
+      icon: cat.icon,
       type: "category",
     }));
 
@@ -370,6 +377,7 @@ exports.searchCategories = async (req, res) => {
       name: sub.name,
       slug: sub.slug,
       iconUrl: sub.iconUrl,
+      icon: sub.icon,
       type: "subcategory",
       parentCategory: sub.category?.name,
     }));

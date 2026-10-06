@@ -1,8 +1,9 @@
 "use strict";
 
-// Validation for files stored in public/uploads by config/multerConfig.js.
-// The extension and client MIME type are checked before multer writes the
-// file; the stored bytes are then checked against the real file signature and
+// Validation for files accepted by config/multerConfig.js, whether multer stored
+// them on disk (legacy /uploads) or kept them in memory for Cloudinary.
+// The extension and client MIME type are checked before multer accepts the
+// file; the bytes are then checked against the real file signature and
 // scanned for script markers, so renamed scripts and polyglots are rejected.
 
 const fs = require("node:fs/promises");
@@ -133,7 +134,9 @@ function attachmentFileFilter(req, file, cb) {
   return cb(null, true);
 }
 
-async function readForCheck(filePath, headerOnly) {
+async function readForCheck(file, headerOnly) {
+  if (Buffer.isBuffer(file.buffer)) return headerOnly ? file.buffer.subarray(0, HEADER_BYTES) : file.buffer;
+  const filePath = file.path;
   if (!headerOnly) return fs.readFile(filePath);
   const handle = await fs.open(filePath, "r");
   try {
@@ -153,7 +156,7 @@ function storedFiles(req) {
 
 async function checkStoredFile(file) {
   const policy = policyFor(file.fieldname);
-  const buf = await readForCheck(file.path, policy.headerOnly);
+  const buf = await readForCheck(file, policy.headerOnly);
   const kind = detectKind(buf);
   if (!policy.kinds.includes(kind)) {
     return `Invalid file "${file.originalname}". The file content is not one of: ${policy.label}.`;
@@ -164,8 +167,8 @@ async function checkStoredFile(file) {
   return null;
 }
 
-// Verifies every file multer stored for this request. If any file fails,
-// all files from the request are deleted and a 400 error is thrown.
+// Verifies every file multer accepted for this request (disk or memory). If any
+// file fails, all disk files from the request are deleted and a 400 error is thrown.
 async function verifyUploadedFiles(req) {
   const files = storedFiles(req);
   let problem = null;
@@ -174,14 +177,41 @@ async function verifyUploadedFiles(req) {
     if (problem) break;
   }
   if (!problem) return;
-  await Promise.all(files.map((file) => fs.rm(file.path, { force: true })));
+  await Promise.all(files.filter((file) => file.path).map((file) => fs.rm(file.path, { force: true })));
   throw uploadError(problem);
+}
+
+// Full image check for bytes already in memory (used before any Cloudinary upload):
+// extension and MIME when known, then the real signature and embedded script markers.
+// Returns an error message, or null when the buffer is an acceptable image.
+function validateImageBuffer(buf, { filename, mimetype } = {}) {
+  const policy = POLICIES.image;
+  const name = filename || "image";
+  if (!Buffer.isBuffer(buf) || buf.length === 0) return `Invalid file "${name}". The file is empty.`;
+  if (filename) {
+    const ext = path.extname(filename).toLowerCase();
+    if (!policy.exts.includes(ext) || hasScriptExtension(filename)) {
+      return `Invalid file "${name}". Only ${policy.label} are allowed.`;
+    }
+  }
+  if (mimetype && !mimeAllowed(policy, mimetype)) {
+    return `Invalid file "${name}". Only ${policy.label} are allowed.`;
+  }
+  const kind = detectKind(buf);
+  if (!policy.kinds.includes(kind)) {
+    return `Invalid file "${name}". The file content is not one of: ${policy.label}.`;
+  }
+  if (findScriptMarker(buf)) {
+    return `Invalid file "${name}". The file contains embedded script content.`;
+  }
+  return null;
 }
 
 module.exports = {
   uploadFileFilter,
   attachmentFileFilter,
   verifyUploadedFiles,
+  validateImageBuffer,
   hasScriptExtension,
   detectKind,
   SCRIPT_EXTS,

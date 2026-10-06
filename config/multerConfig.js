@@ -35,6 +35,38 @@ const upload = {
   fields: (fields) => withVerification(multerUpload.fields(fields)),
 };
 
+// ── Cloudinary-bound image uploads ───────────────────────────────────────────
+// Files are kept in memory (req.file.buffer / req.files[field][i].buffer), validated
+// against the same extension, MIME, signature and script-marker rules, and then
+// handed to services/imageStorageService.js. Nothing is ever written to disk.
+const IMAGE_UPLOAD_MAX_BYTES = Number(process.env.IMAGE_UPLOAD_MAX_BYTES) || 5 * 1024 * 1024;
+
+const memoryUploader = multer({
+  storage: multer.memoryStorage(),
+  fileFilter: uploadFileFilter,
+  limits: { fileSize: IMAGE_UPLOAD_MAX_BYTES, files: 4 },
+});
+
+// Multer's own errors (too large, unexpected field) are client errors, not 500s.
+const withMemoryVerification = (middleware) => (req, res, next) => {
+  middleware(req, res, (err) => {
+    if (err) {
+      if (err instanceof multer.MulterError) {
+        err.status = 400;
+        err.isOperational = true;
+        if (err.code === "LIMIT_FILE_SIZE") err.message = `Image is too large. Maximum size is ${Math.round(IMAGE_UPLOAD_MAX_BYTES / (1024 * 1024))} MB.`;
+      }
+      return next(err);
+    }
+    verifyUploadedFiles(req).then(() => next(), next);
+  });
+};
+
+const memoryUpload = {
+  single: (name) => withMemoryVerification(memoryUploader.single(name)),
+  fields: (fields) => withMemoryVerification(memoryUploader.fields(fields)),
+};
+
 // ── Email campaign attachment storage ────────────────────────────────────────
 // Files are stored in a dedicated sub-directory to keep them separate from
 // images and other uploaded assets.
@@ -82,4 +114,4 @@ const dynamicUpload = (req, res, next) => {
   upload.fields(fields)(req, res, next);
 };
 
-module.exports = { upload, dynamicUpload, attachmentUpload };
+module.exports = { upload, dynamicUpload, attachmentUpload, memoryUpload, IMAGE_UPLOAD_MAX_BYTES };
