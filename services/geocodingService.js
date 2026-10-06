@@ -62,6 +62,26 @@ const normalizeMapboxAddress = (feature) => {
 };
 
 /**
+ * GET against a geocoding provider. On failure, logs the provider's HTTP status
+ * and response body (or the network error code) before rethrowing, so the cause
+ * shows up in the server logs. Keys travel in `params` and are never logged.
+ */
+const providerGet = async (provider, operation, url, config) => {
+  try {
+    return await axios.get(url, config);
+  } catch (error) {
+    const status = error.response?.status;
+    const body = error.response?.data;
+    console.error(
+      `[geocoding] ${provider} ${operation} failed:`,
+      status ? `HTTP ${status}` : error.code || error.message,
+      body ? JSON.stringify(body).slice(0, 300) : ""
+    );
+    throw error;
+  }
+};
+
+/**
  * Reverse Geocoding: Lat/Lon to Address
  */
 const reverseGeocode = async (lat, lon) => {
@@ -85,7 +105,7 @@ const reverseGeocode = async (lat, lon) => {
     if (!accessToken) throw new Error("Mapbox Access Token is missing");
 
     const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${lon},${lat}.json`;
-    const response = await axios.get(url, {
+    const response = await providerGet("mapbox", "reverse", url, {
       params: {
         access_token: accessToken,
         types: "address,place,locality,neighborhood",
@@ -107,7 +127,7 @@ const reverseGeocode = async (lat, lon) => {
     };
   } else {
     // Default to LocationIQ
-    const response = await axios.get("https://us1.locationiq.com/v1/reverse", {
+    const response = await providerGet("locationiq", "reverse", "https://us1.locationiq.com/v1/reverse", {
       params: {
         key: process.env.LOCATIONIQ_API_KEY,
         lat,
@@ -155,7 +175,7 @@ const forwardGeocode = async (address) => {
     if (!accessToken) throw new Error("Mapbox Access Token is missing");
 
     const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(address)}.json`;
-    const response = await axios.get(url, {
+    const response = await providerGet("mapbox", "forward", url, {
       params: {
         access_token: accessToken,
         limit: 1,
@@ -178,7 +198,7 @@ const forwardGeocode = async (address) => {
     ];
   } else {
     // Default to LocationIQ
-    const response = await axios.get("https://us1.locationiq.com/v1/search", {
+    const response = await providerGet("locationiq", "forward", "https://us1.locationiq.com/v1/search", {
       params: {
         key: process.env.LOCATIONIQ_API_KEY,
         q: address,
