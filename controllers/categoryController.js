@@ -348,20 +348,43 @@ exports.downloadSampleCategoryCSV = (req, res) => {
 
 exports.searchCategories = async (req, res) => {
   try {
-    const { query } = req.query;
+    const query = String(req.query.query || "").trim();
     if (!query) {
       return res.status(200).json([]);
     }
 
-    const categories = await Category.find({
-      name: { $regex: query, $options: "i" },
-    }).limit(5);
+    const escape = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const pattern = escape(query);
+    // Every word, in any order: "hair salon" also finds "Hair Cutting Salons"
+    const words = query.split(/\s+/).map(escape);
+    const nameMatch = {
+      $regex: words.length > 1 ? words.map((w) => `(?=.*${w})`).join("") : pattern,
+      $options: "i",
+    };
 
-    const subCategories = await SubCategory.find({
-      name: { $regex: query, $options: "i" },
-    })
-      .populate("category", "name")
-      .limit(10);
+    // Only suggest categories that have subcategories: any other category opens an empty
+    // "Select a Service" page. This also hides ~2,000 malformed "· …" categories left by the
+    // Aug 2026 Google import, which otherwise crowd out the real matches.
+    const usableCategoryIds = await SubCategory.distinct("category");
+
+    const [categories, subCategories] = await Promise.all([
+      Category.find({ name: nameMatch, _id: { $in: usableCategoryIds } }).limit(20),
+      SubCategory.find({ name: nameMatch }).populate("category", "name").limit(40),
+    ]);
+
+    // Exact, then prefix, then word-start matches first; names with scraped "· " / "$" prefixes last
+    const q = query.toLowerCase();
+    const rank = ({ name = "" }) => {
+      const n = name.toLowerCase();
+      const malformed = /^[^a-z0-9]/i.test(name) ? 10 : 0;
+      if (n === q) return malformed;
+      if (n.startsWith(q)) return malformed + 1;
+      if (new RegExp(`\\b${pattern}`, "i").test(name)) return malformed + 2;
+      return malformed + 3;
+    };
+    const byRelevance = (a, b) => rank(a) - rank(b) || a.name.length - b.name.length;
+    categories.sort(byRelevance).splice(5);
+    subCategories.sort(byRelevance).splice(10);
 
     const formattedCategories = categories.map((cat) => ({
       _id: cat._id,

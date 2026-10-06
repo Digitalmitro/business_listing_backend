@@ -2243,25 +2243,50 @@ exports.getDistinctCountries = async (req, res) => {
 
 exports.searchBusinesses = async (req, res) => {
   try {
-    const { query, location } = req.query;
+    const { location, lat, lon } = req.query;
+    const query = String(req.query.query || "").trim();
     if (!query) {
       return res.status(200).json([]);
     }
 
     // Search by name globally first (matching names should ALWAYS come)
     const nameFilter = {
-      businessName: { $regex: query, $options: "i" },
+      businessName: { $regex: escapeRegex(query), $options: "i" },
       isBlocked: false,
     };
+    const fields = "businessName _id category address addressString kyc businessLogo";
 
-    const businesses = await Business.find(nameFilter)
-      .select("businessName _id category address addressString kyc businessLogo")
+    // With the searcher's coordinates, matches within 100 km come first, nearest first.
+    // Without this, the first 20 name matches are mostly US imports and local ones never show.
+    let nearby = [];
+    const latNum = Number(lat);
+    const lonNum = Number(lon);
+    if (lat && lon && Number.isFinite(latNum) && Number.isFinite(lonNum)) {
+      nearby = await Business.find({
+        ...nameFilter,
+        location: {
+          $nearSphere: {
+            $geometry: { type: "Point", coordinates: [lonNum, latNum] },
+            $maxDistance: 100000,
+          },
+        },
+      })
+        .select(fields)
+        .limit(10);
+    }
+
+    const others = await Business.find({
+      ...nameFilter,
+      _id: { $nin: nearby.map((b) => b._id) },
+    })
+      .select(fields)
       .limit(20);
 
-    let formattedBusinesses = businesses.map((biz) => {
+    const isKnown = (v) => v && !/^unknown\b/i.test(v);
+    let formattedBusinesses = [...nearby, ...others].map((biz) => {
       const addr = biz.address || {};
       const displayAddress = [addr.area, addr.city, addr.state]
-        .filter(Boolean)
+        .filter(isKnown)
         .join(", ");
 
       return {
@@ -2274,8 +2299,8 @@ exports.searchBusinesses = async (req, res) => {
       };
     });
 
-    // If location is provided, sort local matches to the top
-    if (location) {
+    // Without coordinates, fall back to sorting text matches on the typed location to the top
+    if (location && !nearby.length) {
       const locLower = location.toLowerCase();
       formattedBusinesses.sort((a, b) => {
         const aMatches = a.addressLabel?.toLowerCase().includes(locLower);
