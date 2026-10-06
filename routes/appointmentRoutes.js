@@ -8,11 +8,13 @@ const {
   RescheduleAppointment,
   getAllAppointments,
   getAppointmentsByBusinessId,
+  getAppointmentNotifications,
 } = require("../controllers/appointmentController");
 
 router.post("/appointment", authMiddleware, CreateAppointment);
 router.get("/appointment", authMiddleware, GetAppointment);
 router.get("/appointment/business/:businessId", authMiddleware, getAppointmentsByBusinessId);
+router.get("/appointment/:appointmentId/notifications", authMiddleware, getAppointmentNotifications);
 router.get("/all-appointments", authMiddleware, getAllAppointments);
 router.put(
   "/appointment/:appointmentId",

@@ -19,7 +19,7 @@ const { createRequestLogger } = require("./middlewares/requestLogger");
 const { errorHandler, notFoundHandler } = require("./middlewares/errorHandler");
 const { installProcessHandlers } = require("./utils/processHandlers");
 const { ResourceMonitor } = require("./utils/resourceMonitor");
-const { closeQueueConnections, redisConnection } = require("./utils/queue");
+const { closeQueueConnections, redisConnection, readWorkerHeartbeat } = require("./utils/queue");
 const { authLimiter, apiLimiter, webhookLimiter, crmWriteLimiter } = require("./middlewares/rateLimiter");
 const { hasScriptExtension } = require("./utils/uploadValidation");
 const { uploadDir } = require("./utils/uploadDir");
@@ -209,15 +209,27 @@ function createApp() {
       timestamp: new Date().toISOString(),
     });
   });
-  app.get("/health/ready", (_req, res) => {
+  app.get("/health/ready", async (_req, res) => {
     const dependencies = {
       mongodb: mongoose.connection.readyState === 1 ? "ready" : "unavailable",
       redis: redisConnection.status === "ready" ? "ready" : redisConnection.status,
     };
     const ready = dependencies.mongodb === "ready" && dependencies.redis === "ready";
+    // Queue workers (emails, appointment reminders) run in their own process or
+    // inline; either way they report a heartbeat so a missing worker is visible here.
+    const workers = { status: "unknown", lastSeenAt: null };
+    if (dependencies.redis === "ready") {
+      try {
+        workers.lastSeenAt = await readWorkerHeartbeat();
+        workers.status = workers.lastSeenAt ? "ready" : "missing";
+      } catch {
+        workers.status = "unknown";
+      }
+    }
     res.status(ready ? 200 : 503).json({
       status: ready ? "ready" : "not_ready",
       dependencies,
+      workers,
       timestamp: new Date().toISOString(),
     });
   });

@@ -1,18 +1,45 @@
-const moment = require("moment");
+const mongoose = require("mongoose");
 const Appointment = require("../models/Appointment");
 const Business = require("../models/Business");
 const User = require("../models/User");
 const { notifyAdmins, createNotification } = require("../helpers/notificationHelper");
-const { addJob } = require("../utils/queue");
 const { createLeadFromAppointment, recordAppointmentCanceled } = require("../services/crmLeadIntakeService");
 const { invalidateCrmSnapshots } = require("../services/crmScope");
 const { onBookingCreated } = require("../services/crmEmailAutomationService");
 const crmSignals = require("../services/crmSignalService");
+const timeService = require("../services/appointmentTimeService");
+const appointmentNotifications = require("../services/appointmentNotificationService");
+
+/**
+ * Resolves what a booking request means in time: the timezone the date and slot
+ * are in, the calendar date, the stored date (midnight UTC) and the exact start
+ * instant. Returns { error } with a user-facing message when the input is invalid.
+ */
+async function resolveSchedule({ appointmentDate, timeSlot, requestedTimezone, business, customer }) {
+  if (!timeService.parseTimeSlot(timeSlot)) {
+    return { error: "Invalid time slot. Use a time like 11:00 AM." };
+  }
+  const owner = business.userId ? await User.findById(business.userId).select("timeZone").lean() : null;
+  const timezone = await appointmentNotifications.resolveTimezone({
+    requested: requestedTimezone,
+    businessId: business._id,
+    owner,
+    customer,
+  });
+  const dateString = timeService.calendarDate(appointmentDate, timezone);
+  if (!dateString) {
+    return { error: "Invalid appointment date." };
+  }
+  return {
+    timezone,
+    normalizedDate: timeService.storedAppointmentDate(dateString),
+    startsAt: timeService.startInstant(dateString, timeSlot, timezone),
+  };
+}
 
 exports.CreateAppointment = async (req, res) => {
   try {
-    const { businessId, appointmentDate, timeSlot, serviceId, serviceName } =
-      req.body;
+    const { businessId, appointmentDate, timeSlot, serviceId, serviceName, timezone: requestedTimezone } = req.body;
     const userId = req.user.id;
 
     // Validation
@@ -21,8 +48,24 @@ exports.CreateAppointment = async (req, res) => {
         .status(400)
         .json({ message: "Business ID, date, and time slot are required." });
     }
+    if (!mongoose.isValidObjectId(businessId)) {
+      return res.status(404).json({ message: "Business not found." });
+    }
 
-    const normalizedDate = moment(appointmentDate).startOf("day").toISOString();
+    // Fetch business and customer details before anything is written
+    const business = await Business.findById(businessId).select(
+      "businessName contact userId"
+    );
+    if (!business) {
+      return res.status(404).json({ message: "Business not found." });
+    }
+    const user = await User.findById(userId).select("full_name email phone timeZone");
+
+    const schedule = await resolveSchedule({ appointmentDate, timeSlot, requestedTimezone, business, customer: user });
+    if (schedule.error) {
+      return res.status(400).json({ message: schedule.error });
+    }
+    const { timezone, normalizedDate, startsAt } = schedule;
 
     // Check if slot already booked
     const existingAppointment = await Appointment.findOne({
@@ -46,21 +89,12 @@ exports.CreateAppointment = async (req, res) => {
       serviceName: serviceName || "Service",
       appointmentDate: normalizedDate,
       timeSlot,
+      timezone,
+      startsAt,
       status: "Scheduled",
     });
 
     await appointment.save();
-
-    // Fetch business details
-    const business = await Business.findById(businessId).select(
-      "businessName contact subscriptionActive userId"
-    );
-    if (!business) {
-      return res.status(404).json({ message: "Business not found." });
-    }
-
-    // Fetch user details
-    const user = await User.findById(userId).select("full_name email phone");
 
     // Move the customer's lead to Booked, or create it there (idempotent, never throws)
     await createLeadFromAppointment(appointment, user);
@@ -70,15 +104,7 @@ exports.CreateAppointment = async (req, res) => {
     // CRM contact: record the booking and hand marketing journeys over to booking emails (never throws)
     await crmSignals.onBookingCreated(appointment, user);
 
-    const formattedDate = moment(normalizedDate).format("dddd, MMMM Do YYYY");
-    const replacements = {
-      "{{customer_name}}": user?.full_name || "Customer",
-      "{{business_name}}": business.businessName,
-      "{{service_name}}": serviceName || "Requested Service",
-      "{{appointment_date}}": formattedDate,
-      "{{appointment_time}}": timeSlot,
-      "{{appointment_id}}": appointment._id.toString(),
-    };
+    const formattedDate = timeService.formatInTimezone(startsAt, timezone);
 
     // 1. Notify Admins
     await notifyAdmins({
@@ -110,15 +136,9 @@ exports.CreateAppointment = async (req, res) => {
       category: "booking",
     });
 
-    // Queue Email Job
-    if (business.subscriptionActive) {
-      await addJob("booking-email", {
-        triggerType: "booking_confirmed",
-        userId,
-        businessId,
-        replacements,
-      });
-    }
+    // 4. Booking emails: confirmation to customer and owner now, reminders before
+    //    the appointment starts (rows + queue; never throws).
+    await appointmentNotifications.onAppointmentBooked(appointment);
 
     return res.status(201).json({
       success: true,
@@ -210,19 +230,8 @@ exports.CancelAppointment = async (req, res) => {
       category: "booking",
     });
 
-    // 3. Queue Cancel Email
-    await addJob("booking-email", {
-      triggerType: "booking_canceled",
-      userId,
-      businessId: business._id,
-      replacements: {
-        "{{customer_name}}": appointment.userId?.full_name || "Customer",
-        "{{business_name}}": business.businessName,
-        "{{service_name}}": appointment.serviceName,
-        "{{appointment_date}}": moment(appointment.appointmentDate).format("dddd, MMMM Do YYYY"),
-        "{{appointment_time}}": appointment.timeSlot,
-      }
-    });
+    // 3. Stop pending reminders and send the cancellation emails (never throws)
+    await appointmentNotifications.onAppointmentCanceled(appointment);
 
     return res.status(200).json({
       success: true,
@@ -237,7 +246,7 @@ exports.CancelAppointment = async (req, res) => {
 exports.RescheduleAppointment = async (req, res) => {
   try {
     const { appointmentId } = req.params;
-    const { appointmentDate, timeSlot } = req.body;
+    const { appointmentDate, timeSlot, timezone: requestedTimezone } = req.body;
     const userId = req.user.id;
 
     if (!appointmentDate || !timeSlot) {
@@ -261,13 +270,24 @@ exports.RescheduleAppointment = async (req, res) => {
         .json({ message: "Cannot reschedule a canceled appointment" });
     }
 
-    const normalizedNewDate = moment(appointmentDate)
-      .startOf("day")
-      .toISOString();
+    const business = oldAppointment.businessId;
+    const user = await User.findById(userId).select("full_name email phone timeZone");
+
+    const schedule = await resolveSchedule({
+      appointmentDate,
+      timeSlot,
+      requestedTimezone: requestedTimezone || oldAppointment.timezone,
+      business,
+      customer: user,
+    });
+    if (schedule.error) {
+      return res.status(400).json({ message: schedule.error });
+    }
+    const { timezone, normalizedDate: normalizedNewDate, startsAt } = schedule;
 
     // Check if new slot is already taken
     const slotTaken = await Appointment.findOne({
-      businessId: oldAppointment.businessId._id,
+      businessId: business._id,
       appointmentDate: normalizedNewDate,
       timeSlot,
       status: { $ne: "Canceled" },
@@ -289,8 +309,12 @@ exports.RescheduleAppointment = async (req, res) => {
     const newAppointment = new Appointment({
       ...oldAppointment.toObject(),
       _id: undefined,
+      businessId: business._id,
       appointmentDate: normalizedNewDate,
       timeSlot,
+      timezone,
+      startsAt,
+      notificationsScheduledAt: null,
       status: "Scheduled",
       rescheduledFrom: oldAppointment._id,
       createdAt: Date.now(),
@@ -299,26 +323,11 @@ exports.RescheduleAppointment = async (req, res) => {
 
     await newAppointment.save();
 
-    // Notify business
-    const business = oldAppointment.businessId;
-    const user = await User.findById(userId);
-
     // Record the new slot on the same CRM lead and contact (never throw)
     await createLeadFromAppointment(newAppointment, user);
     await crmSignals.onBookingCreated(newAppointment, user);
 
-    const formattedDate = moment(normalizedNewDate).format("dddd, MMMM Do YYYY");
-    const oldFormattedDate = moment(oldAppointment.appointmentDate).format("dddd, MMMM Do YYYY");
-
-    const replacements = {
-      "{{customer_name}}": user?.full_name || "Customer",
-      "{{business_name}}": business.businessName,
-      "{{service_name}}": newAppointment.serviceName,
-      "{{appointment_date}}": formattedDate,
-      "{{appointment_time}}": timeSlot,
-      "{{old_date}}": oldFormattedDate,
-      "{{old_time}}": oldAppointment.timeSlot,
-    };
+    const formattedDate = timeService.formatInTimezone(startsAt, timezone);
 
     if (business.userId) {
       await createNotification({
@@ -341,13 +350,8 @@ exports.RescheduleAppointment = async (req, res) => {
       category: "booking",
     });
 
-    // Queue Reschedule Email
-    await addJob("booking-email", {
-      triggerType: "booking_rescheduled",
-      userId,
-      businessId: business._id,
-      replacements
-    });
+    // Stop the old appointment's reminders; confirm the new slot and plan its reminders (never throws)
+    await appointmentNotifications.onAppointmentRescheduled(oldAppointment, newAppointment);
 
     return res.status(200).json({
       success: true,
@@ -380,5 +384,37 @@ exports.getAppointmentsByBusinessId = async (req, res) => {
   } catch (error) {
     console.error("Get Business Appointments Error:", error);
     return res.status(500).json({ message: "Failed to fetch business appointments" });
+  }
+};
+
+/**
+ * GET /api/appointment/:appointmentId/notifications
+ * Delivery log of an appointment's emails (confirmation, reminders, notices).
+ * Visible to the customer, the business owner and admins.
+ */
+exports.getAppointmentNotifications = async (req, res) => {
+  try {
+    const { appointmentId } = req.params;
+    if (!mongoose.isValidObjectId(appointmentId)) {
+      return res.status(404).json({ success: false, message: "Appointment not found" });
+    }
+    const appointment = await Appointment.findById(appointmentId)
+      .select("userId businessId status serviceName appointmentDate timeSlot timezone startsAt notificationsScheduledAt")
+      .lean();
+    if (!appointment) {
+      return res.status(404).json({ success: false, message: "Appointment not found" });
+    }
+    const business = await Business.findById(appointment.businessId).select("userId").lean();
+    const me = String(req.user._id);
+    const allowed =
+      req.isAdmin || String(appointment.userId) === me || (business && String(business.userId) === me);
+    if (!allowed) {
+      return res.status(403).json({ success: false, message: "Not allowed to view this appointment" });
+    }
+    const rows = await appointmentNotifications.listForAppointment(appointmentId);
+    return res.status(200).json({ success: true, appointment, notifications: rows });
+  } catch (error) {
+    console.error("Get Appointment Notifications Error:", error);
+    return res.status(500).json({ success: false, message: "Server error" });
   }
 };

@@ -185,6 +185,27 @@ async function addJob(queueName, jobData, options = {}) {
   }
 }
 
+const WORKER_HEARTBEAT_KEY = 'heartbeat:business-listing-workers';
+const WORKER_HEARTBEAT_TTL_SECONDS = 90;
+
+/** Records that a worker process is alive (read by GET /health/ready). */
+async function reportWorkerHeartbeat() {
+  if (isTestRuntime || redisConnection.status !== 'ready') return false;
+  await redisConnection.set(WORKER_HEARTBEAT_KEY, new Date().toISOString(), 'EX', WORKER_HEARTBEAT_TTL_SECONDS);
+  return true;
+}
+
+/** ISO time a worker process last reported in, or null when none has within the TTL. */
+async function readWorkerHeartbeat() {
+  if (isTestRuntime || redisConnection.status !== 'ready') return null;
+  return redisConnection.get(WORKER_HEARTBEAT_KEY);
+}
+
+async function clearWorkerHeartbeat() {
+  if (isTestRuntime || redisConnection.status !== 'ready') return;
+  await redisConnection.del(WORKER_HEARTBEAT_KEY);
+}
+
 async function closeQueueConnections() {
   logger.info('queue.shutdown_started', 'Closing BullMQ queues and Redis connection');
   const results = await Promise.allSettled(Object.values(queues).map((queue) => queue.close()));
@@ -217,4 +238,8 @@ module.exports = {
   redisConnection,
   addJob,
   closeQueueConnections,
+  reportWorkerHeartbeat,
+  readWorkerHeartbeat,
+  clearWorkerHeartbeat,
+  WORKER_HEARTBEAT_KEY,
 };

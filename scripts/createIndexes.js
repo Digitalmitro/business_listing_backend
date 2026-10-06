@@ -29,6 +29,8 @@ const CrmEngagementSettings = require("../models/CrmEngagementSettings");
 const CrmEngagementTemplate = require("../models/CrmEngagementTemplate");
 const CrmJourney = require("../models/CrmJourney");
 const CrmJourneyEnrollment = require("../models/CrmJourneyEnrollment");
+const Appointment = require("../models/Appointment");
+const AppointmentNotification = require("../models/AppointmentNotification");
 
 async function ensureBusinessGoogleLocationIndex() {
   const duplicates = await Business.aggregate([
@@ -95,6 +97,8 @@ async function createAllIndexes() {
       { name: "CrmEngagementTemplate", model: CrmEngagementTemplate },
       { name: "CrmJourney", model: CrmJourney },
       { name: "CrmJourneyEnrollment", model: CrmJourneyEnrollment },
+      { name: "Appointment", model: Appointment },
+      { name: "AppointmentNotification", model: AppointmentNotification },
     ];
 
     for (const { name, model } of models) {

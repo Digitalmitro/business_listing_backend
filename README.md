@@ -250,3 +250,18 @@ npm test
 
 Focused suites are also available as `npm run test:observability` and
 `npm run test:cpu-monitor`.
+
+## Appointment emails and reminders
+
+Booking an appointment sends a confirmation to the customer and the business
+owner, then reminders 3 days, 2 days, 1 day, 30 minutes and 10 minutes before the
+appointment's exact start time (`Appointment.startsAt`, computed from the date,
+the time slot and the booking's timezone). Reschedules and cancellations send
+their own notices. Emails are planned as `AppointmentNotification` rows, sent by
+the `booking-email` queue at the exact time and swept by the worker as a
+catch-up, so nothing is lost on a restart and nothing is sent twice. Wording
+comes from `EmailTemplate` (`booking_confirmed_*`, `booking_reminder_*_user`,
+...; seed with `node scripts/seedTemplates.js`). Requires the worker process
+(`startWorker.js` / PM2 `business-listing-workers`, or `INLINE_WORKERS=true`);
+`GET /health/ready` shows whether one is alive. See
+[docs/appointment-notifications.md](docs/appointment-notifications.md).

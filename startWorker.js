@@ -7,7 +7,7 @@ logger.installConsoleBridge();
 
 const connectDB = require("./config/db");
 const { disconnectDB } = require("./config/db");
-const { closeQueueConnections } = require("./utils/queue");
+const { closeQueueConnections, reportWorkerHeartbeat, clearWorkerHeartbeat, redisConnection } = require("./utils/queue");
 const { installProcessHandlers } = require("./utils/processHandlers");
 const { ResourceMonitor } = require("./utils/resourceMonitor");
 const emailWorker = require("./workers/emailWorker");
@@ -23,6 +23,7 @@ const scheduledSocialPostWorker = require("./workers/scheduledSocialPostWorker")
 const crmEmailAutomationWorker = require("./workers/crmEmailAutomationWorker");
 const { startFollowUpScheduler } = require("./workers/leadFollowUpWorker");
 const { startEmailAutomationScheduler } = require("./workers/crmEmailAutomationWorker");
+const { startAppointmentNotificationScheduler } = require("./workers/bookingWorker");
 
 const workers = [
   emailWorker,
@@ -49,10 +50,25 @@ const workerNames = [
   "lead-followup-scheduler",
   "scheduled-social-post",
   "crm-email-automation",
+  "appointment-notification-scheduler",
 ];
 
 let resourceMonitor;
 let shutdownPromise;
+let heartbeatTimer;
+
+/** Lets GET /health/ready report whether a worker process is alive. */
+function startHeartbeat() {
+  const beat = () =>
+    reportWorkerHeartbeat().catch((error) => {
+      logger.warn("workers.heartbeat_failed", "Could not record the worker heartbeat", { error: error.message });
+    });
+  beat();
+  // Redis may still be connecting at startup (and reconnects later): beat as soon as it is ready.
+  if (redisConnection && typeof redisConnection.on === "function") redisConnection.on("ready", beat);
+  heartbeatTimer = setInterval(beat, 30_000);
+  if (heartbeatTimer.unref) heartbeatTimer.unref();
+}
 
 async function startWorkers() {
   logger.info("workers.starting", "Queue worker startup initiated", { workerNames });
@@ -61,6 +77,8 @@ async function startWorkers() {
   resourceMonitor.start();
   startFollowUpScheduler();
   startEmailAutomationScheduler();
+  startAppointmentNotificationScheduler();
+  startHeartbeat();
   logger.info("workers.ready", "Queue workers are ready", { workerNames });
   if (typeof process.send === "function") process.send("ready");
 }
@@ -73,6 +91,8 @@ async function shutdown(reason, { crash = false } = {}) {
       crash,
     });
     resourceMonitor?.stop();
+    if (heartbeatTimer) clearInterval(heartbeatTimer);
+    await clearWorkerHeartbeat().catch(() => {});
 
     const workerResults = await Promise.allSettled(workers.map((worker) => worker.close()));
     const workerFailures = workerResults.filter((result) => result.status === "rejected");

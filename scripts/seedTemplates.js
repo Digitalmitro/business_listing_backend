@@ -160,9 +160,12 @@ const templates = [
         <p>Hi {{recipient_name}},</p>
         <p>Your booking for <strong>{{service_name}}</strong> at <strong>{{business_name}}</strong> has been confirmed.</p>
         <div style="background-color: #f9f9f9; padding: 15px; border-radius: 5px; margin: 20px 0;">
+          <p style="margin: 5px 0;"><strong>Service:</strong> {{service_name}}</p>
           <p style="margin: 5px 0;"><strong>Date:</strong> {{appointment_date}}</p>
-          <p style="margin: 5px 0;"><strong>Time:</strong> {{appointment_time}}</p>
+          <p style="margin: 5px 0;"><strong>Time:</strong> {{appointment_time}} ({{timezone}})</p>
+          <p style="margin: 5px 0;"><strong>Booking ID:</strong> {{appointment_id}}</p>
         </div>
+        <p><strong>Please be on time.</strong> Arrive a few minutes early so your appointment can start as scheduled. If your plans change, cancel or reschedule from <a href="{{booking_link}}">My Bookings</a>.</p>
         <p>We look forward to seeing you!</p>
         <br>
         <p>Best Regards,<br>The {{business_name}} Team</p>
@@ -264,6 +267,36 @@ const templates = [
       </div>
     `,
   },
+  // Appointment reminders, measured from the exact appointment time
+  // (services/appointmentNotificationService.js). One template per step so the
+  // wording of each can be edited independently in Email Management.
+  ...[
+    ["3d", "3 Days Before", "in 3 days"],
+    ["2d", "2 Days Before", "in 2 days"],
+    ["1d", "1 Day Before", "tomorrow"],
+    ["30m", "30 Minutes Before", "in 30 minutes"],
+    ["10m", "10 Minutes Before", "in 10 minutes"],
+  ].map(([key, label, when]) => ({
+    name: `Booking Reminder - ${label} (User)`,
+    triggerType: `booking_reminder_${key}_user`,
+    subject: `Reminder: your appointment at {{business_name}} is ${when}`,
+    body: `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: auto; padding: 20px; border: 1px solid #ddd; border-radius: 10px;">
+        <h2 style="color: #FF9800;">Your appointment is ${when}</h2>
+        <p>Hi {{recipient_name}},</p>
+        <p>This is a reminder that your appointment for <strong>{{service_name}}</strong> at <strong>{{business_name}}</strong> is <strong>{{reminder_when}}</strong>.</p>
+        <div style="background-color: #f9f9f9; padding: 15px; border-radius: 5px; margin: 20px 0;">
+          <p style="margin: 5px 0;"><strong>Business:</strong> {{business_name}}</p>
+          <p style="margin: 5px 0;"><strong>Service:</strong> {{service_name}}</p>
+          <p style="margin: 5px 0;"><strong>Date:</strong> {{appointment_date}}</p>
+          <p style="margin: 5px 0;"><strong>Time:</strong> {{appointment_time}} ({{timezone}})</p>
+          <p style="margin: 5px 0;"><strong>Booking ID:</strong> {{appointment_id}}</p>
+        </div>
+        <p><strong>Please be on time.</strong> Arrive a few minutes early so your appointment can start as scheduled. If your plans change, cancel or reschedule from <a href="{{booking_link}}">My Bookings</a>.</p>
+        <p>See you soon,<br>The {{business_name}} Team</p>
+      </div>
+    `,
+  })),
 ];
 
 const seedTemplates = async () => {
@@ -278,10 +311,24 @@ const seedTemplates = async () => {
       process.exit(1);
     }
 
+    // `node scripts/seedTemplates.js --refresh=booking_` overwrites the subject/body
+    // of existing templates whose trigger starts with the prefix; without it,
+    // existing templates (possibly edited by an admin) are never touched.
+    const refreshArg = process.argv.find((arg) => arg.startsWith("--refresh="));
+    const refreshPrefix = refreshArg ? refreshArg.slice("--refresh=".length) : null;
+
     for (const templateData of templates) {
       const existing = await EmailTemplate.findOne({ triggerType: templateData.triggerType });
       if (existing) {
-        console.log(`Template for trigger '${templateData.triggerType}' already exists. Skipping.`);
+        if (refreshPrefix !== null && templateData.triggerType.startsWith(refreshPrefix)) {
+          existing.name = templateData.name;
+          existing.subject = templateData.subject;
+          existing.body = templateData.body;
+          await existing.save();
+          console.log(`Refreshed template: ${templateData.name}`);
+        } else {
+          console.log(`Template for trigger '${templateData.triggerType}' already exists. Skipping.`);
+        }
         continue;
       }
 
