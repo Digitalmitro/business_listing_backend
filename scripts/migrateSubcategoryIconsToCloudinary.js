@@ -9,6 +9,7 @@
  *   node scripts/migrateSubcategoryIconsToCloudinary.js --apply                # write (localhost MongoDB only)
  *   node scripts/migrateSubcategoryIconsToCloudinary.js --apply --production   # write against a non-localhost (production) MongoDB
  *   node scripts/migrateSubcategoryIconsToCloudinary.js --rollback <backup.json> [--apply]
+ *   node scripts/migrateSubcategoryIconsToCloudinary.js --replace --csv <file> --icons <dir> --expect-artworks <n> --expect-files <n> [--apply --production]
  *
  * Options
  *   --csv <file>        mapping CSV            (default ../recovered-uploads/reports/recreated-icons-final.csv)
@@ -22,6 +23,13 @@
  *   --out <dir>         report directory       (default ../recovered-uploads/reports/cloudinary-migration)
  *   --expect-artworks <n> --expect-files <n>   expected counts for the full set (default 1408 / 2162)
  *   --no-url-check      skip the HTTP HEAD check of each secure_url before the DB update
+ *   --tag <tag>         Cloudinary tag for uploaded assets (default recreated-2026-10-06)
+ *   --replace           replace already-migrated recreated icons with the artworks in --csv: only documents
+ *                       whose icon is still the recreated artwork for that filename are changed; an icon an
+ *                       admin uploaded since is SKIPPED_OTHER_CLOUDINARY_ASSET. The recreated assets stay in
+ *                       Cloudinary so --rollback can point the documents back at them.
+ *   --replace-from <file> CSV of the recreated set used by the --replace guard
+ *                       (default ../recovered-uploads/reports/recreated-icons-final.csv)
  *
  * Safety
  *   - Dry run inspects every file, hashes it, validates the mapping and the DB match, and
@@ -64,6 +72,9 @@ const CONCURRENCY = Math.max(1, Number(opt("--concurrency", 4)) || 4);
 const EXPECT_ARTWORKS = Number(opt("--expect-artworks", 1408));
 const EXPECT_FILES = Number(opt("--expect-files", 2162));
 const URL_CHECK = !flag("--no-url-check");
+const TAG = opt("--tag", "recreated-2026-10-06");
+const REPLACE = flag("--replace");
+const REPLACE_FROM = path.resolve(opt("--replace-from", path.join(ROOT_DIR, "recovered-uploads/reports/recreated-icons-final.csv")));
 const BACKUP_DIR = path.join(__dirname, "backups");
 const STATE_FILE = path.join(OUT_DIR, "state.json");
 const KIND = "subcategory";
@@ -186,7 +197,18 @@ function matchDocuments(rows, byFilename, problems) {
   }
 }
 
-function classify(rows) {
+// --replace: server filename -> SHA-256 of the recreated artwork it was migrated to.
+function loadReplaceableShas() {
+  const rows = parseCsv(fs.readFileSync(REPLACE_FROM, "utf8"));
+  const header = rows[0];
+  const fi = header.indexOf("filename"), si = header.indexOf("sha256");
+  if (fi === -1 || si === -1) throw new Error(`${REPLACE_FROM} needs "filename" and "sha256" columns`);
+  return new Map(rows.slice(1).filter((r) => r[fi]).map((r) => [r[fi], r[si].toLowerCase()]));
+}
+
+const assetSha = (icon) => (icon && (icon.sha256 || String(icon.publicId || "").split("/").pop())) || "";
+
+function classify(rows, replaceable = null) {
   for (const row of rows) {
     const doc = row.docs && row.docs[0];
     row.publicId = row.sha256 ? images.publicIdFor(KIND, row.sha256) : null;
@@ -194,6 +216,7 @@ function classify(rows) {
     row.docId = String(doc._id);
     row.oldIconUrl = doc.legacyUrl || doc.iconUrl;
     if (doc.icon && doc.icon.publicId === row.publicId && doc.iconUrl === doc.icon.url) row.status = "ALREADY_MIGRATED";
+    else if (replaceable && doc.icon && doc.icon.publicId && assetSha(doc.icon) === replaceable.get(row.filename) && doc.iconUrl === doc.icon.url) row.status = "PENDING";
     else if (doc.icon && doc.icon.publicId) row.status = "SKIPPED_OTHER_CLOUDINARY_ASSET";
     else row.status = "PENDING";
   }
@@ -258,7 +281,7 @@ async function main() {
   await mongoose.connect(MONGO_URI, { serverSelectionTimeoutMS: 15_000 });
   const dbLabel = `${mongoose.connection.host}/${mongoose.connection.name}`;
   const local = isLocalMongo(MONGO_URI);
-  console.log(`MongoDB: ${dbLabel} (${local ? "localhost" : "REMOTE"})  Cloudinary root: ${images.rootFolder()}/  Mode: ${APPLY ? "APPLY" : "DRY RUN"}`);
+  console.log(`MongoDB: ${dbLabel} (${local ? "localhost" : "REMOTE"})  Cloudinary root: ${images.rootFolder()}/  Mode: ${APPLY ? "APPLY" : "DRY RUN"}${REPLACE ? " (REPLACE recreated icons)" : ""}`);
 
   if (ROLLBACK) { await rollback(path.resolve(ROLLBACK)); return; }
 
@@ -296,7 +319,7 @@ async function main() {
     rows = rows.filter((r) => shas.has(r.sha256));
     subset = true;
   }
-  classify(rows);
+  classify(rows, REPLACE ? loadReplaceableShas() : null);
   const artworks = new Set(rows.filter((r) => r.sha256).map((r) => r.sha256));
   const pending = rows.filter((r) => r.status === "PENDING");
   const pendingArtworks = new Set(pending.map((r) => r.sha256));
@@ -341,7 +364,7 @@ async function main() {
   const backupFile = path.join(BACKUP_DIR, `subcategory-icons-cloudinary-${runStamp}.json`);
   fs.writeFileSync(backupFile, JSON.stringify({
     createdAt: new Date().toISOString(), mongo: dbLabel, cloudinaryRoot: images.rootFolder(),
-    documents: pending.map((r) => ({ _id: r.docId, iconUrl: r.oldIconUrl, icon: r.docs[0].icon || null, subcategory: r.subcategory, category: r.category, server_filename: r.filename })),
+    documents: pending.map((r) => ({ _id: r.docId, iconUrl: r.docs[0].iconUrl, icon: r.docs[0].icon || null, subcategory: r.subcategory, category: r.category, server_filename: r.filename })),
   }, null, 2));
   console.log(`\nBackup of the ${fmt(pending.length)} document(s) about to change: ${backupFile}`);
 
@@ -360,7 +383,7 @@ async function main() {
     else {
       try {
         const buffer = fs.readFileSync(first.localPath);
-        const result = await images.uploadImage(buffer, { kind: KIND, filename: first.filename, mimetype: first.format.toUpperCase() === "JPEG" ? "image/jpeg" : "image/png", tags: ["recreated-2026-10-06", "migration"] });
+        const result = await images.uploadImage(buffer, { kind: KIND, filename: first.filename, mimetype: first.format.toUpperCase() === "JPEG" ? "image/jpeg" : "image/png", tags: [TAG, "migration"] });
         asset = { ...result.asset, uploadedAt: new Date().toISOString() };
         delete asset.legacyUrl;
         if (result.existing) tally.existing++; else tally.uploaded++;
