@@ -17,6 +17,7 @@ const { notifyAdmins } = require("../helpers/notificationHelper");
 const { VALID_COUNTRIES, normalizeCountry, countryMatchValues } = require("../helpers/country");
 const { escapeRegex } = require("../services/businessImportService");
 const businessService = require("../services/businessService");
+const { cleanBusinessLogo, cleanBusinessPhotos } = require("../utils/businessMedia");
 
 ///this api use combine for admin and users
 exports.createBusiness = async (req, res) => {
@@ -1310,7 +1311,13 @@ exports.updateBusiness = async (req, res) => {
       return res.status(400).json({ message: "Missing businessData" });
     }
 
-    const parsedData = JSON.parse(businessData);
+    let parsedData;
+    try {
+      parsedData = JSON.parse(businessData);
+      if (!parsedData || typeof parsedData !== "object" || Array.isArray(parsedData)) throw new Error();
+    } catch {
+      return res.status(400).json({ message: "Invalid business data format" });
+    }
     const { _id: businessId } = parsedData;
 
     if (!businessId) {
@@ -1413,21 +1420,19 @@ exports.updateBusiness = async (req, res) => {
       }
     }
 
-    // Handle uploaded businessLogo
-    if (req.files?.businessLogo?.[0]) {
-      const logoFileName = path.basename(req.files.businessLogo[0].path);
-      updates.businessLogo = logoFileName;
+    // Omitted media means preserve it; explicit empty values mean remove it.
+    // Multer's filename is the public storage key, not its absolute disk path.
+    const logoFile = req.files?.businessLogo?.[0];
+    if (logoFile) {
+      updates.businessLogo = logoFile.filename || path.basename(logoFile.path);
+    } else if (Object.hasOwn(parsedData, "businessLogo")) {
+      updates.businessLogo = cleanBusinessLogo(parsedData.businessLogo);
     }
 
-    // Handle uploaded photos
-    if (req.files?.photos) {
-      const photoFileNames = req.files.photos.map((file) =>
-        path.basename(file.path)
-      );
-      updates.photos = [
-        ...(updates.photos || business.photos || []),
-        ...photoFileNames,
-      ];
+    if (Object.hasOwn(parsedData, "photos") || req.files?.photos?.length) {
+      const keptPhotos = cleanBusinessPhotos(Object.hasOwn(parsedData, "photos") ? parsedData.photos : business.photos || []);
+      const uploadedPhotos = (req.files?.photos || []).map((file) => file.filename || path.basename(file.path));
+      updates.photos = cleanBusinessPhotos([...keptPhotos, ...uploadedPhotos]);
     }
 
     updates.updatedAt = new Date();
@@ -1462,7 +1467,7 @@ exports.updateBusiness = async (req, res) => {
   } catch (err) {
     console.error("Error updating business:", err);
     return res
-      .status(500)
+      .status(err.status || 500)
       .json({ message: "Failed to update business", error: err.message });
   }
 };

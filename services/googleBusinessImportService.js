@@ -396,7 +396,7 @@ async function syncLinkedBusiness(business, profile, media = {}, { accountName }
     dirty = true;
   }
 
-  if (business.businessLogo === DEFAULT_LOGO && media.logoUrl) {
+  if ((!business.businessLogo || business.businessLogo === DEFAULT_LOGO) && media.logoUrl) {
     business.businessLogo = media.logoUrl;
     dirty = true;
   }

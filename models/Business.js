@@ -10,7 +10,7 @@ const BusinessSchema = new Schema(
     isAdmin: { type: Boolean, default: false },
     businessLogo: { 
       type: String, 
-      default: "https://img.icons8.com/fluency/100/000000/organization.png" 
+      default: ""
     },
     // Google location resource names are globally stable (for example
     // `locations/123`).  A partial unique index makes duplicate prevention hold
@@ -98,7 +98,7 @@ const BusinessSchema = new Schema(
     importedSubcategory: { type: String, default: "" },
     photos: {
       type: [String],
-      default: ["https://images.unsplash.com/photo-1486406146926-c627a92ad1ab?q=80&w=1000&auto=format&fit=crop"]
+      default: []
     },
     rating: { type: Number, default: 0 },
     totalReviews: { type: Number, default: 0 },
