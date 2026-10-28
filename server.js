@@ -117,8 +117,15 @@ function createApp() {
   }));
 
   // ── CORS: whitelist from env (comma-separated origins) ─────────────────
+  // https://example.com and https://www.example.com are the same site: allow both whenever
+  // either is listed (a missing www entry once blocked every API call from www.urbancitations.com).
+  const withWwwVariant = (o) => {
+    const m = /^(https?:\/\/)(www\.)?([^/]+)$/.exec(o);
+    if (!m || /^(localhost|127\.|\d)/.test(m[3])) return [o];
+    return [`${m[1]}${m[3]}`, `${m[1]}www.${m[3]}`];
+  };
   const allowedOrigins = process.env.CORS_ORIGINS
-    ? process.env.CORS_ORIGINS.split(",").map(o => o.trim())
+    ? [...new Set(process.env.CORS_ORIGINS.split(",").map(o => o.trim()).filter(Boolean).flatMap(withWwwVariant))]
     : [];
 
   app.use(cors({
