@@ -111,6 +111,18 @@ test("rejects an image whose MIME type is not an image", async () => {
   assert.equal(res.status, 400);
 });
 
+test("accepts real images labelled image/jpg, image/x-png or application/octet-stream", async () => {
+  for (const [name, type, data] of [["photo.jpg", "image/jpg", JPEG], ["logo.png", "image/x-png", PNG], ["logo.png", "application/octet-stream", PNG]]) {
+    const res = await post("/fields", [{ field: "businessLogo", name, type, data }]);
+    assert.equal(res.status, 200, `${name} as ${type}`);
+  }
+});
+
+test("a generic MIME type does not let non-image content or extensions through", async () => {
+  assert.equal((await post("/single", [{ field: "image", name: "shell.jpg", type: "application/octet-stream", data: PHP }])).status, 400);
+  assert.equal((await post("/single", [{ field: "image", name: "logo.svg", type: "application/octet-stream", data: PNG }])).status, 400);
+});
+
 test("one bad file removes every file from the same request", async () => {
   const before = storedNames().length;
   const res = await post("/fields", [

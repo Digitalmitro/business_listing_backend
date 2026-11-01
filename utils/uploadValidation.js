@@ -10,7 +10,13 @@ const fs = require("node:fs/promises");
 const path = require("node:path");
 
 const IMAGE_EXTS = [".jpg", ".jpeg", ".jfif", ".png", ".gif", ".webp", ".avif"];
-const IMAGE_MIMES = ["image/jpeg", "image/pjpeg", "image/png", "image/gif", "image/webp", "image/avif"];
+// Includes the non-standard labels some Windows setups send for .jpg/.png, and the
+// generic type browsers use when the OS does not know the extension (common for
+// .webp/.avif). The extension and the stored bytes are still checked.
+const IMAGE_MIMES = [
+  "image/jpeg", "image/pjpeg", "image/jpg", "image/png", "image/x-png", "image/gif", "image/webp", "image/avif",
+  "application/octet-stream", "",
+];
 const IMAGE_KINDS = ["jpeg", "png", "gif", "webp", "avif"];
 
 const POLICIES = {
