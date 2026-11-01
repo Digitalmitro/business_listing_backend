@@ -13,13 +13,28 @@ const Tenant  = require("../models/Tenant");
  * lookup to either the User or Admin collection, avoiding the double query
  * that previously ran on every authenticated request.
  */
+/**
+ * The JWT from `Authorization: Bearer <token>`; older admin screens send the raw token
+ * in a `token` (or `x-access-token`) header instead, which CORS already allows.
+ */
+function extractToken(req) {
+  const authHeader = req.header("Authorization");
+  if (authHeader && authHeader.startsWith("Bearer ")) {
+    return authHeader.replace("Bearer ", "").trim() || null;
+  }
+  const legacy = req.header("token") || req.header("x-access-token");
+  if (typeof legacy === "string" && legacy.trim()) {
+    return legacy.replace(/^Bearer\s+/i, "").trim() || null;
+  }
+  return null;
+}
+
 const authMiddleware = async (req, res, next) => {
   try {
-    const authHeader = req.header("Authorization");
-    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    const token = extractToken(req);
+    if (!token) {
       return res.status(401).json({ success: false, message: "No token, authorization denied" });
     }
-    const token = authHeader.replace("Bearer ", "").trim();
 
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
@@ -65,4 +80,17 @@ const authMiddleware = async (req, res, next) => {
   }
 };
 
-module.exports = { authMiddleware };
+/**
+ * Authenticates when a token is present, but never rejects: anonymous requests and
+ * invalid tokens continue without req.user. For public reads that show more to the
+ * owner or an admin (e.g. KYC documents on a business).
+ */
+const optionalAuth = (req, res, next) => {
+  if (!extractToken(req)) return next();
+  const passthrough = {
+    status: () => ({ json: () => next() }),
+  };
+  return authMiddleware(req, passthrough, next);
+};
+
+module.exports = { authMiddleware, optionalAuth, extractToken };

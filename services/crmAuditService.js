@@ -1,5 +1,6 @@
 // backend/services/crmAuditService.js
 "use strict";
+const { escapeRegex } = require("../utils/regex");
 
 const mongoose = require("mongoose");
 const { scopeFilter, validBusinessId } = require("./crmScope");
@@ -149,7 +150,7 @@ async function getAuditLogs(ownerId, opts = {}) {
   }
 
   if (search && search.trim()) {
-    const rx = new RegExp(search.trim(), "i");
+    const rx = new RegExp(escapeRegex(search.trim()), "i");
     filter.$or = [
       { description: rx },
       { leadName:    rx },
@@ -208,7 +209,7 @@ async function exportAuditLogs(ownerId, opts = {}) {
     if (endDate)   filter.timestamp.$lte = new Date(new Date(endDate).setHours(23, 59, 59, 999));
   }
   if (search && search.trim()) {
-    const rx = new RegExp(search.trim(), "i");
+    const rx = new RegExp(escapeRegex(search.trim()), "i");
     filter.$or = [{ description: rx }, { leadName: rx }, { performedByName: rx }];
   }
 

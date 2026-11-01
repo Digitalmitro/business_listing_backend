@@ -8,7 +8,7 @@ const CrmFollowUpConfig = require("../models/CrmFollowUpConfig");
 const { CrmSchedulerConfig } = require("../models/CrmConfig");
 const CrmLeadFollowUpLog = require("../models/CrmLeadFollowUpLog");
 const EmailTemplate = require("../models/EmailTemplate");
-const SenderEmail = require("../models/SenderEmail");
+const Business = require("../models/Business");
 const User = require("../models/User");
 const logger = require("../utils/logger");
 
@@ -167,6 +167,22 @@ async function triggerLeadFollowUp(ownerId, leadId, options = {}) {
       return { success: false, status: "skipped", reason: "Lead has no email address", log: skipLog };
     }
 
+    // Every opt-out is honoured (all emails, this business, bounced), like automations.
+    const blockedReason = await require("./crmEmailAutomationService").recipientBlockReason({ businessId: lead.businessId, email: lead.email });
+    if (blockedReason) {
+      const skipLog = await CrmLeadFollowUpLog.create({
+        ownerId,
+        leadId,
+        leadEmail: lead.email,
+        subject: "Skipped follow-up",
+        body: blockedReason,
+        status: "skipped",
+        failureReason: blockedReason,
+        attemptNumber: lead.followUpCount + 1,
+      });
+      return { success: false, status: "skipped", reason: blockedReason, log: skipLog };
+    }
+
     const config = await getOrUpdateConfig(ownerId);
     if (!force && !isRetry && lead.followUpCount >= config.maxAttempts) {
       return {
@@ -203,22 +219,51 @@ async function triggerLeadFollowUp(ownerId, leadId, options = {}) {
 
     const subject = applyLeadPlaceholders(rawSubject, placeholders);
     const html = applyLeadPlaceholders(rawBody, placeholders);
-    const unsubscribeLink = `${process.env.FRONTEND_URL}/unsubscribe?leadId=${lead._id}&ownerId=${ownerId}`;
 
-    // Find active sender or use fallback service
-    const sender = await SenderEmail.findOne({ isActive: true }).lean();
+    // Follow-ups go to the business's own lead, so they are sent from the
+    // business's verified address and only on a plan that includes CRM emails.
     let sendResult;
-
-    try {
-      if (sender) {
-        const nodemailerUtil = require("../utils/nodemailer");
-        sendResult = await nodemailerUtil.sendMail(sender.email, lead.email, subject, html, unsubscribeLink);
-      } else {
-        const sendMailService = require("./sendMail");
-        sendResult = await sendMailService(lead.email, subject, html);
+    if (!lead.businessId) {
+      sendResult = { success: false, skipped: true, reason: "Lead is not linked to a business, so there is no business email address to send from" };
+    } else {
+      const automation = require("./crmEmailAutomationService");
+      const business = await Business.findById(lead.businessId).select("_id businessName userId subscription").lean();
+      try {
+        const unsubscribeLink = business ? await automation.buildUnsubscribeLink({ business, email: lead.email, name: lead.leadName }) : null;
+        const headers = unsubscribeLink
+          ? { "List-Unsubscribe": `<${unsubscribeLink}>`, "List-Unsubscribe-Post": "List-Unsubscribe=One-Click" }
+          : undefined;
+        sendResult = business
+          ? await automation.deliver({ to: lead.email, subject, html, business, owner, unsubscribeLink, headers, kind: "crm_followup" })
+          : { success: false, skipped: true, reason: "The lead's business no longer exists" };
+      } catch (sendErr) {
+        sendResult = { success: false, error: sendErr };
       }
-    } catch (sendErr) {
-      sendResult = { success: false, error: sendErr };
+    }
+
+    if (sendResult.skipped) {
+      const skipLog = await CrmLeadFollowUpLog.create({
+        ownerId,
+        leadId,
+        leadEmail: lead.email,
+        templateId: templateDoc?._id || null,
+        subject,
+        body: html,
+        status: "skipped",
+        failureReason: sendResult.reason,
+        attemptNumber: lead.followUpCount + 1,
+      });
+      lead.activities.push({
+        action: "email_sent",
+        type: "email_sent",
+        description: `Automated follow-up email not sent: ${sendResult.reason}`,
+        user: ownerId,
+        performedBy: ownerId,
+        timestamp: new Date(),
+        performedAt: new Date(),
+      });
+      await lead.save();
+      return { success: false, status: "skipped", reason: sendResult.reason, log: skipLog };
     }
 
     if (!sendResult.success) {

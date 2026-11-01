@@ -6,6 +6,9 @@ const { unsubscribe, checkStatus } = require("../controllers/unsubscribeControll
 // Both GET and POST supported for flexibility with email links and API clients
 router.get("/", unsubscribe);
 router.post("/", unsubscribe);
-router.get("/check", checkStatus);
+// Reveals whether an address opted out: admins (email marketing) only.
+const { authMiddleware } = require("../middlewares/authMiddleware");
+const { requireAdmin } = require("../middlewares/requireAdmin");
+router.get("/check", authMiddleware, requireAdmin("email_marketing"), checkStatus);
 
 module.exports = router;

@@ -6,6 +6,7 @@ const { resolveWriteScope } = require("../services/crmScope");
 const catalog = require("../services/crmEmailAutomationCatalog");
 const automationService = require("../services/crmEmailAutomationService");
 const aiService = require("../services/crmEmailAiService");
+const plans = require("../services/planEntitlements");
 
 function sendError(res, error, event) {
   const status = error.status || 500;
@@ -14,6 +15,7 @@ function sendError(res, error, event) {
     success: false,
     message: status >= 500 && !error.status ? "Something went wrong. Please try again." : error.message,
     ...(error.details ? { details: error.details } : {}),
+    ...(error.code ? { code: error.code } : {}),
   });
 }
 
@@ -53,8 +55,14 @@ exports.getCatalog = async (req, res) => {
 exports.listAutomations = async (req, res) => {
   try {
     const scope = await businessScope(req, req.query.businessId);
-    const automations = await automationService.listAutomations(scope.businessId);
-    return res.status(200).json({ success: true, automations, aiEnabled: aiService.isConfigured() });
+    const [automations, plan] = await Promise.all([automationService.listAutomations(scope.businessId), plans.getPlanEntitlements(scope.businessId)]);
+    return res.status(200).json({
+      success: true,
+      automations,
+      aiEnabled: aiService.isConfigured() && plan.entitlements.aiEmails,
+      aiConfigured: aiService.isConfigured(),
+      plan: { name: plan.planName, entitlements: plan.entitlements },
+    });
   } catch (error) {
     return sendError(res, error, "crm_email_automation.list_failed");
   }
@@ -122,6 +130,7 @@ exports.generateWithAi = async (req, res) => {
   try {
     requireTrigger(req.body.trigger);
     const scope = await businessScope(req, req.body.businessId);
+    await plans.assertAllows(scope.businessId, "ai");
     const { trigger, action, tone, instruction, subject, body, previousSubject } = req.body;
     const draft = await aiService.generateEmail({
       trigger,

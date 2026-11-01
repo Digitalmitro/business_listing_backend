@@ -98,7 +98,23 @@ function trackLinks(html, dispatchId) {
   });
 }
 
+/**
+ * Platform unsubscribe ("stop all UrbanCitations emails"), e.g. for email campaigns.
+ * Signed so nobody can unsubscribe someone else by guessing an address or user id.
+ */
+function platformUnsubscribeUrl({ email, userId, campaignId } = {}) {
+  const token = sign({ t: "p", e: String(email || "").toLowerCase(), ...(userId ? { u: String(userId) } : {}), ...(campaignId ? { c: String(campaignId) } : {}) });
+  return `${backendUrl()}/api/unsubscribe?t=${encodeURIComponent(token)}`;
+}
+
+function verifyPlatformUnsubscribe(token) {
+  const payload = verify(token);
+  return payload && payload.t === "p" && (payload.e || payload.u) ? payload : null;
+}
+
 module.exports = {
+  platformUnsubscribeUrl,
+  verifyPlatformUnsubscribe,
   sign,
   verify,
   unsubscribeToken,

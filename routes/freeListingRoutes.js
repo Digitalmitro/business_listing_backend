@@ -1,8 +1,9 @@
 const express = require('express');
 const router = express.Router();
 const {upload} = require('../config/multerConfig')
+const { requireAdmin } = require('../middlewares/requireAdmin')
 const {getFreeListing,createFreeListing}=require("../controllers/FreeListingController");
 
 router.get('/freelisting', getFreeListing)
-router.post('/freelisting', upload.single('icon'),createFreeListing)
+router.post('/freelisting', requireAdmin('cms'), upload.single('icon'),createFreeListing)
 module.exports = router;

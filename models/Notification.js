@@ -30,7 +30,7 @@ const NotificationSchema = new mongoose.Schema({
   },
   category: {
     type: String,
-    enum: ['business', 'claims', 'enquiry', 'kyc', 'subscription', 'general', 'booking'],
+    enum: ['business', 'claims', 'enquiry', 'kyc', 'subscription', 'general', 'booking', 'broadcast'],
     default: 'general'
   },
   read: {

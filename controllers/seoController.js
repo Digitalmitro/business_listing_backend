@@ -1,4 +1,5 @@
 // controllers/seoController.js
+const { searchPattern } = require("../utils/regex");
 const PageSEO = require("../models/PageSeo");
 const Business = require("../models/Business");
 
@@ -74,9 +75,9 @@ const getBusinessesForSEO = async (req, res) => {
     const query = search
       ? {
           $or: [
-            { businessName: { $regex: search, $options: "i" } },
-            { "contact.mobile": { $regex: search, $options: "i" } },
-            { "contact.email": { $regex: search, $options: "i" } },
+            { businessName: { $regex: searchPattern(search), $options: "i" } },
+            { "contact.mobile": { $regex: searchPattern(search), $options: "i" } },
+            { "contact.email": { $regex: searchPattern(search), $options: "i" } },
           ],
         }
       : {};
@@ -150,9 +151,16 @@ const getBusinessSEO = async (req, res) => {
 
 const updateBusinessSEO = async (req, res) => {
   try {
-    let seoPayload = req.body.seo;
+    let seoPayload = req.body?.seo;
     if (typeof seoPayload === "string") {
-      seoPayload = JSON.parse(seoPayload);
+      try {
+        seoPayload = JSON.parse(seoPayload);
+      } catch {
+        return res.status(400).json({ message: "Invalid SEO data" });
+      }
+    }
+    if (!seoPayload || typeof seoPayload !== "object") {
+      return res.status(400).json({ message: "SEO data is required" });
     }
     const { title, description, keywords, ogImage, robots } = seoPayload;
     
@@ -182,6 +190,7 @@ const updateBusinessSEO = async (req, res) => {
       { new: true }
     ).select("seo");
 
+    if (!updated) return res.status(404).json({ message: "Business not found" });
     res.json(updated.seo);
   } catch (err) {
     res.status(500).json({ message: err.message });

@@ -21,6 +21,7 @@ const templateService = require("../services/crmEngagementTemplateService");
 const importService = require("../services/crmContactImportService");
 const signals = require("../services/crmSignalService");
 const aiService = require("../services/crmEngagementAiService");
+const plans = require("../services/planEntitlements");
 const automationService = require("../services/crmEmailAutomationService");
 
 function sendError(res, error, event) {
@@ -30,6 +31,7 @@ function sendError(res, error, event) {
     success: false,
     message: status >= 500 && !error.status ? "Something went wrong. Please try again." : error.message,
     ...(error.details ? { details: error.details } : {}),
+    ...(error.code ? { code: error.code } : {}),
   });
 }
 
@@ -75,8 +77,19 @@ exports.getCatalog = async (req, res) => {
 /** GET /overview?businessId= — also copies in starter templates/journeys on first use. */
 exports.getOverview = handler("crm_engagement.overview_failed", async (req, res, scope) => {
   await journeyService.seedBusiness(scope.business);
-  const [settings, stats] = await Promise.all([contactsService.getSettings(scope.businessId), journeyService.overview(scope.businessId)]);
-  return res.status(200).json({ success: true, settings, stats, aiEnabled: aiService.isConfigured() });
+  const [settings, stats, plan] = await Promise.all([
+    contactsService.getSettings(scope.businessId),
+    journeyService.overview(scope.businessId),
+    plans.getPlanEntitlements(scope.businessId),
+  ]);
+  return res.status(200).json({
+    success: true,
+    settings,
+    stats,
+    aiEnabled: aiService.isConfigured() && plan.entitlements.aiEmails,
+    aiConfigured: aiService.isConfigured(),
+    plan: { name: plan.planName, entitlements: plan.entitlements },
+  });
 });
 
 exports.saveSettings = handler("crm_engagement.settings_failed", async (req, res, scope) => {
@@ -150,6 +163,7 @@ exports.previewTemplate = handler("crm_engagement.template_preview_failed", asyn
 
 /** POST /ai/template — returns a draft only; never saves. */
 exports.aiTemplate = handler("crm_engagement.ai_template_failed", async (req, res, scope) => {
+  await plans.assertAllows(scope.businessId, "ai");
   const { action, purpose, tone, instruction, subject, body, previousSubject } = req.body;
   const draft = await aiService.draftTemplate({ businessId: scope.businessId, action, purpose, tone, instruction, subject, body, previousSubject });
   return res.status(200).json({ success: true, draft });
@@ -157,6 +171,7 @@ exports.aiTemplate = handler("crm_engagement.ai_template_failed", async (req, re
 
 /** POST /ai/plan — proposes journeys; nothing is saved until /ai/plan/apply. */
 exports.aiPlan = handler("crm_engagement.ai_plan_failed", async (req, res, scope) => {
+  await plans.assertAllows(scope.businessId, "ai");
   await journeyService.seedBusiness(scope.business);
   const [templates, journeys] = await Promise.all([
     CrmEngagementTemplate.find({ businessId: scope.businessId, archived: false }).select("_id name purpose subject").lean(),

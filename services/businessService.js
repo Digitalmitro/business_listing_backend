@@ -19,6 +19,42 @@ class ValidationError extends Error {
   }
 }
 
+const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+function scheduleSlots(schedule, day) {
+  if (!schedule) return undefined;
+  if (schedule instanceof Map) return schedule.get(day);
+  return schedule[day];
+}
+
+/**
+ * Opening hours must be usable for booking: open 24 hours, or at least one open day,
+ * and every selected day needs at least one slot with valid "HH:MM" open and close times
+ * (a day ticked without times used to save and leave the business permanently "Closed").
+ */
+function validateBusinessTiming(timing = {}) {
+  if (timing.isOpen24Hours) return;
+  const days = Array.isArray(timing.daysOfWeek) ? timing.daysOfWeek : [];
+  if (days.length === 0) {
+    throw new ValidationError("Business hours are required: select at least one open day or mark the business open 24 hours.");
+  }
+  const invalidDays = days.filter((day) => !DAYS.includes(day));
+  if (invalidDays.length) {
+    throw new ValidationError(`Unknown day(s) in business hours: ${invalidDays.join(", ")}.`);
+  }
+  const missing = days.filter((day) => {
+    const slots = scheduleSlots(timing.schedule, day);
+    if (!Array.isArray(slots) || slots.length === 0) return true;
+    return slots.some((slot) => !HHMM.test(String(slot?.openAt || "")) || !HHMM.test(String(slot?.closeAt || "")));
+  });
+  if (missing.length) {
+    throw new ValidationError(`Opening and closing times (HH:MM) are required for every selected day: ${missing.join(", ")}.`);
+  }
+}
+
+const isChecked = (value) => value === true || value === "true";
+
 function toObjectIdArray(items) {
   if (!Array.isArray(items)) items = items ? [items] : [];
   return items
@@ -80,10 +116,7 @@ async function createBusiness({ ownerId, isAdmin = false, businessData, files = 
   }
   // Opening hours are required so "Book Now" works from day one. Every creation
   // path (manual form, admin form, Google import) collects them before reaching here.
-  const timing = businessData.businessTiming || {};
-  if (!timing.isOpen24Hours && !(Array.isArray(timing.daysOfWeek) && timing.daysOfWeek.length > 0)) {
-    throw new ValidationError("Business hours are required: select at least one open day or mark the business open 24 hours.");
-  }
+  validateBusinessTiming(businessData.businessTiming || {});
 
 
   // Attach uploaded file names
@@ -150,7 +183,11 @@ async function createBusiness({ ownerId, isAdmin = false, businessData, files = 
     businessLogo: businessLogoFile ? businessLogoFile.filename : extra.businessLogo || undefined,
     photos: photoFiles.length > 0 ? photoFiles.map((p) => p.filename) : extra.photos || undefined,
     userId: isAdmin ? null : ownerId,
-    claimed: !isAdmin,
+    // Admin-created listings carry the Verified / Trust / Claimed checkboxes from the
+    // admin form; an owner's own listing is claimed by them and never self-verified.
+    claimed: isAdmin ? isChecked(businessData.claimed) : true,
+    verified: isAdmin ? isChecked(businessData.verified) : false,
+    trust: isAdmin ? isChecked(businessData.trust) : false,
     isAdmin,
     needsGeocoding,
   };
@@ -206,4 +243,5 @@ async function createBusiness({ ownerId, isAdmin = false, businessData, files = 
 module.exports = {
   ValidationError,
   createBusiness,
+  validateBusinessTiming,
 };

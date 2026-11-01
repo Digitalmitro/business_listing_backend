@@ -18,10 +18,22 @@ const {
   getBusinessPlaceholderData,
 } = require("../utils/emailPlaceholders");
 const { resolveStoredUploadPath } = require("../utils/uploadDir");
+const { escapeRegex } = require("../utils/regex");
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
 const validateEmail = (email) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+
+/** Sender accounts in API responses: never the SMTP password. */
+const publicSender = (sender) => {
+  const plain = typeof sender?.toObject === "function" ? sender.toObject() : { ...sender };
+  delete plain.smtpPass;
+  return plain;
+};
+
+/** Custom recipients are stored as `{ email, ... }`; accept bare strings too. */
+const normalizeCustomEmails = (items = []) =>
+  items.map((item) => (typeof item === "string" ? { email: item.trim() } : item));
 
 /** Allowed attachment MIME types */
 const ALLOWED_ATTACHMENT_TYPES = new Set([
@@ -394,7 +406,7 @@ const addSenderEmail = async (req, res) => {
       return res.status(400).json({ message: "Sender email already exists" });
 
     const senderEmail = await new SenderEmail({ email, displayName, smtpHost, smtpPort, smtpUser, smtpPass, isActive: true }).save();
-    res.status(201).json({ message: "Sender email added successfully", senderEmail });
+    res.status(201).json({ message: "Sender email added successfully", senderEmail: publicSender(senderEmail) });
   } catch (error) {
     res.status(500).json({ message: "Error adding sender email", error: error.message });
   }
@@ -402,8 +414,14 @@ const addSenderEmail = async (req, res) => {
 
 const getSenderEmails = async (req, res) => {
   try {
+    if (!req.isAdmin) {
+      // Business owners only need to pick a platform sender for their campaigns: active
+      // senders, address and display name only (no SMTP host, user or password).
+      const senders = await SenderEmail.find({ isActive: true }).select("email displayName isActive").lean();
+      return res.status(200).json(senders);
+    }
     const query = req.query.includeInactive === "true" ? {} : { isActive: true };
-    res.status(200).json(await SenderEmail.find(query));
+    res.status(200).json(await SenderEmail.find(query).select("-smtpPass").lean());
   } catch (error) {
     res.status(500).json({ message: "Error fetching sender emails", error: error.message });
   }
@@ -430,6 +448,56 @@ const toggleSenderEmailStatus = async (req, res) => {
     res.status(200).json({ message: `Sender email marked as ${senderEmail.isActive ? "active" : "inactive"}` });
   } catch (error) {
     res.status(500).json({ message: "Error toggling sender email status", error: error.message });
+  }
+};
+
+/** PUT /sender-emails/:id/details — edit a platform sender; a blank smtpPass keeps the saved one. */
+const updateSenderEmail = async (req, res) => {
+  try {
+    const senderEmail = await SenderEmail.findById(req.params.id);
+    if (!senderEmail) return res.status(404).json({ message: "Sender email not found" });
+    const { email, displayName, smtpHost, smtpPort, smtpUser, smtpPass } = req.body || {};
+    if (email !== undefined) {
+      const clean = String(email).trim().toLowerCase();
+      if (!validateEmail(clean)) return res.status(400).json({ message: "Enter a valid email address" });
+      if (clean !== senderEmail.email && (await SenderEmail.exists({ email: clean, _id: { $ne: senderEmail._id } }))) {
+        return res.status(400).json({ message: "Sender email already exists" });
+      }
+      senderEmail.email = clean;
+    }
+    if (displayName !== undefined) senderEmail.displayName = String(displayName).trim();
+    if (smtpHost !== undefined) {
+      if (!String(smtpHost).trim()) return res.status(400).json({ message: "SMTP host is required" });
+      senderEmail.smtpHost = String(smtpHost).trim();
+    }
+    if (smtpPort !== undefined) {
+      const port = Number(smtpPort);
+      if (!Number.isInteger(port) || port < 1 || port > 65535) return res.status(400).json({ message: "SMTP port must be a number between 1 and 65535" });
+      senderEmail.smtpPort = port;
+    }
+    if (smtpUser !== undefined && String(smtpUser).trim()) senderEmail.smtpUser = String(smtpUser).trim();
+    if (typeof smtpPass === "string" && smtpPass.length) senderEmail.smtpPass = smtpPass;
+    await senderEmail.save();
+    const { smtpPass: _omit, ...safe } = senderEmail.toObject();
+    res.status(200).json({ message: "Sender email updated", senderEmail: safe });
+  } catch (error) {
+    res.status(500).json({ message: "Error updating sender email", error: error.message });
+  }
+};
+
+/** DELETE /sender-emails/:id — refused while a scheduled campaign still sends from it. */
+const deleteSenderEmail = async (req, res) => {
+  try {
+    const senderEmail = await SenderEmail.findById(req.params.id);
+    if (!senderEmail) return res.status(404).json({ message: "Sender email not found" });
+    const pending = await EmailCampaign.countDocuments({ fromEmail: senderEmail.email, status: { $in: ["scheduled", "sending"] } });
+    if (pending) {
+      return res.status(409).json({ message: `${pending} scheduled campaign(s) still send from this address. Cancel or change them first.` });
+    }
+    await senderEmail.deleteOne();
+    res.status(200).json({ message: "Sender email deleted" });
+  } catch (error) {
+    res.status(500).json({ message: "Error deleting sender email", error: error.message });
   }
 };
 
@@ -491,6 +559,10 @@ const createCampaign = async (req, res) => {
 
     const refTimeZone = req.body.timeZone ||
       (users.length > 0 ? (users[0].timeZone || "Asia/Kolkata") : "Asia/Kolkata");
+
+    if (parsedRecipients.customEmails) {
+      parsedRecipients.customEmails = normalizeCustomEmails(parsedRecipients.customEmails);
+    }
 
     const campaign = new EmailCampaign({
       name,
@@ -601,7 +673,7 @@ const updateCampaign = async (req, res) => {
           const email = typeof item === "string" ? item : item.email;
           if (!validateEmail(email)) return res.status(400).json({ message: `Invalid custom email: ${email}` });
         }
-        campaign.recipients.customEmails = parsedRecipients.customEmails;
+        campaign.recipients.customEmails = normalizeCustomEmails(parsedRecipients.customEmails);
       }
     }
 
@@ -755,8 +827,8 @@ const getUsers = async (req, res) => {
     const query = {
       subscribedToEmails: true,
       $or: [
-        { email: { $regex: search, $options: "i" } },
-        { phone: { $regex: search, $options: "i" } },
+        { email: { $regex: escapeRegex(search), $options: "i" } },
+        { phone: { $regex: escapeRegex(search), $options: "i" } },
       ],
     };
     const [users, totalUsers] = await Promise.all([
@@ -799,7 +871,7 @@ const sendTestEmail = async (req, res) => {
     if (!sender)
       return res.status(400).json({ message: "No active sender email found. Please add one in Settings." });
 
-    const html = applyEmailPlaceholders(template.body, {
+    const sampleData = {
       full_name:        "Test User",
       frontend_url:     process.env.FRONTEND_URL || "http://localhost:3000",
       package_name:     "Premium Package",
@@ -816,12 +888,18 @@ const sendTestEmail = async (req, res) => {
       subcategory:      "Digital Marketing",
       country:          "India",
       listing_url:      `${(process.env.FRONTEND_URL || "https://urbancitations.com").replace(/\/+$/, "")}/digital-mitro-pvt-ltd/69c22f65bbcdf3b5f6f8dcbb`,
-    });
+    };
+    // Template custom variables preview with their default values.
+    for (const v of Array.isArray(template.customVariables) ? template.customVariables : []) {
+      if (v?.key && !(v.key in sampleData)) sampleData[v.key] = v.defaultValue || "";
+    }
+    const html = applyEmailPlaceholders(template.body, sampleData);
+    const subject = applyEmailPlaceholders(template.subject, sampleData);
 
     const result = await sendMail(
       sender.email,
       to,
-      `[TEST] ${template.subject}`,
+      `[TEST] ${subject}`,
       html,
       `${process.env.FRONTEND_URL}/unsubscribe?test=true`,
       {
@@ -852,6 +930,8 @@ module.exports = {
   uploadTemplateImage,
   uploadCampaignAttachments,
   addSenderEmail,
+  updateSenderEmail,
+  deleteSenderEmail,
   getSenderEmails,
   markSenderEmailAsSpam,
   createCampaign,

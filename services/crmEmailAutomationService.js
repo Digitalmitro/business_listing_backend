@@ -24,7 +24,6 @@ const CrmEmailDispatch = require("../models/CrmEmailDispatch");
 const Appointment = require("../models/Appointment");
 const Business = require("../models/Business");
 const Enquiry = require("../models/Enquiry");
-const SenderEmail = require("../models/SenderEmail");
 const UnsubscribedEmail = require("../models/UnsubscribedEmail");
 const User = require("../models/User");
 const { CrmLead, LEAD_STAGE, WON_STATUSES, LOST_STATUSES } = require("../models/CrmLead");
@@ -61,9 +60,39 @@ function backendUrl() {
   return (process.env.BACKEND_URL || "https://server.urbancitations.com").replace(/\/+$/, "");
 }
 
-/** Public unsubscribe endpoint (see unsubscribeController); adds the address to UnsubscribedEmail. */
-function buildUnsubscribeLink(email) {
-  return `${backendUrl()}/api/unsubscribe?email=${encodeURIComponent(email)}&source=crm_followup&format=html`;
+/**
+ * Why an email to `email` from this business must not be sent, or null.
+ * Honours every opt-out: the global unsubscribe list ("all UrbanCitations emails"),
+ * the matching user's email preference, and this business's own contact record
+ * (unsubscribed from this business, or a bounced address).
+ */
+async function recipientBlockReason({ businessId, email, customer = null }) {
+  const clean = String(email || "").trim().toLowerCase();
+  if (!clean) return "No valid email address";
+  if (customer?.subscribedToEmails === false) return "Recipient has unsubscribed";
+  if (await UnsubscribedEmail.exists({ email: clean })) return "Recipient has unsubscribed from all UrbanCitations emails";
+  const user = customer ? null : await User.findOne({ email: clean }).select("subscribedToEmails").lean();
+  if (user?.subscribedToEmails === false) return "Recipient has unsubscribed";
+  if (businessId) {
+    const CrmContact = require("../models/CrmContact");
+    const contact = await CrmContact.findOne({ businessId, email: clean }).select("emailStatus").lean();
+    if (contact?.emailStatus === "unsubscribed") return "Recipient unsubscribed from this business's emails";
+    if (contact?.emailStatus === "bounced") return "Recipient's email address bounced";
+  }
+  return null;
+}
+
+/**
+ * Signed, per-business unsubscribe link (opens a confirmation page; one-click POST
+ * for mail clients). Ties the address to the business's CRM contact, creating the
+ * contact from the lead when needed. Never a bare ?email= link anyone could use.
+ */
+async function buildUnsubscribeLink({ business, email, name }) {
+  const engagementContacts = require("./crmEngagementContactService");
+  const links = require("./crmEngagementLinks");
+  const ensured = await engagementContacts.ensureContact({ business, email, name, source: "Lead", consent: "unknown" });
+  if (!ensured?.contact?._id) return null;
+  return links.unsubscribeUrl({ contactId: ensured.contact._id, businessId: business._id, email });
 }
 
 // ── Pure helpers (exported for tests) ───────────────────────────────────────
@@ -594,7 +623,7 @@ async function resolveRecipient({ lead, customer }) {
 async function loadContext(dispatch) {
   const [automation, business, appointment, customer] = await Promise.all([
     CrmEmailAutomation.findOne({ businessId: dispatch.businessId, trigger: dispatch.trigger }).lean(),
-    Business.findById(dispatch.businessId).select("_id businessName userId").lean(),
+    Business.findById(dispatch.businessId).select("_id businessName userId subscription").lean(),
     dispatch.appointmentId ? Appointment.findById(dispatch.appointmentId).lean() : null,
     dispatch.customerId ? User.findById(dispatch.customerId).select("full_name email phone subscribedToEmails").lean() : null,
   ]);
@@ -610,24 +639,16 @@ async function loadContext(dispatch) {
 }
 
 /**
- * Sends through the configured SenderEmail (SMTP) or, if none, the Gmail fallback.
- * Journey emails pass their own per-business `unsubscribeLink` and one-click
- * List-Unsubscribe `headers`; automation emails use the global unsubscribe link.
+ * Sends from the business's own verified address, if its plan includes this kind
+ * of email (clientMailer). Returns { success, info, from } | { skipped, reason } |
+ * { success: false, error }. Automation and journey emails both pass a signed
+ * per-business `unsubscribeLink` and one-click List-Unsubscribe `headers`.
  */
-async function deliver({ to, subject, html, business, owner, unsubscribeLink = buildUnsubscribeLink(to), headers }) {
-  const sender = await SenderEmail.findOne({ isActive: true }).select("email").lean();
+async function deliver({ to, subject, html, business, owner, unsubscribeLink, headers, kind = "crm_automation" }) {
+  const clientMailer = require("./clientMailer");
   const replyTo = owner?.email && validator.isEmail(String(owner.email)) ? owner.email : undefined;
-  if (sender) {
-    const nodemailerUtil = require("../utils/nodemailer");
-    return nodemailerUtil.sendMail(sender.email, to, subject, html, unsubscribeLink, {
-      senderName: business?.businessName || undefined,
-      replyTo,
-      headers,
-    });
-  }
-  const sendMailService = require("./sendMail");
-  const footer = `<br><br><a href="${unsubscribeLink}" style="color:#888;font-size:12px;">Unsubscribe</a>`;
-  return sendMailService(to, subject, `${html}${footer}`, { headers, replyTo });
+  const footer = unsubscribeLink ? `<br><br><a href="${unsubscribeLink}" style="color:#888;font-size:12px;">Unsubscribe</a>` : "";
+  return clientMailer.sendAsBusiness({ business, kind, to, subject, html: `${html}${footer}`, headers, replyTo });
 }
 
 async function addLeadTimelineEntry(leadId, description) {
@@ -679,14 +700,22 @@ async function processDispatch(dispatchId, { now = new Date() } = {}) {
 
     const to = await resolveRecipient(ctx);
     if (!to) return finish(dispatch, "skipped", { lastError: "No valid email address for this lead", leadId });
-    const unsubscribed =
-      ctx.customer?.subscribedToEmails === false || Boolean(await UnsubscribedEmail.exists({ email: to }));
-    if (unsubscribed) return finish(dispatch, "skipped", { lastError: "Recipient has unsubscribed", to, leadId });
+    const blocked = await recipientBlockReason({ businessId: dispatch.businessId, email: to, customer: ctx.customer });
+    if (blocked) return finish(dispatch, "skipped", { lastError: blocked, to, leadId });
 
     const values = buildVariableValues({ ...ctx, context: dispatch.context });
     const { subject, body } = catalog.renderTemplate(ctx.automation.template, values);
-    const result = await deliver({ to, subject, html: body, business: ctx.business, owner: ctx.owner });
+    const unsubscribeLink = await buildUnsubscribeLink({ business: ctx.business, email: to, name: ctx.lead?.leadName || ctx.customer?.full_name });
+    const headers = unsubscribeLink
+      ? { "List-Unsubscribe": `<${unsubscribeLink}>`, "List-Unsubscribe-Post": "List-Unsubscribe=One-Click" }
+      : undefined;
+    const result = await deliver({ to, subject, html: body, business: ctx.business, owner: ctx.owner, unsubscribeLink, headers });
 
+    if (result && result.skipped) {
+      logger.info("crm_email_automation.skipped", "Automated email skipped", { dispatchId: String(dispatch._id), trigger: dispatch.trigger, reason: result.reason });
+      await addLeadTimelineEntry(leadId, `Automated email (${label}) not sent: ${result.reason}`);
+      return finish(dispatch, "skipped", { lastError: result.reason, to, subject, leadId });
+    }
     if (result && result.success) {
       logger.info("crm_email_automation.sent", "Automated email sent", {
         dispatchId: String(dispatch._id),
@@ -700,6 +729,7 @@ async function processDispatch(dispatchId, { now = new Date() } = {}) {
         subject,
         body,
         leadId,
+        from: result.from || "",
         sentAt: new Date(),
         messageId: result.info?.messageId || null,
         lastError: null,
@@ -827,6 +857,7 @@ module.exports = {
   appointmentScanWindow,
   buildVariableValues,
   buildUnsubscribeLink,
+  recipientBlockReason,
   skipReason,
   listAutomations,
   saveAutomation,

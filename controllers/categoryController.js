@@ -1,4 +1,5 @@
 const fs = require("fs");
+const { searchPattern } = require("../utils/regex");
 const path = require("path");
 const Category = require("../models/Category");
 const SubCategory = require("../models/SubCategory");
@@ -156,7 +157,7 @@ exports.getAllCategoriesPaginated = async (req, res) => {
 
     const query = {};
     if (search) {
-      query.name = { $regex: search, $options: "i" };
+      query.name = { $regex: searchPattern(search), $options: "i" };
     }
 
     const total = await Category.countDocuments(query);

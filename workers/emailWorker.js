@@ -142,21 +142,22 @@ const emailWorker = new Worker(
         if (!user.email) continue;
         const associatedBiz = businessMap.get(user.email);
 
-        const html = applyEmailPlaceholders(templateDoc.body, {
+        const placeholderData = {
           ...getBusinessPlaceholderData(associatedBiz),
           full_name: user.full_name || "User",
           email:     user.email,
           ...customVars,
-        });
+        };
+        const html = applyEmailPlaceholders(templateDoc.body, placeholderData);
 
-        const unsubscribeLink = `${process.env.FRONTEND_URL}/unsubscribe?userId=${user._id}&campaignId=${campaign._id}`;
+        const unsubscribeLink = require("../services/crmEngagementLinks").platformUnsubscribeUrl({ email: user.email, userId: user._id, campaignId: campaign._id });
         const result = await sendMail(
           senderEmail,
           user.email,
-          effectiveSubject,
+          applyEmailPlaceholders(effectiveSubject, placeholderData),
           html,
           unsubscribeLink,
-          sharedSendOptions
+          { ...sharedSendOptions, headers: { "List-Unsubscribe": `<${unsubscribeLink}>`, "List-Unsubscribe-Post": "List-Unsubscribe=One-Click" } }
         );
 
         if (!result.success) {
@@ -178,7 +179,7 @@ const emailWorker = new Worker(
         const associatedBiz  = businessMap.get(email);
         const businessData   = getBusinessPlaceholderData(associatedBiz);
 
-        const html = applyEmailPlaceholders(templateDoc.body, {
+        const placeholderData = {
           full_name:    "User",
           email,
           business_name: typeof item === "string" ? businessData.business_name : (item.businessName || businessData.business_name),
@@ -190,16 +191,17 @@ const emailWorker = new Worker(
           country:       typeof item === "string" ? businessData.country  : (item.country  || businessData.country),
           listing_url:   typeof item === "string" ? businessData.listing_url : (item.listingUrl || item.listing_url || businessData.listing_url),
           ...customVars,
-        });
+        };
+        const html = applyEmailPlaceholders(templateDoc.body, placeholderData);
 
-        const unsubscribeLink = `${process.env.FRONTEND_URL}/unsubscribe?email=${encodeURIComponent(email)}&campaignId=${campaign._id}`;
+        const unsubscribeLink = require("../services/crmEngagementLinks").platformUnsubscribeUrl({ email, campaignId: campaign._id });
         const result = await sendMail(
           senderEmail,
           email,
-          effectiveSubject,
+          applyEmailPlaceholders(effectiveSubject, placeholderData),
           html,
           unsubscribeLink,
-          sharedSendOptions
+          { ...sharedSendOptions, headers: { "List-Unsubscribe": `<${unsubscribeLink}>`, "List-Unsubscribe-Post": "List-Unsubscribe=One-Click" } }
         );
 
         if (result.success) sentCount++;

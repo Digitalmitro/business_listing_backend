@@ -125,7 +125,17 @@ const BusinessSchema = new Schema(
         enum: ["active", "inactive", "canceled", "pending"],
         default: "inactive"
       },
-      paymentGateway: { type: String, enum: ["razorpay", "paypal"], default: null },
+      paymentGateway: { type: String, enum: ["razorpay", "paypal", "manual"], default: null },
+      nextBillingDate: { type: Date, default: null },
+      // A checkout that hasn't been paid yet. The current plan stays in force until
+      // the gateway confirms payment; only then is `pending` promoted.
+      pending: {
+        packageId: { type: Schema.Types.ObjectId, ref: "PricingPackage", default: null },
+        packageName: { type: String, default: null },
+        subscriptionId: { type: String, default: null },
+        paymentGateway: { type: String, enum: ["razorpay", "paypal", null], default: null },
+        createdAt: { type: Date, default: null },
+      },
     },
     kyc: {
       country: { type: String, enum: ["USA", "Europe", "India"] },

@@ -10,6 +10,7 @@ const {
   deleteTopCountry,
 } = require("../controllers/topCountryController");
 const { authMiddleware } = require("../middlewares/authMiddleware");
+const { requireAdmin } = require("../middlewares/requireAdmin");
 
 // PUBLIC
 router.get("/top-country", getTopcountry);
@@ -19,6 +20,7 @@ router.get("/top-country/name/:name", getCountryByName);
 router.post(
   "/top-country",
   authMiddleware,
+  requireAdmin("top_countries"),
   dynamicUpload, // ← MULTIPLE IMAGES
   createTopcountry
 );
@@ -26,10 +28,11 @@ router.post(
 router.put(
   "/top-country/:id",
   authMiddleware,
+  requireAdmin("top_countries"),
   dynamicUpload, // ← MULTIPLE IMAGES
   updateTopCountry
 );
 
-router.delete("/top-country/:id", authMiddleware, deleteTopCountry);
+router.delete("/top-country/:id", authMiddleware, requireAdmin("top_countries"), deleteTopCountry);
 
 module.exports = router;

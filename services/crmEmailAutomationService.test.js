@@ -104,9 +104,28 @@ test("variable values come from the lead, booking and business", () => {
   assert.equal(service.buildVariableValues({ business, context: { serviceName: "Facial" } }).service_name, "Facial");
 });
 
-test("unsubscribe links point at the public unsubscribe endpoint", () => {
-  const link = service.buildUnsubscribeLink("a+b@example.com");
-  assert.match(link, /\/api\/unsubscribe\?email=a%2Bb%40example\.com&source=crm_followup&format=html$/);
+test("unsubscribe links are signed per-business links, never a bare ?email= link", async () => {
+  const engagementContacts = require("./crmEngagementContactService");
+  const links = require("./crmEngagementLinks");
+  const original = engagementContacts.ensureContact;
+  const contactId = id();
+  const business = { _id: id(), businessName: "Glow Studio" };
+  engagementContacts.ensureContact = async () => ({ contact: { _id: contactId }, created: true });
+  try {
+    const link = await service.buildUnsubscribeLink({ business, email: "a+b@example.com", name: "A" });
+    assert.match(link, /\/api\/crm\/engagement\/public\/unsubscribe\?t=/);
+    assert.doesNotMatch(link, /email=/);
+    const token = decodeURIComponent(new URL(link).searchParams.get("t"));
+    const payload = links.verifyUnsubscribe(token);
+    assert.equal(payload.c, String(contactId));
+    assert.equal(payload.b, String(business._id));
+    assert.equal(payload.e, "a+b@example.com");
+    assert.equal(links.verifyUnsubscribe(`${token}x`), null, "a tampered token is rejected");
+    engagementContacts.ensureContact = async () => null;
+    assert.equal(await service.buildUnsubscribeLink({ business, email: "x@example.com" }), null);
+  } finally {
+    engagementContacts.ensureContact = original;
+  }
 });
 
 test("event handlers and the scheduler never throw without a database", async () => {

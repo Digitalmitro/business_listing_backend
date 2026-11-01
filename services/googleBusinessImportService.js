@@ -271,6 +271,75 @@ function isStrongManualMatch(business, profile) {
   return false;
 }
 
+/**
+ * The owner's existing listings that look like this Google location but weren't
+ * matched strongly enough to link automatically: same or contained name, a shared
+ * phone number, or the same city + pincode. Used to ask the owner instead of
+ * silently creating a duplicate listing.
+ */
+async function findLinkCandidates(userId, profile) {
+  const owned = await Business.find(
+    { userId, googleLocationId: { $in: [null, ""] } },
+    "_id businessName address contact location",
+    { limit: 200, lean: true }
+  );
+  const googleName = normalizeMatchText(profile.businessName);
+  const googlePhones = [profile.phoneNumber, ...(profile.additionalPhones || [])].map(normalizePhone).filter(Boolean);
+  const googleCity = normalizeMatchText(profile.address?.city);
+  const googlePin = normalizeMatchText(profile.address?.pincode);
+  return owned
+    .filter((b) => {
+      const name = normalizeMatchText(b.businessName);
+      const nameMatch = googleName && name && (name === googleName || name.includes(googleName) || googleName.includes(name));
+      const phoneMatch = googlePhones.some((phone) => businessPhones(b).includes(phone));
+      const placeMatch = googleCity && googlePin && normalizeMatchText(b.address?.city) === googleCity && normalizeMatchText(b.address?.pincode) === googlePin;
+      return nameMatch || phoneMatch || placeMatch;
+    })
+    .map((b) => ({ _id: String(b._id), businessName: b.businessName, city: b.address?.city || "", area: b.address?.area || "" }));
+}
+
+/** Silver and higher include linking/syncing an existing listing with Google. */
+async function assertGoogleIntegrationAllowed(business) {
+  const plans = require("./planEntitlements");
+  const { planName, entitlements } = await plans.getPlanEntitlements(business);
+  if (!entitlements.googleBusiness) {
+    throw Object.assign(new Error(`Connecting an existing listing to Google Business Profile is included from the Silver plan. "${business.businessName}" is on the ${planName} plan.`), {
+      status: 403,
+      code: "plan_required",
+    });
+  }
+}
+
+/**
+ * Links an owner's existing listing to a Google location chosen by the owner and
+ * fills in what the listing is missing (fill-only: the owner's own data is kept).
+ */
+async function linkExistingBusiness(user, businessId, profile, { accountName, locationName } = {}) {
+  if (!mongoose.Types.ObjectId.isValid(businessId)) throw new ValidationError("Choose one of your businesses to link.");
+  const target = await Business.findById(businessId);
+  if (!target || String(target.userId || "") !== String(user._id)) {
+    throw Object.assign(new Error("You can only link a Google profile to a business you own."), { status: 403 });
+  }
+  if (target.googleLocationId && profile.businessId && target.googleLocationId !== profile.businessId) {
+    throw new ValidationError(`"${target.businessName}" is already linked to a different Google Business Profile location. Disconnect it first.`);
+  }
+  if (profile.businessId) {
+    const other = await Business.findOne({ googleLocationId: profile.businessId, _id: { $ne: target._id } }).select("_id userId").lean();
+    if (other) {
+      if (String(other.userId || "") === String(user._id)) {
+        throw new ValidationError("This Google location is already linked to another of your businesses.", { existingBusinessId: other._id });
+      }
+      throw new LinkedToOtherAccountError(other._id);
+    }
+  }
+  await assertGoogleIntegrationAllowed(target);
+  let media = {};
+  if (accountName) media = await googleBusinessService.fetchLocationMedia(user, accountName, locationName);
+  const synced = await syncLinkedBusiness(target, profile, media, { accountName: media.accountVerified ? accountName : undefined });
+  logger.info("google_business.import.linked_existing", { userId: user._id, businessId: synced._id, locationName });
+  return { business: synced, created: false, linked: true };
+}
+
 async function findLinkedBusiness(userId, profile) {
   if (profile.businessId) {
     const byGoogleId = await Business.findOne({ googleLocationId: profile.businessId });
@@ -429,7 +498,10 @@ async function syncLinkedBusiness(business, profile, media = {}, { accountName }
  * user. Never trusts client-supplied profile data: the location is re-fetched from
  * Google with the user's own token, so Google itself is the authorization check.
  */
-async function importLocation(user, { accountName, locationName, categoryId, subCategoryIds = [], businessTiming = null } = {}) {
+async function importLocation(
+  user,
+  { accountName, locationName, categoryId, subCategoryIds = [], businessTiming = null, linkBusinessId = null, createNew = false } = {}
+) {
   if (!/^locations\/[A-Za-z0-9_-]+$/.test(locationName || "")) {
     throw new ValidationError("A valid Google location id is required.");
   }
@@ -453,9 +525,15 @@ async function importLocation(user, { accountName, locationName, categoryId, sub
     throw error;
   }
 
+  // The owner chose which of their existing listings this Google location is.
+  if (linkBusinessId) {
+    return linkExistingBusiness(user, linkBusinessId, profile, { accountName, locationName });
+  }
+
   const linked = await findLinkedBusiness(user._id, profile);
   if (linked) {
     if (String(linked.userId || "") === String(user._id)) {
+      await assertGoogleIntegrationAllowed(linked);
       let media = {};
       if (accountName) {
         media = await googleBusinessService.fetchLocationMedia(user, accountName, locationName);
@@ -465,6 +543,17 @@ async function importLocation(user, { accountName, locationName, categoryId, sub
       return { business: synced, created: false };
     }
     throw new LinkedToOtherAccountError(linked._id);
+  }
+
+  // Don't silently create a second listing for a business the owner already has.
+  if (!createNew) {
+    const candidates = await findLinkCandidates(user._id, profile);
+    if (candidates.length) {
+      throw new ValidationError(
+        "You already have a listing that looks like this Google Business Profile. Link it to keep your existing listing, or create a new one.",
+        { requiresLinkChoice: true, candidates, googleBusinessName: profile.businessName || "" }
+      );
+    }
   }
 
   let resolvedCategoryId = null;
@@ -543,6 +632,16 @@ async function importLocation(user, { accountName, locationName, categoryId, sub
       }
       if (raced) throw new LinkedToOtherAccountError(raced._id);
     }
+    // The owner's own listing already uses this phone number: offer to link it.
+    if (/numbers are already in use/i.test(error?.message || "")) {
+      const candidates = await findLinkCandidates(user._id, profile);
+      if (candidates.length) {
+        throw new ValidationError(
+          "One of your listings already uses this phone number. Link the Google profile to it instead of creating a duplicate.",
+          { requiresLinkChoice: true, candidates, googleBusinessName: profile.businessName || "" }
+        );
+      }
+    }
     throw error;
   }
 
@@ -558,6 +657,8 @@ module.exports = {
   mapProfileToBusinessPayload,
   isStrongManualMatch,
   findLinkedBusiness,
+  findLinkCandidates,
+  linkExistingBusiness,
   syncLinkedBusiness,
   importLocation,
 };

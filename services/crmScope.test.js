@@ -24,9 +24,29 @@ test("scopeMatch produces ObjectId values for aggregation", () => {
   assert.deepEqual(Object.keys(scope.scopeMatch(scope.ALL_OWNERS)), []);
 });
 
-test("readScope widens admins to every owner and keeps users on their own id", () => {
-  assert.equal(scope.readScope({ isAdmin: true, user: { _id: "admin_1" } }), scope.ALL_OWNERS);
+test("readScope widens super-admins and admins with the crm permission to every owner; others keep their own id", () => {
+  assert.equal(scope.readScope({ isAdmin: true, user: { _id: "admin_1", role: "super-admin" } }), scope.ALL_OWNERS);
+  assert.equal(scope.readScope({ isAdmin: true, user: { _id: "admin_2", role: "admin", permissions: ["crm"] } }), scope.ALL_OWNERS);
+  assert.equal(scope.readScope({ isAdmin: true, user: { _id: "admin_3", role: "admin", permissions: ["business", "enquiries"] } }), "admin_3");
   assert.equal(scope.readScope({ isAdmin: false, user: { _id: "user_1" } }), "user_1");
+});
+
+test("an admin without the crm permission cannot write into a business's CRM", async () => {
+  const mongoose = require("mongoose");
+  const Business = mongoose.model("Business");
+  const original = Business.findById;
+  const id = new mongoose.Types.ObjectId();
+  Business.findById = () => ({ select: () => ({ lean: async () => ({ _id: id, userId: "owner_1", businessName: "B" }) }) });
+  try {
+    await assert.rejects(
+      () => scope.resolveWriteScope({ isAdmin: true, user: { _id: "admin_3", role: "admin", permissions: ["business"] } }, String(id)),
+      (err) => err.status === 403
+    );
+    const ok = await scope.resolveWriteScope({ isAdmin: true, user: { _id: "admin_2", role: "admin", permissions: ["crm"] } }, String(id));
+    assert.equal(ok.ownerId, "owner_1");
+  } finally {
+    Business.findById = original;
+  }
 });
 
 test("resolveWriteScope without a businessId keeps the caller as owner", async () => {

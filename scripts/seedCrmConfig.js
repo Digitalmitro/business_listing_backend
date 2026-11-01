@@ -11,59 +11,41 @@ const {
   CrmReplyKeyword,
   CrmSchedulerConfig,
 } = require("../models/CrmConfig");
+const { getDefaultStages } = require("../controllers/crmConfigController");
 
-const defaultPipelineStages = [
-  { name: "New", order: 1, probability: 10, color: "#3b82f6", isDefault: true, isWon: false, isLost: false },
-  { name: "Prospecting", order: 2, probability: 20, color: "#6366f1", isDefault: false, isWon: false, isLost: false },
-  { name: "Qualification", order: 3, probability: 30, color: "#8b5cf6", isDefault: false, isWon: false, isLost: false },
-  { name: "Meeting/Demo", order: 4, probability: 50, color: "#ec4899", isDefault: false, isWon: false, isLost: false },
-  { name: "Proposal", order: 5, probability: 65, color: "#f59e0b", isDefault: false, isWon: false, isLost: false },
-  { name: "Negotiation", order: 6, probability: 80, color: "#14b8a6", isDefault: false, isWon: false, isLost: false },
-  { name: "Pending Follow-Up", order: 7, probability: 40, color: "#06b6d4", isDefault: false, isWon: false, isLost: false },
-  { name: "Follow-Up Sent", order: 8, probability: 45, color: "#0ea5e9", isDefault: false, isWon: false, isLost: false },
-  { name: "Warm Lead", order: 9, probability: 70, color: "#10b981", isDefault: false, isWon: false, isLost: false },
-  { name: "Cold Lead", order: 10, probability: 15, color: "#64748b", isDefault: false, isWon: false, isLost: false },
-  { name: "Closed Won", order: 11, probability: 100, color: "#22c55e", isDefault: false, isWon: true, isLost: false },
-  { name: "Closed Lost", order: 12, probability: 0, color: "#ef4444", isDefault: false, isWon: false, isLost: true },
-  { name: "Completed", order: 13, probability: 100, color: "#16a34a", isDefault: false, isWon: true, isLost: false },
-];
+// Shapes follow models/CrmConfig.js (CrmPipelineStage needs `internalKey`, probability is
+// a 0–1 fraction, ordering is `sortOrder`). Stages are the API's own defaults
+// (controllers/crmConfigController.js), including "Booked", as system-wide rows (ownerId null).
+const defaultPipelineStages = getDefaultStages().map((stage) => ({
+  ...stage,
+  isActive: true,
+  ownerId: null,
+}));
 
+// Same names the calendar falls back to (crmScheduleService validates event types by name).
 const defaultEventTypes = [
-  { name: "Meeting", color: "#3b82f6", icon: "video", durationMinutes: 30, isActive: true },
-  { name: "Call", color: "#10b981", icon: "phone", durationMinutes: 15, isActive: true },
-  { name: "Demo", color: "#8b5cf6", icon: "desktop", durationMinutes: 45, isActive: true },
-  { name: "Follow-Up", color: "#f59e0b", icon: "clock", durationMinutes: 15, isActive: true },
-  { name: "Task", color: "#64748b", icon: "check-square", durationMinutes: 30, isActive: true },
+  { name: "Follow-up", color: "#3b82f6", icon: "CalendarOutlined", sortOrder: 1, isActive: true },
+  { name: "Meeting", color: "#10b981", icon: "TeamOutlined", sortOrder: 2, isActive: true },
+  { name: "Call", color: "#f59e0b", icon: "PhoneOutlined", sortOrder: 3, isActive: true },
+  { name: "Demo", color: "#8b5cf6", icon: "DesktopOutlined", sortOrder: 4, isActive: true },
+  { name: "Proposal reminder", color: "#ef4444", icon: "FileTextOutlined", sortOrder: 5, isActive: true },
+  { name: "Other", color: "#64748b", icon: "PushpinOutlined", sortOrder: 6, isActive: true },
 ];
 
+// classification is "Positive" | "Negative" | "Unknown"; negatives get the higher priority so
+// "not interested" wins over "interested".
+const negativeKeywords = ["not interested", "unsubscribe", "stop", "remove me", "don't contact", "do not contact", "spam", "take me off", "no thanks", "no thank you", "too expensive", "not a good fit"];
+const positiveKeywords = ["interested", "more info", "tell me more", "schedule a call", "let's talk", "lets talk", "send details", "send more info", "what are the next steps", "how much", "pricing", "available", "when can we connect"];
 const defaultReplyKeywords = [
-  // Positive / Warm keywords
-  { keyword: "interested", category: "positive", scoreBonus: 25, newStatus: "Warm Lead", isActive: true },
-  { keyword: "yes", category: "positive", scoreBonus: 15, newStatus: "Warm Lead", isActive: true },
-  { keyword: "more info", category: "positive", scoreBonus: 20, newStatus: "Qualification", isActive: true },
-  { keyword: "demo", category: "positive", scoreBonus: 30, newStatus: "Meeting/Demo", isActive: true },
-  { keyword: "pricing", category: "positive", scoreBonus: 25, newStatus: "Proposal", isActive: true },
-  { keyword: "quote", category: "positive", scoreBonus: 25, newStatus: "Proposal", isActive: true },
-  { keyword: "schedule", category: "positive", scoreBonus: 30, newStatus: "Meeting/Demo", isActive: true },
-  { keyword: "meeting", category: "positive", scoreBonus: 30, newStatus: "Meeting/Demo", isActive: true },
-  // Negative / Cold keywords
-  { keyword: "unsubscribe", category: "negative", scoreBonus: -50, newStatus: "Cold Lead", isActive: true },
-  { keyword: "stop", category: "negative", scoreBonus: -50, newStatus: "Cold Lead", isActive: true },
-  { keyword: "remove", category: "negative", scoreBonus: -40, newStatus: "Cold Lead", isActive: true },
-  { keyword: "not interested", category: "negative", scoreBonus: -30, newStatus: "Cold Lead", isActive: true },
-  { keyword: "spam", category: "negative", scoreBonus: -50, newStatus: "Cold Lead", isActive: true },
-  // Neutral / Question keywords
-  { keyword: "when", category: "neutral", scoreBonus: 5, newStatus: null, isActive: true },
-  { keyword: "how much", category: "neutral", scoreBonus: 10, newStatus: "Proposal", isActive: true },
-  { keyword: "question", category: "neutral", scoreBonus: 5, newStatus: null, isActive: true },
+  ...negativeKeywords.map((keyword) => ({ keyword, classification: "Negative", priority: 10, isActive: true })),
+  ...positiveKeywords.map((keyword) => ({ keyword, classification: "Positive", priority: 5, isActive: true })),
 ];
 
 const defaultSchedulerConfig = {
-  followUpDaysDefault: Number(process.env.CRM_FOLLOWUP_DAYS_DEFAULT || 3),
-  maxFollowUpsPerDay: Number(process.env.CRM_MAX_FOLLOWUPS_PER_DAY || 100),
-  dailyDigestHour: Number(process.env.CRM_DIGEST_HOUR || 8),
-  cronIntervalMinutes: Number(process.env.CRM_CRON_INTERVAL_MINUTES || 60),
-  autoConvertColdDays: Number(process.env.CRM_AUTO_COLD_DAYS || 30),
+  key: "global",
+  isEnabled: true,
+  defaultIntervalDays: Number(process.env.CRM_FOLLOWUP_DAYS_DEFAULT || 3),
+  schedulerIntervalMs: Number(process.env.CRM_CRON_INTERVAL_MINUTES || 60) * 60 * 1000,
 };
 
 async function seedCrmConfig() {
@@ -105,7 +87,7 @@ async function seedCrmConfig() {
     }
 
     // 4. Scheduler config
-    const existingScheduler = await CrmSchedulerConfig.findOne();
+    const existingScheduler = await CrmSchedulerConfig.findOne({ key: "global" });
     if (!existingScheduler) {
       await CrmSchedulerConfig.create(defaultSchedulerConfig);
       console.log("Seeded CRM scheduler configuration.");

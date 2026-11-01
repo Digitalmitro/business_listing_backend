@@ -178,7 +178,12 @@ test("booking days ahead: both confirmations now, each reminder at its exact tim
   assert.match(toCustomer.html, /Please be on time/);
   assert.match(toCustomer.html, new RegExp(String(appointment._id)));
   assert.equal(toCustomer.replyTo, "owner@biz.test");
-  assert.match(toCustomer.unsubscribeLink, new RegExp(`userId=${customer._id}`));
+  // Customer emails are routed to the business's own sender (clientMailer), with the
+  // business attached for the plan check; no link to the old, non-existent /unsubscribe page.
+  assert.equal(toCustomer.recipient, "customer");
+  assert.equal(String(toCustomer.business?._id), String(appointment.businessId));
+  assert.equal(toCustomer.unsubscribeLink, undefined);
+  assert.equal(toOwner.recipient, "owner");
   assert.equal(toOwner.subject, "New Appointment Booked - Hair Spa");
   assert.match(toOwner.html, /Bina Customer/);
   assert.equal(toOwner.replyTo, undefined);

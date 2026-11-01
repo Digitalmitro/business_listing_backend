@@ -78,16 +78,30 @@ test("processFollowUps and retryFailed return 200 with scan summary", async () =
   assert.ok(retryRes.body.summary);
 });
 
-test("triggerForLead returns 200 when triggered or skipped, 404 for missing lead", async () => {
+test("triggerForLead returns 200 when triggered or skipped, 404 for missing lead, 400 for a malformed id", async () => {
+  const mongoose = require("mongoose");
+  const service = require("../services/crmFollowUpService");
   const okRes = createMockRes();
-  await controller.triggerForLead({ user: { _id: "user_ctrl_4" }, params: { id: "lead_ok" } }, okRes);
+  await controller.triggerForLead({ user: { _id: "user_ctrl_4" }, params: { id: String(new mongoose.Types.ObjectId()) } }, okRes);
   assert.equal(okRes.statusCode, 200);
   assert.equal(okRes.body.success, true);
 
-  const missingRes = createMockRes();
-  await controller.triggerForLead({ user: { _id: "user_ctrl_4" }, params: { id: "lead_missing" } }, missingRes);
-  assert.equal(missingRes.statusCode, 404);
-  assert.equal(missingRes.body.success, false);
+  const original = service.triggerLeadFollowUp;
+  service.triggerLeadFollowUp = async () => {
+    throw new Error("Lead not found");
+  };
+  try {
+    const missingRes = createMockRes();
+    await controller.triggerForLead({ user: { _id: "user_ctrl_4" }, params: { id: String(new mongoose.Types.ObjectId()) } }, missingRes);
+    assert.equal(missingRes.statusCode, 404);
+    assert.equal(missingRes.body.success, false);
+  } finally {
+    service.triggerLeadFollowUp = original;
+  }
+
+  const badRes = createMockRes();
+  await controller.triggerForLead({ user: { _id: "user_ctrl_4" }, params: { id: "not-an-id" } }, badRes);
+  assert.equal(badRes.statusCode, 400);
 });
 
 after(async () => {

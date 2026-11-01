@@ -20,6 +20,10 @@ function respondToGoogleError(res, error, fallbackMessage) {
     if (error.requiresCategory) body.requiresCategory = error.requiresCategory;
     if (error.requiresBusinessHours) body.requiresBusinessHours = error.requiresBusinessHours;
     if (error.suggestedCategoryName) body.suggestedCategoryName = error.suggestedCategoryName;
+    if (error.requiresLinkChoice) body.requiresLinkChoice = true;
+    if (error.candidates) body.candidates = error.candidates;
+    if (error.googleBusinessName) body.googleBusinessName = error.googleBusinessName;
+    if (error.code) body.code = error.code;
     return res.status(error.status).json(body);
   }
   const httpStatus = error.response?.status;
@@ -226,7 +230,7 @@ exports.importLocation = async (req, res) => {
     if (!req.user) {
       return res.status(401).json({ success: false, message: "User not authenticated" });
     }
-    const { accountName, locationName, categoryId, subCategoryIds, businessTiming } = req.body || {};
+    const { accountName, locationName, categoryId, subCategoryIds, businessTiming, linkBusinessId, createNew } = req.body || {};
     if (!locationName) {
       return res.status(400).json({ success: false, message: "locationName is required." });
     }
@@ -237,12 +241,17 @@ exports.importLocation = async (req, res) => {
       categoryId,
       subCategoryIds,
       businessTiming,
+      linkBusinessId: linkBusinessId || null,
+      createNew: createNew === true || createNew === "true",
     });
 
     return res.status(created ? 201 : 200).json({
       success: true,
       created,
-      message: created ? "Business imported from Google Business Profile." : "Existing business synced from Google Business Profile.",
+      linked: !created,
+      message: created
+        ? "Business imported from Google Business Profile."
+        : "Your existing business is now connected to Google Business Profile and its missing details were filled in.",
       business,
       businessId: business._id,
     });

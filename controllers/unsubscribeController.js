@@ -6,116 +6,100 @@ const User = require("../models/User");
 const { CrmLead } = require("../models/CrmLead");
 const logger = require("../utils/logger");
 const { escapeHtml } = require("../services/crmEmailAutomationCatalog");
+const links = require("../services/crmEngagementLinks");
+
+function page(res, status, title, body) {
+  return res.status(status).type("html").send(`<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title>
+<style>body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#f8fafc;color:#1e293b;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0}
+.card{background:#fff;padding:2.5rem;border-radius:12px;box-shadow:0 4px 6px -1px rgba(0,0,0,.1);max-width:440px;text-align:center}h1{font-size:1.4rem}p{color:#64748b;line-height:1.5}
+button{background:#0f172a;color:#fff;border:0;border-radius:8px;padding:.7rem 1.2rem;font-size:1rem;cursor:pointer}</style></head><body><div class="card">${body}</div></body></html>`);
+}
+
+/** Applies a global unsubscribe for an address (and/or user). Returns the address. */
+async function applyGlobalUnsubscribe({ email, userId, reason, source }) {
+  let targetEmail = String(email || "").trim().toLowerCase();
+  if (userId) {
+    const user = await User.findById(userId).catch(() => null);
+    if (user) {
+      user.subscribedToEmails = false;
+      await user.save();
+      if (!targetEmail && user.email) targetEmail = user.email.trim().toLowerCase();
+    }
+  }
+  if (!targetEmail) return null;
+
+  // 1. Global suppression list
+  await UnsubscribedEmail.findOneAndUpdate(
+    { email: targetEmail },
+    { $set: { email: targetEmail, reason, source, unsubscribedAt: new Date() } },
+    { upsert: true, new: true }
+  );
+  // 2. Matching user accounts
+  await User.updateMany({ email: targetEmail }, { $set: { subscribedToEmails: false } });
+  // 3. Active CRM leads with this address go cold
+  const matchingLeads = await CrmLead.find({ email: targetEmail, status: { $nin: ["Closed Won", "Completed", "Closed Lost", "Cold Lead"] } });
+  for (const lead of matchingLeads) {
+    const previous = lead.status;
+    lead.status = "Cold Lead";
+    lead.activities.push({
+      action: "status_change",
+      type: "status_change",
+      description: `Lead automatically moved to Cold Lead due to unsubscribe request (${reason})`,
+      previousValue: previous,
+      newValue: "Cold Lead",
+      timestamp: new Date(),
+      performedAt: new Date(),
+    });
+    await lead.save();
+  }
+  // 4. Every business's CRM contact with this address stops receiving journeys.
+  const contactsAffected = await require("../services/crmSignalService").onGlobalUnsubscribe(targetEmail, { reason });
+  logger.info("Global email unsubscription completed", { email: targetEmail, crmLeadsAffected: matchingLeads.length, crmContactsAffected: contactsAffected });
+  return targetEmail;
+}
 
 /**
- * GET or POST /api/unsubscribe
- * Globally unsubscribe an email address or user from email campaigns and CRM automated follow-ups.
- * Handles query params (`?email=foo@bar.com` or `?userId=123`) or JSON body `{ email, userId, reason }`.
+ * GET  /api/unsubscribe?t=<signed token>  -> confirmation page only (link scanners change nothing)
+ * POST /api/unsubscribe  (form field t, or ?t= with List-Unsubscribe=One-Click) -> unsubscribes
+ *
+ * Only signed links from our own emails work. Bare ?email= / ?userId= links are refused,
+ * so nobody can unsubscribe someone else's address.
  */
 exports.unsubscribe = async (req, res) => {
+  const wantsHtml = req.method === "GET" || req.query?.format === "html" || (req.headers.accept || "").includes("text/html");
   try {
-    const emailInput = req.body?.email || req.query?.email || "";
-    const userIdInput = req.body?.userId || req.query?.userId || "";
-    const reason = req.body?.reason || req.query?.reason || "User clicked unsubscribe link";
-    const source = req.body?.source || req.query?.source || "email_campaign";
-
-    let targetEmail = typeof emailInput === "string" ? emailInput.trim().toLowerCase() : "";
-
-    // If userId provided, look up the user's email and disable subscribedToEmails
-    if (userIdInput) {
-      try {
-        const user = await User.findById(userIdInput);
-        if (user) {
-          user.subscribedToEmails = false;
-          await user.save();
-          if (!targetEmail && user.email) {
-            targetEmail = user.email.trim().toLowerCase();
-          }
-          logger.info("User unsubscribed via userId", { userId: user._id, email: targetEmail });
-        }
-      } catch (userLookupErr) {
-        logger.warn("Could not find or update User during unsubscribe", { userIdInput, error: userLookupErr.message });
-      }
+    const token = String(req.body?.t || req.query?.t || "");
+    const payload = links.verifyPlatformUnsubscribe(token);
+    const oneClick = req.body?.["List-Unsubscribe"] === "One-Click";
+    if (!payload) {
+      if (!wantsHtml || oneClick) return res.status(400).json({ success: false, message: "This unsubscribe link is not valid" });
+      return page(res, 400, "Link not valid", "<h1>This unsubscribe link is not valid</h1><p>Please use the unsubscribe link from the latest email you received.</p>");
     }
-
-    if (!targetEmail) {
-      if (userIdInput) {
-        return res.status(200).json({ success: true, message: "Successfully unsubscribed" });
-      }
-      return res.status(400).json({ success: false, message: "Email or userId is required to unsubscribe" });
+    const shownEmail = escapeHtml(payload.e || "your address");
+    if (req.method === "GET") {
+      return page(
+        res,
+        200,
+        "Unsubscribe",
+        `<h1>Unsubscribe ${shownEmail}?</h1><p>You'll stop receiving UrbanCitations emails such as campaigns and CRM messages.</p>
+<form method="post" action=""><input type="hidden" name="t" value="${escapeHtml(token)}"><button type="submit">Unsubscribe</button></form>`
+      );
     }
-
-    // 1. Add or update in UnsubscribedEmail global collection
-    await UnsubscribedEmail.findOneAndUpdate(
-      { email: targetEmail },
-      { $set: { email: targetEmail, reason, source, unsubscribedAt: new Date() } },
-      { upsert: true, new: true }
-    );
-
-    // 2. Also check if there's any matching User document and update their subscribedToEmails flag
-    await User.updateMany(
-      { email: targetEmail },
-      { $set: { subscribedToEmails: false } }
-    );
-
-    // 3. Check if there are any CRM Leads matching this email and set status to "Cold Lead" if currently active
-    const matchingLeads = await CrmLead.find({
-      email: targetEmail,
-      status: { $nin: ["Closed Won", "Completed", "Closed Lost", "Cold Lead"] },
+    const email = await applyGlobalUnsubscribe({
+      email: payload.e,
+      userId: payload.u,
+      reason: oneClick ? "One-click unsubscribe" : "Unsubscribed via email link",
+      source: payload.c ? "email_campaign" : "platform",
     });
-
-    for (const lead of matchingLeads) {
-      lead.status = "Cold Lead";
-      lead.activities.push({
-        action: "status_change",
-        type: "status_change",
-        description: `Lead automatically moved to Cold Lead due to unsubscribe request (${reason})`,
-        previousValue: lead.status,
-        newValue: "Cold Lead",
-        timestamp: new Date(),
-        performedAt: new Date(),
-      });
-      await lead.save();
-    }
-
-    // 4. Every business's CRM contact with this address stops receiving journeys.
-    const contactsAffected = await require("../services/crmSignalService").onGlobalUnsubscribe(targetEmail, { reason });
-
-    logger.info("Global email unsubscription completed", { email: targetEmail, crmLeadsAffected: matchingLeads.length, crmContactsAffected: contactsAffected });
-
-    // Return HTML or JSON depending on Accept header or ?format=html
-    if (req.query?.format === "html" || (req.headers.accept && req.headers.accept.includes("text/html"))) {
-      const html = `
-        <!DOCTYPE html>
-        <html>
-        <head>
-          <title>Unsubscribed Successfully</title>
-          <style>
-            body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f8fafc; color: #1e293b; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; }
-            .card { background: white; padding: 2.5rem; border-radius: 12px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); max-width: 420px; text-align: center; }
-            h1 { font-size: 1.5rem; margin-bottom: 1rem; color: #0f172a; }
-            p { color: #64748b; line-height: 1.5; margin-bottom: 1.5rem; }
-            .icon { font-size: 3rem; margin-bottom: 1rem; }
-          </style>
-        </head>
-        <body>
-          <div class="card">
-            <div class="icon">✓</div>
-            <h1>You have been unsubscribed</h1>
-            <p>Your email address (<strong>${escapeHtml(targetEmail)}</strong>) has been removed from our mailing list and automated CRM campaigns. You will no longer receive these communications.</p>
-          </div>
-        </body>
-        </html>
-      `;
-      return res.status(200).send(html);
-    }
-
-    return res.status(200).json({ success: true, message: "Successfully unsubscribed", email: targetEmail });
+    if (oneClick || !wantsHtml) return res.status(200).json({ success: true, message: "Successfully unsubscribed", email });
+    return page(res, 200, "Unsubscribed", `<h1>You have been unsubscribed</h1><p><strong>${escapeHtml(email || "")}</strong> will no longer receive these emails.</p>`);
   } catch (error) {
     logger.error("Error handling unsubscribe request", { error: error.message });
     return res.status(500).json({ success: false, message: "An error occurred while processing your unsubscribe request." });
   }
 };
+
+exports.applyGlobalUnsubscribe = applyGlobalUnsubscribe;
 
 /**
  * GET /api/unsubscribe/check?email=foo@bar.com

@@ -22,6 +22,17 @@ exports.createReview = async (req, res) => {
         .json({ success: false, message: "Business not found" });
     }
 
+    // One review per user per business. The unique index on (businessId, userId) is the
+    // last line of defence, but it only exists once `npm run indexes` has run
+    // (config/db.js sets autoIndex:false), so check here too.
+    if (await Review.exists({ businessId, userId })) {
+      return res.status(400).json({
+        success: false,
+        error: "You have already reviewed this business.",
+        message: "You have already reviewed this business.",
+      });
+    }
+
     // Default categoryId to the first category if multiple
     const categoryId = business.category[0]; // Assuming category is an array of ObjectIds
 
@@ -72,12 +83,41 @@ exports.createReview = async (req, res) => {
       );
     }
 
+    // Tell the owner (in-app + email from the platform). Never blocks the review.
+    try {
+      const biz = await Business.findById(businessId).select("userId businessName").lean();
+      if (biz?.userId && String(biz.userId) !== String(userId)) {
+        const { createNotification } = require("../helpers/notificationHelper");
+        await createNotification({
+          recipientId: biz.userId,
+          title: "New review",
+          description: `${biz.businessName} received a ${rating}-star review.`,
+          link: `/reviewsList/${businessId}`,
+          category: "business",
+        });
+        const User = require("../models/User");
+        const owner = await User.findById(biz.userId).select("email full_name").lean();
+        if (owner?.email) {
+          const sendMail = require("../services/sendMail");
+          const stars = "★".repeat(Math.max(1, Math.min(5, Math.round(Number(rating)))));
+          const safe = (v) => String(v || "").replace(/[<>&"]/g, "");
+          await sendMail(
+            owner.email,
+            `New ${rating}-star review for ${safe(biz.businessName)}`,
+            `<p>Hi ${safe(owner.full_name) || "there"},</p><p><strong>${safe(biz.businessName)}</strong> received a new review: ${stars}</p>${comment ? `<blockquote>${safe(comment).slice(0, 500)}</blockquote>` : ""}<p><a href="${(process.env.FRONTEND_URL || "https://urbancitations.com").replace(/\/+$/, "")}/reviewsList/${businessId}">See your reviews</a></p>`
+          );
+        }
+      }
+    } catch (notifyError) {
+      console.warn("Review owner notification failed:", notifyError.message);
+    }
+
     res.status(201).json({ message: "Review added successfully!", review });
   } catch (err) {
     if (err.code === 11000) {
       res
         .status(400)
-        .json({ error: "You have already reviewed this business." });
+        .json({ error: "You have already reviewed this business.", message: "You have already reviewed this business." });
     } else {
       res
         .status(500)

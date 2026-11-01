@@ -35,6 +35,7 @@ const userSchema = new mongoose.Schema(
     occupation: { type: String },
     otp: { type: String },
     otpExpiration: { type: Date },
+    otpAttempts: { type: Number, default: 0 },
     subscribedToEmails: { type: Boolean, default: true },
     timeZone: { type: String, default: "Asia/Kolkata" },
     country: { type: String, default: "India" },

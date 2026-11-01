@@ -14,11 +14,48 @@ const Business = require("../models/Business");
 const { addJob } = require("../utils/queue");
 const geocodingService = require("../services/geocodingService");
 const { getTemplate } = require("../helpers/emailHelper");
+const validator = require("validator");
+const crypto = require("crypto");
+const { searchPattern, exactInsensitive } = require("../utils/regex");
+
+const OTP_TTL_MINUTES = 10; // matches the "expires in 10 minutes" wording of the email
+const MAX_OTP_ATTEMPTS = 5;
+const OTP_SENT_MESSAGE = "If an account exists for this email, an OTP has been sent to it.";
 
 function generateOTPWithExpiration() {
-  const otp = Math.floor(100000 + Math.random() * 900000).toString();
-  const expiration = moment().add(2, "minutes").toISOString();
+  const otp = crypto.randomInt(100000, 1000000).toString();
+  const expiration = moment().add(OTP_TTL_MINUTES, "minutes").toISOString();
   return { otp, expiration };
+}
+
+/** Emails must have a domain with a TLD (rejects "x@localhost"). */
+function isValidEmail(email) {
+  return typeof email === "string" && validator.isEmail(email.trim(), { require_tld: true });
+}
+
+/** Minimum password policy: 8+ characters with at least one letter and one number. */
+function passwordPolicyError(password) {
+  if (typeof password !== "string" || password.length < 8 || !/[A-Za-z]/.test(password) || !/\d/.test(password)) {
+    return "Password must be at least 8 characters and contain letters and numbers.";
+  }
+  if (password.length > 128) return "Password must be at most 128 characters.";
+  return null;
+}
+
+// Fields a user may change on their own profile. Everything else (tenantId, isSeller,
+// businesses, password, otp, subscription flags...) is server-managed.
+const EDITABLE_PROFILE_FIELDS = [
+  "full_name", "email", "phone", "dob", "maritalStatus", "city", "area",
+  "pincode", "occupation", "timeZone", "country",
+];
+
+function toPublicUser(user) {
+  const plain = typeof user?.toObject === "function" ? user.toObject() : { ...user };
+  delete plain.password;
+  delete plain.otp;
+  delete plain.otpExpiration;
+  delete plain.otpAttempts;
+  return plain;
 }
 
 exports.register = async (req, res) => {
@@ -31,6 +68,13 @@ exports.register = async (req, res) => {
           "Please provide full name, email, password, and agree to terms",
       });
     }
+    if (!isValidEmail(email)) {
+      return res.status(400).json({ message: "Please provide a valid email address" });
+    }
+    const weakPassword = passwordPolicyError(password);
+    if (weakPassword) {
+      return res.status(400).json({ message: weakPassword });
+    }
     if (phone && !/^\+?[1-9]\d{1,14}$/.test(phone)) {
       return res.status(400).json({ message: "Invalid phone number format" });
     }
@@ -40,7 +84,7 @@ exports.register = async (req, res) => {
     if (country && !/^[A-Za-z\s]{1,100}$/.test(country)) {
       return res.status(400).json({ message: "Invalid country name" });
     }
-    const existingUser = await mongoose.model("User").findOne({ email });
+    const existingUser = await mongoose.model("User").findOne({ email: String(email).trim().toLowerCase() });
     if (existingUser) {
       return res.status(400).json({ message: "Email is already registered" });
     }
@@ -108,19 +152,26 @@ exports.forgotPassword = async (req, res) => {
       });
     }
 
-    const user = await User.findOne({ email });
-
-    if (!user) {
-      return res.status(404).json({ message: "Email does not exist" });
+    const weakPassword = passwordPolicyError(password);
+    if (weakPassword) {
+      return res.status(400).json({ message: weakPassword });
     }
 
-    // OTP Validation
+    const user = await User.findOne({ email: String(email).trim().toLowerCase() });
+
+    // Unknown email, missing/expired OTP and wrong OTP all get the same answer.
+    if (!user || !user.otp || !user.otpExpiration || moment().isAfter(moment(user.otpExpiration))) {
+      return res.status(400).json({ message: "Invalid or expired OTP" });
+    }
+
     if (String(user.otp) !== String(otp)) {
-      return res.status(400).json({ message: "Invalid OTP" });
-    }
-
-    if (!user.otpExpiration || moment().isAfter(moment(user.otpExpiration))) {
-      return res.status(400).json({ message: "OTP has expired" });
+      const attempts = (user.otpAttempts || 0) + 1;
+      // Too many wrong guesses burn the OTP; the user has to request a new one.
+      const update = attempts >= MAX_OTP_ATTEMPTS
+        ? { $unset: { otp: "", otpExpiration: "", otpAttempts: "" } }
+        : { $set: { otpAttempts: attempts } };
+      await User.updateOne({ _id: user._id }, update);
+      return res.status(400).json({ message: "Invalid or expired OTP" });
     }
 
     // CRITICAL FIX: Use updateOne to bypass pre-save hook
@@ -135,6 +186,7 @@ exports.forgotPassword = async (req, res) => {
         $unset: {
           otp: "",
           otpExpiration: "",
+          otpAttempts: "",
         },
       }
     );
@@ -157,12 +209,15 @@ exports.sendOTP = async (req, res) => {
     if (!email) {
       return res.status(400).json({ message: "Please provide an email" });
     }
-    const user = await User.findOne({ email });
+    // The same response whether or not the account exists (no account enumeration),
+    // and the OTP itself only ever travels by email.
+    const user = await User.findOne({ email: String(email).trim().toLowerCase() });
     if (!user) {
-      return res.status(404).json({ message: "Email does not exist" });
+      return res.status(200).json({ message: OTP_SENT_MESSAGE });
     }
-    if (user.otp && moment().isBefore(moment(user.otpExpiration))) {
-      return res.status(400).json({ message: "OTP not expired yet" });
+    if (user.otp && moment().isBefore(moment(user.otpExpiration).subtract(OTP_TTL_MINUTES - 1, "minutes"))) {
+      // An OTP was sent less than a minute ago; don't send another one yet.
+      return res.status(200).json({ message: OTP_SENT_MESSAGE });
     }
     const { otp, expiration } = generateOTPWithExpiration();
     
@@ -186,9 +241,10 @@ exports.sendOTP = async (req, res) => {
     await sendMail(email, subject, html);
     user.otp = otp;
     user.otpExpiration = expiration;
+    user.otpAttempts = 0;
     await user.save();
 
-    res.status(200).json({ message: "OTP sent successfully", otp });
+    res.status(200).json({ message: OTP_SENT_MESSAGE });
   } catch (error) {
     console.error("Send OTP Error:", error);
     res.status(500).json({ message: "Internal server error" });
@@ -256,7 +312,7 @@ exports.getUserProfile = async (req, res) => {
     const userId = req.user.id;
     if (!userId)
       return res.status(401).json({ message: "provide corrct token" });
-    const user = await User.findById(userId).select("-password");
+    const user = await User.findById(userId).select("-password -otp -otpExpiration -otpAttempts");
     if (!user) {
       return res.status(404).json({ message: "User not found" });
     }
@@ -268,18 +324,53 @@ exports.getUserProfile = async (req, res) => {
 
 exports.updateUserProfile = async (req, res) => {
   const userId = req.user.id;
-  // let iconUrl;
   try {
-    const updates = req.body;
+    const updates = {};
+    const unset = {};
+    for (const field of EDITABLE_PROFILE_FIELDS) {
+      if (!Object.prototype.hasOwnProperty.call(req.body, field)) continue;
+      let value = req.body[field];
+      if (typeof value === "string") value = value.trim();
+      // Optional fields cleared in the form arrive as "" (multipart) or null.
+      if ((value === "" || value === null || value === "null" || value === "undefined") && field !== "full_name" && field !== "email") {
+        unset[field] = "";
+        continue;
+      }
+      if (typeof value !== "string" && typeof value !== "number") continue;
+      updates[field] = value;
+    }
+
+    if (Object.prototype.hasOwnProperty.call(updates, "full_name") && !updates.full_name) {
+      return res.status(400).json({ message: "Full name cannot be empty" });
+    }
+    if (Object.prototype.hasOwnProperty.call(updates, "email")) {
+      if (!isValidEmail(updates.email)) {
+        return res.status(400).json({ message: "Please provide a valid email address" });
+      }
+      updates.email = updates.email.toLowerCase();
+      const taken = await User.exists({ email: updates.email, _id: { $ne: userId } });
+      if (taken) {
+        return res.status(409).json({ message: "Email is already registered" });
+      }
+    }
+    if (updates.maritalStatus) updates.maritalStatus = String(updates.maritalStatus).toLowerCase();
+    if (updates.phone && !/^\+?[0-9\s-]{6,20}$/.test(String(updates.phone))) {
+      return res.status(400).json({ message: "Invalid phone number format" });
+    }
+    if (updates.timeZone && !momentTz.tz.names().includes(updates.timeZone)) {
+      return res.status(400).json({ message: "Invalid time zone" });
+    }
 
     if (req.files && req.files.image) {
       const iconUpload = req.files.image[0];
       updates.userImage = iconUpload.filename;
     }
-    const updatedUser = await User.findByIdAndUpdate(userId, updates, {
+    const update = { $set: updates };
+    if (Object.keys(unset).length) update.$unset = unset;
+    const updatedUser = await User.findByIdAndUpdate(userId, update, {
       new: true,
       runValidators: true,
-    });
+    }).select("-password -otp -otpExpiration -otpAttempts");
 
     if (!updatedUser) {
       return res.status(404).json({ message: "User not found" });
@@ -287,9 +378,12 @@ exports.updateUserProfile = async (req, res) => {
 
     res.status(200).json({
       message: "Profile updated successfully",
-      user: updatedUser,
+      user: toPublicUser(updatedUser),
     });
   } catch (error) {
+    if (error.name === "ValidationError" || error.name === "CastError") {
+      return res.status(400).json({ message: "Invalid profile data", error: error.message });
+    }
     res.status(500).json({
       message: "An error occurred while updating the profile",
       error: error.message,
@@ -308,20 +402,21 @@ exports.getAllUsers = async (req, res) => {
     let searchQuery = {};
     if (search) {
       // Find businesses matching search
+      const pattern = searchPattern(search);
       const matchingBusinesses = await Business.find({ 
-        businessName: { $regex: search, $options: "i" } 
+        businessName: { $regex: pattern, $options: "i" } 
       }).select("_id");
       const businessIds = matchingBusinesses.map(b => b._id);
 
       searchQuery.$or = [
-        { email: { $regex: search, $options: "i" } },
-        { phone: { $regex: search, $options: "i" } },
-        { full_name: { $regex: search, $options: "i" } },
+        { email: { $regex: pattern, $options: "i" } },
+        { phone: { $regex: pattern, $options: "i" } },
+        { full_name: { $regex: pattern, $options: "i" } },
         { businesses: { $in: businessIds } }
       ];
     }
     if (country) {
-      searchQuery.country = { $regex: new RegExp(`^${country}$`, "i") };
+      searchQuery.country = { $regex: exactInsensitive(country) };
     }
 
     // Fetch users with populated business names

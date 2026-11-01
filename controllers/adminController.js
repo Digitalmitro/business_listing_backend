@@ -1,11 +1,26 @@
+const { passwordPolicyError, isValidEmail } = require('../utils/passwordPolicy');
 const Admin = require('../models/Admin');
 const jwt = require('jsonwebtoken');
 const User = require('../models/User')
+const SubCategory = require('../models/SubCategory');
+const Appointment = require('../models/Appointment');
 const otpGenerator = require("otp-generator");
 const bcrypt = require("bcryptjs");
 const sendMail = require("../services/sendMail");
 
 const OTP_EXPIRATION_TIME = 5 * 60 * 1000;
+
+// Admin documents in API responses: never the password hash or a pending OTP.
+const publicAdmin = (admin) => ({
+  _id: admin._id,
+  id: admin._id,
+  name: admin.name,
+  email: admin.email,
+  role: admin.role,
+  permissions: admin.permissions,
+  createdAt: admin.createdAt,
+  updatedAt: admin.updatedAt,
+});
 // Admin login
 exports.login = async (req, res) => {
   const { email, password } = req.body;
@@ -81,6 +96,9 @@ exports.register = async (req, res) => {
     if (!email || !password || !name) {
       return res.status(400).json({ error: 'Name, email and password are required.' });
     }
+    if (!isValidEmail(email)) return res.status(400).json({ error: 'Enter a valid email address.' });
+    const weakRegister = passwordPolicyError(password);
+    if (weakRegister) return res.status(400).json({ error: weakRegister });
     const existingAdmin = await Admin.findOne({ email });
     if (existingAdmin) {
       return res.status(400).json({ error: 'Email is already in use.' });
@@ -106,6 +124,9 @@ exports.createSubAdmin = async (req, res) => {
     if (req.user.role !== 'super-admin') {
       return res.status(403).json({ success: false, message: "Only super-admin can create admins" });
     }
+    if (!isValidEmail(email)) return res.status(400).json({ success: false, message: "Enter a valid email address." });
+    const weakSubAdmin = passwordPolicyError(password);
+    if (weakSubAdmin) return res.status(400).json({ success: false, message: weakSubAdmin });
 
     const existingAdmin = await Admin.findOne({ email });
     if (existingAdmin) {
@@ -121,7 +142,7 @@ exports.createSubAdmin = async (req, res) => {
     });
 
     await newAdmin.save();
-    res.status(201).json({ success: true, message: "Admin created successfully", admin: newAdmin });
+    res.status(201).json({ success: true, message: "Admin created successfully", admin: publicAdmin(newAdmin) });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -133,7 +154,7 @@ exports.getAllAdmins = async (req, res) => {
     if (req.user.role !== 'super-admin') {
       return res.status(403).json({ success: false, message: "Access denied" });
     }
-    const admins = await Admin.find({ role: 'admin' }).select('-password');
+    const admins = await Admin.find({ role: 'admin' }).select('-password -otp -otpExpiration');
     res.status(200).json({ success: true, admins });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -153,13 +174,19 @@ exports.updateSubAdmin = async (req, res) => {
     const admin = await Admin.findById(id);
     if (!admin) return res.status(404).json({ success: false, message: "Admin not found" });
 
+    if (email && !isValidEmail(email)) return res.status(400).json({ success: false, message: "Enter a valid email address." });
+    if (password) {
+      const weak = passwordPolicyError(password);
+      if (weak) return res.status(400).json({ success: false, message: weak });
+    }
+
     if (name) admin.name = name;
     if (email) admin.email = email;
     if (permissions) admin.permissions = permissions;
     if (password) admin.password = password; // Pre-save hook will hash it
 
     await admin.save();
-    res.status(200).json({ success: true, message: "Admin updated successfully", admin });
+    res.status(200).json({ success: true, message: "Admin updated successfully", admin: publicAdmin(admin) });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -182,7 +209,7 @@ exports.deleteSubAdmin = async (req, res) => {
 // Get current admin profile & permissions
 exports.getAdminProfile = async (req, res) => {
   try {
-    const admin = await Admin.findById(req.user.id).select('-password');
+    const admin = await Admin.findById(req.user.id).select('-password -otp -otpExpiration');
     if (!admin) return res.status(404).json({ success: false, message: "Admin not found" });
     res.status(200).json({ success: true, admin });
   } catch (error) {
@@ -197,12 +224,19 @@ exports.getAlluserAndseller = async (req,res) =>{
     return res.status(400).json({ success: false, message: "Admin ID is required." });
   }
 
-  const totalUsers = await User.countDocuments();
-  const totalSellers = await User.countDocuments({ isSeller: true });
+  const [totalUsers, totalSellers, totalServices, totalOrders] = await Promise.all([
+    User.countDocuments(),
+    User.countDocuments({ isSeller: true }),
+    // "Services" are the catalog's subcategories; "orders" are booked appointments.
+    SubCategory.countDocuments(),
+    Appointment.countDocuments(),
+  ]);
   res.status(200).json({
     success: true,
     totalUsers, 
-    sellerCount:totalSellers
+    sellerCount:totalSellers,
+    totalServices,
+    totalOrders,
   });
   
  } catch (error) {
@@ -259,7 +293,8 @@ exports.forgotPassword = async (req, res) => {
   try {
     const admin = await Admin.findOne({ email });
     if (!admin) {
-      return res.status(404).json({ success: false, message: "Admin not found" });
+      // Same answer as for a real admin, so the form can't be used to discover admin emails.
+      return res.status(200).json({ success: true, message: "OTP sent to email" });
     }
 
     const otp = otpGenerator.generate(6, { upperCase: false, specialChars: false });
@@ -287,9 +322,11 @@ exports.forgotPassword = async (req, res) => {
 exports.resetPassword = async (req, res) => {
   const { email, otp, newPassword } = req.body;
   try {
+    const weakReset = passwordPolicyError(newPassword);
+    if (weakReset) return res.status(400).json({ success: false, message: weakReset });
     const admin = await Admin.findOne({ email });
-    if (!admin) {
-      return res.status(404).json({ success: false, message: "Admin not found" });
+    if (!admin || !otp) {
+      return res.status(400).json({ success: false, message: "Invalid or expired OTP" });
     }
 
     const currentTime = new Date();
@@ -316,6 +353,11 @@ exports.updateProfile = async (req, res) => {
 
     const admin = await Admin.findById(adminId);
     if (!admin) return res.status(404).json({ success: false, message: "Admin not found" });
+    if (email && !isValidEmail(email)) return res.status(400).json({ success: false, message: "Enter a valid email address." });
+    if (password) {
+      const weak = passwordPolicyError(password);
+      if (weak) return res.status(400).json({ success: false, message: weak });
+    }
 
     if (name) admin.name = name;
     if (email) {

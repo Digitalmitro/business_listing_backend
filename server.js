@@ -23,6 +23,8 @@ const { closeQueueConnections, redisConnection, readWorkerHeartbeat } = require(
 const { authLimiter, apiLimiter, webhookLimiter, crmWriteLimiter } = require("./middlewares/rateLimiter");
 const { hasScriptExtension } = require("./utils/uploadValidation");
 const { uploadDir } = require("./utils/uploadDir");
+const kycFiles = require("./services/kycFileService");
+const { resolveTrustProxy } = require("./utils/trustProxy");
 
 const authRoutes = require("./routes/authRoutes.js");
 const categoryRoutes = require("./routes/categoryRoutes");
@@ -67,6 +69,7 @@ const crmLeadImportRoutes = require("./routes/crmLeadImportRoutes");
 const crmEmailAutomationRoutes = require("./routes/crmEmailAutomationRoutes");
 const crmEngagementRoutes = require("./routes/crmEngagementRoutes");
 const unsubscribeRoutes = require("./routes/unsubscribeRoutes");
+const businessSenderRoutes = require("./routes/businessSenderRoutes");
 
 const PORT = Number(process.env.PORT || 5000);
 const SHUTDOWN_TIMEOUT_MS = Number(process.env.SHUTDOWN_TIMEOUT_MS || 10_000);
@@ -85,15 +88,9 @@ function shouldStartInlineWorkers() {
 }
 
 function configureTrustProxy(app) {
-  const value = process.env.TRUST_PROXY;
-  if (value === "false") return;
-  if (value === "true" || process.env.NODE_ENV === "production" || value === undefined) {
-    app.set("trust proxy", true);
-  } else if (/^\d+$/.test(value)) {
-    app.set("trust proxy", Number(value));
-  } else {
-    app.set("trust proxy", value);
-  }
+  const setting = resolveTrustProxy();
+  if (setting === false) return;
+  app.set("trust proxy", setting);
 }
 
 function createApp() {
@@ -198,6 +195,15 @@ function createApp() {
     if (hasScriptExtension(requested)) return res.status(404).end();
     return next();
   });
+  // KYC documents uploaded before they moved to private storage still sit in this
+  // directory; they are only served through the signed /api/business/kyc-file route.
+  app.use("/uploads", (req, res, next) => {
+    if (req.method !== "GET" && req.method !== "HEAD") return next();
+    kycFiles.isLegacyKycFile(req.path).then(
+      (isKyc) => (isKyc ? res.status(404).end() : next()),
+      () => next()
+    );
+  });
   app.use("/uploads", express.static(uploadDirectory, {
     setHeaders: (res) => {
       res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
@@ -295,6 +301,7 @@ function createApp() {
   app.use("/api/crm/engagement", crmEngagementRoutes);
   // Unsubscribe (public)
   app.use("/api/unsubscribe", unsubscribeRoutes);
+  app.use("/api/business-email-sender", businessSenderRoutes);
 
   app.use(notFoundHandler);
   app.use(errorHandler);

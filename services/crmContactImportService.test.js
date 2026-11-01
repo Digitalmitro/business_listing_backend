@@ -42,6 +42,18 @@ test("rows are validated, split names joined, opt-outs and dates parsed", () => 
   assert.equal(future.record.lastActivityAt, null);
 });
 
+test("a duplicate row never overrides the first row's values, it only fills gaps", () => {
+  const mapping = { E: "email", N: "name", P: "phone", T: "tags" };
+  const { records } = imports.prepareRows(
+    [{ E: "dup@x.io", N: "Row One", P: "", T: "a" }, { E: "dup@x.io", N: "Row Five", P: "+919800000005", T: "b" }],
+    mapping
+  );
+  assert.equal(records.length, 1);
+  assert.equal(records[0].name, "Row One");
+  assert.ok(String(records[0].phone || "").includes("9800000005"), "the empty phone is filled from the later row");
+  assert.deepEqual(records[0].tags, ["a", "b"]);
+});
+
 test("duplicate rows in a file are merged", () => {
   const mapping = { E: "email", N: "name", T: "tags" };
   const { records, duplicatesInFile, invalidRows } = imports.prepareRows(

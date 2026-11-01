@@ -8,6 +8,7 @@ const {
   deleteTopBannerCategory,
 } = require("../controllers/topBannerCategoryController");
 const { authMiddleware } = require("../middlewares/authMiddleware");
+const { requireAdmin } = require("../middlewares/requireAdmin");
 const { upload } = require("../config/multerConfig"); 
 
 // PUBLIC - Get all active top banner categories
@@ -17,6 +18,7 @@ router.get("/top-banner-category", getAllTopBannerCategories);
 router.post(
   "/top-banner-category",
   authMiddleware,
+  requireAdmin("cms"),
   upload.single("image"),
   createTopBannerCategory
 );
@@ -24,6 +26,7 @@ router.post(
 router.put(
   "/top-banner-category/:id",
   authMiddleware,
+  requireAdmin("cms"),
   upload.single("image"), // Optional image update
   updateTopBannerCategory
 );
@@ -31,6 +34,7 @@ router.put(
 router.delete(
   "/top-banner-category/:id",
   authMiddleware,
+  requireAdmin("cms"),
   deleteTopBannerCategory
 );
 

@@ -1,4 +1,5 @@
 const TopCountry = require("../models/TopCountry");
+const { searchPattern, exactInsensitive } = require("../utils/regex");
 const fs = require("fs");
 const path = require("path");
 const { uploadDir } = require("../utils/uploadDir");
@@ -211,7 +212,7 @@ exports.updateTopCountry = (req, res) => saveCountry(req, res, true);
 exports.getTopcountry = async (req, res) => {
   try {
     const { search = "", page = 1, limit = 10 } = req.query;
-    const query = search ? { name: { $regex: search, $options: "i" } } : {};
+    const query = search ? { name: { $regex: searchPattern(search), $options: "i" } } : {};
 
     const countries = await TopCountry.find(query)
       .sort({ createdAt: -1 })
@@ -237,7 +238,7 @@ exports.getCountryByName = async (req, res) => {
   try {
     const { name } = req.params;
     const country = await TopCountry.findOne({
-      name: { $regex: `^${name}$`, $options: "i" },
+      name: { $regex: exactInsensitive(name) },
     });
 
     if (!country) return res.status(404).json({ message: "Country not found" });

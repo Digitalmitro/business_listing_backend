@@ -474,7 +474,7 @@ function skipReason(row, appointment, now = new Date()) {
 async function loadContext(row) {
   const [appointment, business, customer] = await Promise.all([
     Appointment.findById(row.appointmentId).lean(),
-    Business.findById(row.businessId).select("_id businessName userId contact").lean(),
+    Business.findById(row.businessId).select("_id businessName userId contact subscription").lean(),
     row.customerId ? User.findById(row.customerId).select("full_name name email").lean() : null,
   ]);
   const ownerId = business?.userId || row.ownerId;
@@ -488,19 +488,28 @@ async function loadContext(row) {
 }
 
 /**
- * Sends through the active SenderEmail (SMTP) or, if none is configured, the
- * EMAIL_USER / EMAIL_PASS Gmail fallback. Returns { success, info | error }.
- * Exported so tests can stub delivery.
+ * Customer emails go out from the business's own verified address, and only when
+ * the business's plan includes them (clientMailer; a skip returns
+ * { success: false, skipped: true, reason }). Owner emails are UrbanCitations
+ * notifications to its client and use the platform sender: the active SenderEmail
+ * (SMTP) or, if none is configured, the EMAIL_USER / EMAIL_PASS Gmail fallback.
+ * Returns { success, info | error, from? }. Exported so tests can stub delivery.
  */
-async function deliver({ to, subject, html, unsubscribeLink, replyTo }) {
+async function deliver({ to, subject, html, unsubscribeLink, replyTo, recipient = "owner", business = null, reminderKey }) {
+  if (recipient === "customer") {
+    const clientMailer = require("./clientMailer");
+    return clientMailer.sendAsBusiness({ business, kind: "booking", reminderKey, to, subject, html, replyTo });
+  }
   const sender = await SenderEmail.findOne({ isActive: true }).select("email").lean();
   if (sender) {
     const nodemailerUtil = require("../utils/nodemailer");
-    return nodemailerUtil.sendMail(sender.email, to, subject, html, unsubscribeLink, { replyTo });
+    const result = await nodemailerUtil.sendMail(sender.email, to, subject, html, unsubscribeLink, { replyTo });
+    return { ...result, from: sender.email };
   }
   const sendMailService = require("./sendMail");
   const footer = unsubscribeLink ? `<br><br><a href="${unsubscribeLink}" style="color:#888;font-size:12px;">Unsubscribe</a>` : "";
-  return sendMailService(to, subject, `${html}${footer}`, { replyTo });
+  const result = await sendMailService(to, subject, `${html}${footer}`, { replyTo });
+  return { ...result, from: process.env.EMAIL_FROM || process.env.EMAIL_USER || "" };
 }
 
 async function finish(row, status, fields = {}) {
@@ -540,10 +549,23 @@ async function processNotification(notificationId, { now = new Date() } = {}) {
     const placeholders = placeholdersFor({ ...ctx, step, recipient: row.recipient });
     const fallback = FALLBACKS[row.triggerType] || FALLBACKS.booking_confirmed_user;
     const { subject, html } = await getTemplate(row.triggerType, placeholders, fallback);
-    const unsubscribeLink = recipientUser?._id ? `${frontendUrl()}/unsubscribe?userId=${recipientUser._id}` : undefined;
+    // Booking emails are transactional: no marketing unsubscribe link. (The old link
+    // pointed at a /unsubscribe page the customer site never had.)
     const replyTo = row.recipient === "customer" ? validEmail(ctx.owner?.email) || undefined : undefined;
 
-    const result = await module.exports.deliver({ to, subject, html, unsubscribeLink, replyTo });
+    const result = await module.exports.deliver({
+      to,
+      subject,
+      html,
+      replyTo,
+      recipient: row.recipient,
+      business: ctx.business,
+      reminderKey: row.kind === "reminder" ? row.key : undefined,
+    });
+    if (result && result.skipped) {
+      logger.info("appointment_notifications.skipped", "Appointment email skipped", { notificationId: String(row._id), key: row.key, recipient: row.recipient, reason: result.reason });
+      return finish(row, "skipped", { to, subject, lastError: result.reason });
+    }
     if (result && result.success) {
       logger.info("appointment_notifications.sent", "Appointment email sent", {
         notificationId: String(row._id),
@@ -553,7 +575,7 @@ async function processNotification(notificationId, { now = new Date() } = {}) {
         to,
         messageId: result.info?.messageId,
       });
-      return finish(row, "sent", { to, subject, sentAt: new Date(), messageId: result.info?.messageId || null, lastError: null });
+      return finish(row, "sent", { to, from: result.from || "", subject, sentAt: new Date(), messageId: result.info?.messageId || null, lastError: null });
     }
     throw result?.error || new Error("Unknown email delivery failure");
   } catch (error) {

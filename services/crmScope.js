@@ -49,8 +49,16 @@ function scopeMatch(ownerId, businessId) {
 }
 
 /** Read scope for a request: admins see every owner, users only themselves. */
+/** Admins reach every business's CRM only as super-admins or with the "crm" permission. */
+function adminCanUseCrm(req) {
+  if (!req.isAdmin) return false;
+  const admin = req.user || {};
+  return admin.role === "super-admin" || (Array.isArray(admin.permissions) && admin.permissions.includes("crm"));
+}
+
 function readScope(req) {
-  return req.isAdmin ? ALL_OWNERS : req.user._id;
+  // An admin without the "crm" permission falls back to their own (empty) CRM: no other owner's data.
+  return adminCanUseCrm(req) ? ALL_OWNERS : req.user._id;
 }
 
 function scopedError(status, message) {
@@ -74,6 +82,7 @@ async function resolveWriteScope(req, businessId) {
   if (!business) throw scopedError(404, "Business not found");
 
   if (req.isAdmin) {
+    if (!adminCanUseCrm(req)) throw scopedError(403, 'You do not have the "crm" permission');
     return { ownerId: business.userId || req.user._id, businessId: id, business };
   }
   if (!business.userId || String(business.userId) !== String(req.user._id)) {
@@ -124,6 +133,7 @@ function appointmentStartTime(appointment) {
 }
 
 module.exports = {
+  adminCanUseCrm,
   invalidateCrmSnapshots,
   appointmentStartTime,
   ALL_OWNERS,

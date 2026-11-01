@@ -1,5 +1,6 @@
 // backend/services/adminCrmService.js
 "use strict";
+const { escapeRegex } = require("../utils/regex");
 
 const mongoose = require("mongoose");
 const { CrmLead } = require("../models/CrmLead");
@@ -124,7 +125,7 @@ async function getGlobalAuditLogs({ page = 1, limit = 50, action, search } = {})
   const filter = {};
   if (action) filter.action = action;
   if (search && search.trim()) {
-    const rx = new RegExp(search.trim(), "i");
+    const rx = new RegExp(escapeRegex(search.trim()), "i");
     filter.$or = [{ description: rx }, { leadName: rx }, { performedByName: rx }];
   }
 

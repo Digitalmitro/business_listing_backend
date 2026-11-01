@@ -39,6 +39,8 @@ const appointmentNotificationSchema = new mongoose.Schema(
     attempts: { type: Number, default: 0 },
     lockedAt: { type: Date, default: null },
     to: { type: String, default: "" },
+    /** Address the email was sent from (the business's own address for customer emails). */
+    from: { type: String, default: "" },
     subject: { type: String, default: "" },
     messageId: { type: String, default: null },
     /** Why the email failed or was skipped. */

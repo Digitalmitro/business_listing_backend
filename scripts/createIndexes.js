@@ -31,6 +31,7 @@ const CrmJourney = require("../models/CrmJourney");
 const CrmJourneyEnrollment = require("../models/CrmJourneyEnrollment");
 const Appointment = require("../models/Appointment");
 const AppointmentNotification = require("../models/AppointmentNotification");
+const Review = require("../models/Review");
 
 async function ensureBusinessGoogleLocationIndex() {
   const duplicates = await Business.aggregate([
@@ -99,6 +100,9 @@ async function createAllIndexes() {
       { name: "CrmJourneyEnrollment", model: CrmJourneyEnrollment },
       { name: "Appointment", model: Appointment },
       { name: "AppointmentNotification", model: AppointmentNotification },
+      // Unique (businessId, userId): one review per user per business. Fails (and is
+      // reported below) if duplicates already exist; remove them first.
+      { name: "Review", model: Review },
     ];
 
     for (const { name, model } of models) {

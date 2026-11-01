@@ -18,6 +18,9 @@ const { VALID_COUNTRIES, normalizeCountry, countryMatchValues } = require("../he
 const { escapeRegex } = require("../services/businessImportService");
 const businessService = require("../services/businessService");
 const { cleanBusinessLogo, cleanBusinessPhotos } = require("../utils/businessMedia");
+const { searchPattern } = require("../utils/regex");
+const kycFiles = require("../services/kycFileService");
+const { canManageBusiness } = require("../middlewares/businessAccess");
 
 ///this api use combine for admin and users
 exports.createBusiness = async (req, res) => {
@@ -36,7 +39,7 @@ exports.createBusiness = async (req, res) => {
       return res.status(400).json({ message: "Add all mandatory fields." });
     }
 
-    const isAdmin = ["admin", "super-admin"].includes(req.user?.role);
+    const isAdmin = Boolean(req.isAdmin);
 
     const savedBusiness = await businessService.createBusiness({
       ownerId: loggedInUserId,
@@ -825,28 +828,29 @@ exports.getBusiness = async (req, res) => {
     // Build query
     let query = {};
 
-    // Search query
+    // Search query (escaped: the text is matched literally, never as a pattern)
     if (search) {
+      const pattern = searchPattern(search);
       query.$or = [
-        { businessName: { $regex: search, $options: "i" } },
-        { "address.city": { $regex: search, $options: "i" } },
-        { "address.area": { $regex: search, $options: "i" } },
-        { "contact.email": { $regex: search, $options: "i" } },
-        { "contact.mobile": { $regex: search, $options: "i" } },
-        { "contact.contactDetails.name": { $regex: search, $options: "i" } },
+        { businessName: { $regex: pattern, $options: "i" } },
+        { "address.city": { $regex: pattern, $options: "i" } },
+        { "address.area": { $regex: pattern, $options: "i" } },
+        { "contact.email": { $regex: pattern, $options: "i" } },
+        { "contact.mobile": { $regex: pattern, $options: "i" } },
+        { "contact.contactDetails.name": { $regex: pattern, $options: "i" } },
         {
           "contact.contactDetails.mobileNumbers": {
-            $regex: search,
+            $regex: pattern,
             $options: "i",
           },
         },
         {
           "contact.contactDetails.whatsappNumbers": {
-            $regex: search,
+            $regex: pattern,
             $options: "i",
           },
         },
-        { "contact.contactDetails.emails": { $regex: search, $options: "i" } },
+        { "contact.contactDetails.emails": { $regex: pattern, $options: "i" } },
       ];
     }
 
@@ -1002,9 +1006,14 @@ exports.getBusinessById = async (req, res) => {
       (completedWeight / totalWeight) * 100
     );
 
+    // KYC documents (identity papers) are only for the owner and admins; everyone else
+    // sees the KYC status. Owner/admin also get short-lived signed links to the files.
+    const canSeeKycDocuments = Boolean(req.user) && canManageBusiness(business, req);
+
     // Provide the expected shape to the frontend without the DB write storm
     const businessDataForClient = {
       ...business, // query uses .lean(), so this is already a plain object
+      kyc: kycFiles.presentKyc(business.kyc, req, { canSeeDocuments: canSeeKycDocuments }),
       profileCompletionScore,
       enquiryCount,
       offerCount: offersWithService.length,
@@ -1138,27 +1147,27 @@ exports.searchServices = async (req, res) => {
       },
       {
         $match: {
-          addressString: { $regex: location, $options: "i" },
+          addressString: { $regex: searchPattern(location), $options: "i" },
           $or: [
-            { businessName: { $regex: query, $options: "i" } },
-            { "categoryDetails.name": { $regex: query, $options: "i" } },
-            { "subCategoryDetails.name": { $regex: query, $options: "i" } },
-            { servicesTypes: { $elemMatch: { $regex: query, $options: "i" } } },
-            { "contact.contactDetails.name": { $regex: query, $options: "i" } },
+            { businessName: { $regex: searchPattern(query), $options: "i" } },
+            { "categoryDetails.name": { $regex: searchPattern(query), $options: "i" } },
+            { "subCategoryDetails.name": { $regex: searchPattern(query), $options: "i" } },
+            { servicesTypes: { $elemMatch: { $regex: searchPattern(query), $options: "i" } } },
+            { "contact.contactDetails.name": { $regex: searchPattern(query), $options: "i" } },
             {
               "contact.contactDetails.mobileNumbers": {
-                $regex: query,
+                $regex: searchPattern(query),
                 $options: "i",
               },
             },
             {
               "contact.contactDetails.whatsappNumbers": {
-                $regex: query,
+                $regex: searchPattern(query),
                 $options: "i",
               },
             },
             {
-              "contact.contactDetails.emails": { $regex: query, $options: "i" },
+              "contact.contactDetails.emails": { $regex: searchPattern(query), $options: "i" },
             },
           ],
         },
@@ -1347,8 +1356,13 @@ exports.updateBusiness = async (req, res) => {
       "subCategory", // Added to allow subcategory updates
     ];
 
+    // Verification badges and KYC review are decided by admins; an owner editing their
+    // listing cannot set them (KYC files go through PUT /kyc-update).
+    const adminOnlyFields = new Set(["verified", "trust", "claimed", "kyc"]);
+
     const updates = {};
     for (const field of allowedFields) {
+      if (adminOnlyFields.has(field) && !req.isAdmin) continue;
       if (parsedData.hasOwnProperty(field)) {
         let value = parsedData[field];
         if (field === "address" && value?.country) {
@@ -1393,8 +1407,32 @@ exports.updateBusiness = async (req, res) => {
         );
     }
 
+    // A day ticked without opening/closing times leaves the business unbookable.
+    // Only checked when the hours change, so listings saved before this rule can still
+    // edit their other details.
+    if (updates.businessTiming) {
+      const normalizeTiming = (timing) => JSON.stringify({
+        isOpen24Hours: Boolean(timing?.isOpen24Hours),
+        daysOfWeek: [...(timing?.daysOfWeek || [])],
+        schedule: Object.fromEntries(
+          Object.entries(timing?.schedule instanceof Map ? Object.fromEntries(timing.schedule) : timing?.schedule || {})
+            .map(([day, slots]) => [day, (slots || []).map((slot) => ({ openAt: slot?.openAt || "", closeAt: slot?.closeAt || "" }))])
+            .sort(([a], [b]) => a.localeCompare(b))
+        ),
+      });
+      const current = business.businessTiming?.toObject ? business.businessTiming.toObject() : business.businessTiming;
+      if (normalizeTiming(updates.businessTiming) !== normalizeTiming(current)) {
+        try {
+          businessService.validateBusinessTiming(updates.businessTiming);
+        } catch (validationError) {
+          return res.status(400).json({ message: validationError.message });
+        }
+      }
+    }
+
     // Handle KYC updates
     if (updates.kyc) {
+      delete updates.kyc.documentUrls;
       updates.kyc = {
         ...business.kyc, // Preserve existing KYC fields
         ...updates.kyc, // Apply provided updates
@@ -1785,14 +1823,23 @@ exports.updateKYC = async (req, res) => {
       return res.status(404).json({ message: "Business not found" });
     }
 
-    const updates = {};
-    if (parsedData.kyc) {
-      updates.kyc = {
-        country: parsedData.kyc.country,
-        documents: {}, // Map of document type to filename
-        status: "pending",
-      };
+    if (!parsedData.kyc || !parsedData.kyc.country) {
+      return res.status(400).json({ message: "KYC country is required" });
     }
+
+    // Documents already on file for the same country are kept (the KYC page shows them
+    // next to the new uploads and deletes them one by one via kyc-delete-document).
+    const sameCountry = business.kyc?.country === parsedData.kyc.country;
+    const existingDocs = sameCountry && business.kyc?.documents
+      ? Object.fromEntries(business.kyc.documents instanceof Map ? business.kyc.documents : Object.entries(business.kyc.documents))
+      : {};
+    const updates = {
+      kyc: {
+        country: parsedData.kyc.country,
+        documents: existingDocs, // Map of document type to filename
+        status: "pending",
+      },
+    };
 
     // Handle uploaded KYC documents with their types
     if (req.files && req.files.length > 0) {
@@ -1822,9 +1869,14 @@ exports.updateKYC = async (req, res) => {
         ],
       };
       const countryDocs = requiredDocs[parsedData.kyc.country] || [];
+      // `docNames[i]` names the i-th uploaded file; without it files fill the country's
+      // document list in order (the original behaviour).
+      const docNames = Array.isArray(parsedData.kyc.docNames) ? parsedData.kyc.docNames : null;
       req.files.forEach((file, index) => {
-        if (index < countryDocs.length) {
-          updates.kyc.documents[countryDocs[index]] = path.basename(file.path);
+        const named = docNames && countryDocs.includes(docNames[index]) ? docNames[index] : null;
+        const docName = named || (docNames ? null : countryDocs[index]);
+        if (docName) {
+          updates.kyc.documents[docName] = path.basename(file.path);
         }
       });
     }
@@ -1843,9 +1895,11 @@ exports.updateKYC = async (req, res) => {
       category: "kyc",
     });
 
+    const businessForClient = updatedBusiness.toObject();
+    businessForClient.kyc = kycFiles.presentKyc(businessForClient.kyc, req, { canSeeDocuments: true });
     return res.status(200).json({
       message: "KYC documents updated successfully",
-      business: updatedBusiness,
+      business: businessForClient,
     });
   } catch (err) {
     console.error("Error updating KYC:", err);
@@ -1975,7 +2029,7 @@ exports.getAllBusiness = async (req, res) => {
       ...(isTrusted === "true" && { trust: true }),
       ...(type && { type: { $in: type.split(",") } }),
       ...(isTopRated === "true" && { rating: { $gte: 4.5 } }),
-      ...(search && { businessName: { $regex: search, $options: "i" } }),
+      ...(search && { businessName: { $regex: searchPattern(search), $options: "i" } }),
     };
 
     // isOpenNow Logic
@@ -2033,6 +2087,8 @@ exports.getAllBusiness = async (req, res) => {
         },
       },
       { $match: postGeoFilters },
+      // Public listing: never expose KYC documents.
+      { $unset: "kyc.documents" },
 
       // Add isPremium field based on active subscription
       {
@@ -2324,7 +2380,25 @@ exports.searchBusinesses = async (req, res) => {
 
 exports.checkPhoneExists = async (req, res) => {
   try {
-    const { phone } = req.body;
+    const { phone, scope, excludeBusinessId } = req.body;
+    // scope "business": the same check the Business pre-save hook runs, so the
+    // listing form can flag a number already used by another business at the step
+    // where it is typed instead of failing at the final submit.
+    if (scope === "business") {
+      const number = typeof phone === "string" ? phone.trim() : "";
+      if (!number) return res.status(400).json({ available: false, scope: "business", message: "Phone number is required" });
+      const query = {
+        $or: [
+          { "contact.contactDetails.mobileNumbers": { $in: [number] } },
+          { "contact.contactDetails.whatsappNumbers": { $in: [number] } },
+        ],
+      };
+      if (excludeBusinessId && mongoose.Types.ObjectId.isValid(excludeBusinessId)) query._id = { $ne: excludeBusinessId };
+      const taken = await Business.exists(query);
+      return taken
+        ? res.status(409).json({ available: false, scope: "business", message: "This number is already used by another business." })
+        : res.status(200).json({ available: true, scope: "business" });
+    }
     const existingUser = await User.findOne({ phone });
     if (existingUser) {
       return res.status(409).json({

@@ -14,6 +14,7 @@ const {
 } = require("../controllers/categoryController");
 // `upload` stores CSV imports on disk; `memoryUpload` keeps icon images in memory for Cloudinary.
 const { upload, memoryUpload } = require("../config/multerConfig");
+const { requireAdmin } = require("../middlewares/requireAdmin");
 
 const router = express.Router();
 
@@ -21,7 +22,7 @@ const router = express.Router();
 // These must come BEFORE any dynamic :id or :categoryId routes
 
 router.get("/sample-csv", downloadSampleCategoryCSV); // ← Sample CSV download
-router.post("/import-csv", upload.single("csvFile"), importCategoriesFromCSV); // ← Bulk import
+router.post("/import-csv", requireAdmin("categories"), upload.single("csvFile"), importCategoriesFromCSV); // ← Bulk import
 
 router.get("/category-with-top", getCategorywithTop); // ← Get all + top categories
 router.get("/categories", getAllCategories); // ← List all categories
@@ -31,6 +32,7 @@ router.get("/autocomplete", searchCategories);
 
 router.post(
   "/categories",
+  requireAdmin("categories"),
   memoryUpload.fields([
     { name: "icon", maxCount: 1 },
     { name: "bgImage", maxCount: 1 },
@@ -41,6 +43,7 @@ router.post(
 router.get("/:categoryId", getCategoryById); // ← Get single by ID
 router.put(
   "/:categoryId",
+  requireAdmin("categories"),
   memoryUpload.fields([
     { name: "icon", maxCount: 1 },
     { name: "bgImage", maxCount: 1 },
@@ -48,6 +51,6 @@ router.put(
   updateCategory
 );
 
-router.delete("/:id", deleteCategory); // ← Delete by ID
+router.delete("/:id", requireAdmin("categories"), deleteCategory); // ← Delete by ID
 
 module.exports = router;

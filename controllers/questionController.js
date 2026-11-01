@@ -25,12 +25,30 @@ exports.CreateQuestion = async (req, res) => {
     }
   };
 
+/**
+ * GET /api/question[?business=<id>]
+ * Admins with the "questions" permission get every question with the asker (admin
+ * panel). Everyone else gets the public view: no asker name or email, optionally
+ * filtered to one business (the business profile page).
+ */
 exports.getAllQuestion = async (req,res) =>{
 try {
-  const question = await Question.find({}).populate('askedBy','full_name email');
+  const { hasPermission } = require('../middlewares/requireAdmin');
+  const isQuestionAdmin = Boolean(req.isAdmin && (req.user?.role === 'super-admin' || hasPermission(req.user, ['questions'])));
+  const filter = {};
+  const mongoose = require('mongoose');
+  if (req.query.business) {
+    if (!mongoose.isValidObjectId(req.query.business)) return res.status(400).json({ message: "Invalid business id" });
+    filter.business = req.query.business;
+  }
+  if (isQuestionAdmin) {
+    const question = await Question.find(filter).populate('askedBy','full_name email');
+    return res.status(200).json(question)
+  }
+  const question = await Question.find(filter).select('questionText business status reply createdAt updatedAt').lean();
   return res.status(200).json(question)
 } catch (error) {
-  return res.status(500).json({ message: "Server error", details: error.message })
+  return res.status(500).json({ message: "Server error" })
 }
 }
 

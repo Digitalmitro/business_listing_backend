@@ -110,6 +110,9 @@ exports.triggerForLead = async (req, res) => {
       return res.status(401).json({ success: false, message: "User not authenticated" });
     }
 
+    if (!require("mongoose").isValidObjectId(req.params.id)) {
+      return res.status(400).json({ success: false, message: "Invalid lead id" });
+    }
     const { force } = req.body || {};
     const result = await crmFollowUpService.triggerLeadFollowUp(req.user._id, req.params.id, {
       force: Boolean(force),
@@ -120,6 +123,6 @@ exports.triggerForLead = async (req, res) => {
   } catch (error) {
     logger.error("Error triggering follow-up for single lead", { error: error.message });
     const status = error.message.includes("not found") ? 404 : 500;
-    return res.status(status).json({ success: false, message: error.message });
+    return res.status(status).json({ success: false, message: status === 500 ? "Could not trigger the follow-up" : error.message });
   }
 };

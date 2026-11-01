@@ -77,9 +77,17 @@ const applyEmailPlaceholders = (template, data = {}) => {
     listing_url: data.listing_url || data.listingUrl || "",
   };
 
-  return Object.entries(values).reduce(
-    (output, [key, value]) => output.split(`{{${key}}}`).join(String(value)),
-    String(template || "")
+  // Template custom variables (and any other simple key the caller passes, e.g. {{promo}})
+  // are substituted too; the built-in keys above keep their fallbacks.
+  for (const [key, value] of Object.entries(data || {})) {
+    if (/^[a-zA-Z0-9_]+$/.test(key) && !(key in values) && (typeof value === "string" || typeof value === "number")) {
+      values[key] = value;
+    }
+  }
+
+  // Accept "{{key}}" and "{{ key }}"; unknown placeholders are left untouched.
+  return String(template || "").replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (match, key) =>
+    Object.prototype.hasOwnProperty.call(values, key) ? String(values[key]) : match
   );
 };
 

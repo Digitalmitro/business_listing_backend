@@ -1,4 +1,5 @@
 const Vertical = require("../models/Vertical");
+const { searchPattern } = require("../utils/regex");
 
 exports.insertManyVerticals = async (req, res) => {
     try {
@@ -83,7 +84,7 @@ exports.getAllVerticals = async (req, res) => {
 exports.getVerticalByTitle = async (req, res) => {
   try {
     const { title } = req.params;
-    const vertical = await Vertical.findOne({ title: { $regex: new RegExp(title, "i") } });
+    const vertical = await Vertical.findOne({ title: { $regex: searchPattern(title), $options: "i" } });
     if (!vertical) {
       return res.status(404).json({ message: "Vertical not found" });
     }

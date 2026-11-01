@@ -118,7 +118,7 @@ test("createBusiness builds the same document shape as the manual flow for a val
         email: ["owner@artbrain.test"],
         contactDetails: [{ name: "Art Brain Owner" }],
       },
-      businessTiming: { isOpen24Hours: false, daysOfWeek: ["Mon"], schedule: {} },
+      businessTiming: { isOpen24Hours: false, daysOfWeek: ["Mon"], schedule: { Mon: [{ openAt: "09:00", closeAt: "18:00" }] } },
       category: [categoryId],
     },
     files: {},
@@ -242,4 +242,49 @@ test("createBusiness rejects a listing without opening hours", async (context) =
       }),
     /Business hours are required/
   );
+});
+
+test("createBusiness rejects selected days without opening and closing times", async (context) => {
+  stubCategoryLookup(context);
+  stubSaveAndUser(context);
+  const base = {
+    businessName: "No Hours",
+    address: { city: "Delhi", country: "India", coordinates: { latitude: 28.6, longitude: 77.2 } },
+    contact: { mobile: ["9876543210"] },
+    category: [categoryId],
+  };
+  for (const businessTiming of [
+    { isOpen24Hours: false, daysOfWeek: ["Mon", "Tue"], schedule: {} },
+    { isOpen24Hours: false, daysOfWeek: ["Mon"], schedule: { Mon: [{ openAt: "", closeAt: "" }] } },
+    { isOpen24Hours: false, daysOfWeek: ["Mon"], schedule: { Mon: [{ openAt: "09:00" }] } },
+    { isOpen24Hours: false, daysOfWeek: ["Mon"], schedule: { Mon: [{ openAt: "9am", closeAt: "6pm" }] } },
+  ]) {
+    await assert.rejects(
+      () => service.createBusiness({ ownerId, isAdmin: false, businessData: { ...base, businessTiming }, files: {} }),
+      /Opening and closing times/
+    );
+  }
+});
+
+test("createBusiness honours the admin's Verified / Trust / Claimed flags, never an owner's", async (context) => {
+  stubCategoryLookup(context);
+  stubSaveAndUser(context);
+  const businessData = {
+    businessName: "Flags",
+    address: { city: "Delhi", country: "India", coordinates: { latitude: 28.6, longitude: 77.2 } },
+    contact: { mobile: ["9876543210"] },
+    businessTiming: { isOpen24Hours: true, daysOfWeek: [], schedule: {} },
+    category: [categoryId],
+    verified: true,
+    trust: "true",
+    claimed: true,
+  };
+  const byAdmin = await service.createBusiness({ ownerId: null, isAdmin: true, businessData, files: {} });
+  assert.equal(byAdmin.verified, true);
+  assert.equal(byAdmin.trust, true);
+  assert.equal(byAdmin.claimed, true);
+  const byOwner = await service.createBusiness({ ownerId, isAdmin: false, businessData, files: {} });
+  assert.equal(byOwner.verified, false);
+  assert.equal(byOwner.trust, false);
+  assert.equal(byOwner.claimed, true);
 });

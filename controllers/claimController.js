@@ -6,6 +6,8 @@ const path = require("path");
 const mongoose = require("mongoose");
 const { addJob } = require("../utils/queue");
 const { notifyAdmins } = require("../helpers/notificationHelper");
+const kycFiles = require("../services/kycFileService");
+const { KYC_REQUIRED_DOCS } = require("../helpers/kycDocuments");
 
 const submitClaim = async (req, res) => {
   try {
@@ -73,9 +75,21 @@ const submitClaim = async (req, res) => {
         photos = req.files.photos.map((file) => file.filename);
       }
       if (req.files.kycDocuments) {
-        const { docMapping } = businessData.kyc || {};
-        req.files.kycDocuments.forEach((file) => {
-          const docName = docMapping?.[file.originalname] || file.originalname;
+        // `docNames[i]` (preferred) names the i-th file. The older `docMapping` is keyed by
+        // file name, so two documents uploaded from files with the same name used to land on
+        // one key and the first was lost; a name that is already taken now falls back to
+        // the next document of the country's list that wasn't provided (or the file name).
+        const { docMapping, docNames, country } = businessData.kyc || {};
+        const countryDocs = KYC_REQUIRED_DOCS[country] || [];
+        const mappedNames = new Set(Object.values(docMapping || {}));
+        req.files.kycDocuments.forEach((file, index) => {
+          let docName = (Array.isArray(docNames) && docNames[index]) || docMapping?.[file.originalname] || file.originalname;
+          if (kycDocumentsMap.has(docName)) {
+            docName =
+              countryDocs.find((name) => !kycDocumentsMap.has(name) && !mappedNames.has(name)) ||
+              countryDocs.find((name) => !kycDocumentsMap.has(name)) ||
+              `${file.originalname} (${index + 1})`;
+          }
           kycDocumentsMap.set(docName, path.basename(file.filename));
         });
       }
@@ -115,6 +129,9 @@ const submitClaim = async (req, res) => {
       link: `/view-claim/${claim._id}`,
       category: "claims",
     });
+
+    // Receipt to the claimant + notice to the current owner (workers/claimWorker.js).
+    await addJob("claim-email", { claimId: claim._id, status: "submitted" });
 
     res.status(201).json({
       message: "Claim submitted successfully. Awaiting admin approval.",
@@ -182,6 +199,10 @@ const updateClaimStatus = async (req, res) => {
     }
 
     claim.status = status;
+    if (status === "rejected") {
+      claim.updatedAt = Date.now();
+      await claim.save();
+    }
     if (status === "approved") {
       claim.kycVerified = true;
       claim.kycVerifiedAt = new Date();
@@ -268,6 +289,9 @@ const getClaimById = async (req, res) => {
     if (!claim) {
       return res.status(404).json({ message: "Claim not found" });
     }
+
+    // Admin-only route: add short-lived signed links to the private KYC files.
+    if (claim.kyc) claim.kyc = kycFiles.presentKyc(claim.kyc, req, { canSeeDocuments: true });
 
     res.status(200).json(claim);
   } catch (error) {

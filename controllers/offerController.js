@@ -1,6 +1,7 @@
 const Offer = require("../models/Offer");
 const mongoose = require("mongoose");
 const Business = require("../models/Business");
+const { hasPermission } = require("../middlewares/requireAdmin");
 
 exports.createOffer = async (req, res) => {
   const {
@@ -138,7 +139,8 @@ exports.deleteOffer = async (req, res) => {
       return res.status(404).json({ success: false, message: "Business not found" });
     }
 
-    if (business.userId.toString() !== userId) {
+    const isOwner = business.userId && business.userId.toString() === String(userId);
+    if (!isOwner && !(req.isAdmin && hasPermission(req.user, ["business"]))) {
       return res.status(403).json({
         success: false,
         message: "You are not authorized to delete this offer",

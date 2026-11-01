@@ -203,3 +203,7 @@ exports.getSchedulerConfig = async (req, res) => {
     return res.status(500).json({ success: false, message: error.message });
   }
 };
+
+// Shared with scripts/seedCrmConfig.js so a fresh database gets the same stages the API
+// falls back to.
+exports.getDefaultStages = getDefaultStages;

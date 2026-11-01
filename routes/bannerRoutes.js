@@ -8,6 +8,7 @@ const {
   deleteBanner,
 } = require("../controllers/bannerController");
 const { authMiddleware } = require("../middlewares/authMiddleware");
+const { requireAdmin } = require("../middlewares/requireAdmin");
 const { upload } = require("../config/multerConfig"); // ← TERA MULTER!
 
 // PUBLIC
@@ -17,6 +18,7 @@ router.get("/banners", getBanners);
 router.post(
   "/banners",
   authMiddleware,
+  requireAdmin("cms"),
   upload.fields([
     { name: "image", maxCount: 1 }, // Main banner
     { name: "bgImage", maxCount: 1 }, // Optional background
@@ -27,6 +29,7 @@ router.post(
 router.put(
   "/banners/:id",
   authMiddleware,
+  requireAdmin("cms"),
   upload.fields([
     { name: "image", maxCount: 1 },
     { name: "bgImage", maxCount: 1 },
@@ -34,6 +37,6 @@ router.put(
   updateBanner
 );
 
-router.delete("/banners/:id", authMiddleware, deleteBanner);
+router.delete("/banners/:id", authMiddleware, requireAdmin("cms"), deleteBanner);
 
 module.exports = router;

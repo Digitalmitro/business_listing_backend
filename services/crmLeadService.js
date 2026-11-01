@@ -1,5 +1,6 @@
 // backend/services/crmLeadService.js
 "use strict";
+const { escapeRegex } = require("../utils/regex");
 
 const mongoose = require("mongoose");
 const logger = require("../utils/logger");
@@ -180,7 +181,7 @@ async function getLeads(
   }
 
   if (search && typeof search === "string" && search.trim()) {
-    const regex = new RegExp(search.trim(), "i");
+    const regex = new RegExp(escapeRegex(search.trim()), "i");
     query.$or = [
       { leadName: regex },
       { company:  regex },

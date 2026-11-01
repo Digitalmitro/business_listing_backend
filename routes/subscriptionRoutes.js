@@ -2,6 +2,7 @@
 const express = require("express");
 const router = express.Router();
 const { authMiddleware } = require("../middlewares/authMiddleware");
+const { requireAdmin } = require("../middlewares/requireAdmin");
 const {
   createPayPalSubscription,
   handlePayPalWebhook,
@@ -12,6 +13,7 @@ const {
   cancelBusinessSubscription,
   reactivateBusinessSubscription,
   getAllBusinessSubscriptions, // Admin
+  adminSetBusinessPlan, // Admin
 } = require("../controllers/subscriptionController");
 
 // PAYPAL ROUTES
@@ -53,6 +55,7 @@ router.post(
 );
 
 // ADMIN ROUTES
-router.get("/admin/all", authMiddleware, getAllBusinessSubscriptions);
+router.get("/admin/all", authMiddleware, requireAdmin("packages"), getAllBusinessSubscriptions);
+router.patch("/admin/business/:businessId", authMiddleware, requireAdmin("packages"), adminSetBusinessPlan);
 
 module.exports = router;

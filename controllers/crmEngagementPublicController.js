@@ -68,8 +68,11 @@ exports.getWidget = async (req, res) => {
   try {
     const { businessId } = req.params;
     if (!mongoose.isValidObjectId(businessId)) return res.status(200).json({ success: true, enabled: false });
-    const business = await Business.findById(businessId).select("_id userId businessName isBlocked").lean();
+    const business = await Business.findById(businessId).select("_id userId businessName isBlocked subscription").lean();
     if (!business || !business.userId || business.isBlocked) return res.status(200).json({ success: true, enabled: false });
+    // The box promises email updates: only offer it when the plan can send them (Premium journeys).
+    const { entitlements } = await require("../services/planEntitlements").getPlanEntitlements(business);
+    if (!entitlements.journeys) return res.status(200).json({ success: true, enabled: false });
     const settings = await contactsService.getSettings(business._id);
     return res.status(200).json({ success: true, enabled: Boolean(settings.captureWidget), businessName: business.businessName });
   } catch (error) {

@@ -7,14 +7,29 @@ const {
   attachmentFileFilter,
   verifyUploadedFiles,
 } = require("../utils/uploadValidation");
+const crypto = require("crypto");
 const { uploadDir } = require("../utils/uploadDir");
+const { ensurePrivateKycDir } = require("../services/kycFileService");
+
+// Fields whose files are private (identity documents): stored outside the public
+// /uploads directory and served only through signed links (services/kycFileService.js).
+const PRIVATE_FIELDS = new Set(["kycDocuments"]);
+
+// "<timestamp><6 random digits>-<original name>": two files with the same name in the
+// same request (or millisecond) no longer overwrite each other, and the name still
+// starts with digits followed by "-" as before.
+const uniqueFilename = (originalname) =>
+  `${Date.now()}${String(crypto.randomInt(0, 1_000_000)).padStart(6, "0")}-${originalname}`;
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
+    if (PRIVATE_FIELDS.has(file.fieldname)) {
+      try { return cb(null, ensurePrivateKycDir()); } catch (err) { return cb(err); }
+    }
     cb(null, uploadDir());
   },
   filename: (req, file, cb) => {
-    cb(null, Date.now() + "-" + file.originalname);
+    cb(null, uniqueFilename(file.originalname));
   },
 });
 

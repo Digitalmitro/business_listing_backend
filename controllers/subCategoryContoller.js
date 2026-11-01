@@ -1,4 +1,5 @@
 const SubCategory = require("../models/SubCategory");
+const { searchPattern, exactInsensitive } = require("../utils/regex");
 const Category = require("../models/Category");
 const images = require("../services/imageStorageService");
 const csv = require("csv-parser");
@@ -126,10 +127,9 @@ exports.getSubCategoriesByCategoryIds = async (req, res) => {
       .populate("category", "name iconUrl icon bgImage")
       .select("-__v -createdAt -updatedAt");
 
+    // No subcategories is a normal answer (an empty group), not an error.
     if (!subCategories || subCategories.length === 0) {
-      return res
-        .status(404)
-        .json({ message: "No subcategories found for given categories" });
+      return res.status(200).json({ data: {} });
     }
 
     // Optional: Group by category
@@ -182,7 +182,7 @@ exports.getAllSubcategoryPaginated = async (req, res) => {
 
     const query = {};
     if (search) {
-      query.name = { $regex: search, $options: "i" };
+      query.name = { $regex: searchPattern(search), $options: "i" };
     }
 
     const total = await SubCategory.countDocuments(query);
@@ -344,7 +344,7 @@ exports.importSubCategoriesFromCSV = async (req, res) => {
 
           // Find parent category
           const category = await Category.findOne({
-            name: { $regex: new RegExp(`^${categoryName}$`, "i") },
+            name: { $regex: exactInsensitive(categoryName) },
           });
 
           if (!category) {
@@ -355,7 +355,7 @@ exports.importSubCategoriesFromCSV = async (req, res) => {
 
           // Check duplicate
           const exists = await SubCategory.findOne({
-            name: { $regex: new RegExp(`^${name}$`, "i") },
+            name: { $regex: exactInsensitive(name) },
             category: category._id,
           });
 

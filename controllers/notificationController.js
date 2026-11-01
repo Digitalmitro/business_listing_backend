@@ -1,5 +1,6 @@
 const Notification = require('../models/Notification');
 const User = require('../models/User'); 
+const Admin = require('../models/Admin');
 const mongoose = require('mongoose');
 
 exports.createGlobalNotification = async (req, res) => {
@@ -24,7 +25,25 @@ exports.createGlobalNotification = async (req, res) => {
       createdAt: new Date(),
     }));
     await Notification.insertMany(notifications);
-    res.status(200).json({ message: "Notifications sent to all users" });
+
+    // Record the broadcast for the admin team so the panel's "Sent Notifications
+    // History" (which lists the admin's own notifications) shows it. Stored as already
+    // read so it doesn't bump the admins' unread badge.
+    const admins = await Admin.find({}, "_id").lean();
+    if (admins.length) {
+      await Notification.insertMany(admins.map((admin) => ({
+        recipientId: admin._id,
+        recipientModel: 'Admin',
+        title,
+        description,
+        link: link || "",
+        image: image || "https://via.placeholder.com/50",
+        category: 'broadcast',
+        read: true,
+        createdAt: new Date(),
+      })));
+    }
+    res.status(200).json({ message: "Notifications sent to all users", recipients: userIds.length });
   } catch (error) {
     console.error("Error creating global notification:", error);
     res.status(500).json({ message: "Server error" });
@@ -47,7 +66,8 @@ exports.getNotifications = async (req, res) => {
 exports.markAsRead = async (req, res) => {
   try {
     const { notificationId } = req.params;
-    await Notification.findByIdAndUpdate(notificationId, { read: true });
+    // Only the recipient can change their notification.
+    await Notification.updateOne({ _id: notificationId, recipientId: req.user.id }, { read: true });
     res.status(200).json({ success: true, message: "Notification marked as read" });
   } catch (error) {
     res.status(500).json({ success: false, message: "Server error" });
@@ -67,7 +87,8 @@ exports.markAllAsRead = async (req, res) => {
 exports.deleteNotification = async (req, res) => {
   try {
     const { notificationId } = req.params;
-    await Notification.findByIdAndDelete(notificationId);
+    const deleted = await Notification.findOneAndDelete({ _id: notificationId, recipientId: req.user.id });
+    if (!deleted) return res.status(404).json({ success: false, message: "Notification not found" });
     res.status(200).json({ success: true, message: "Notification deleted" });
   } catch (error) {
     res.status(500).json({ success: false, message: "Server error" });

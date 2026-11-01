@@ -722,14 +722,22 @@ async function processJourneyDispatch(dispatch, { now = new Date() } = {}) {
         "List-Unsubscribe": `<${unsubscribeLink}>`,
         "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
       },
+      kind: "journey",
     });
 
+    if (result && result.skipped) {
+      logger.info("crm_engagement.email_skipped", "Journey email not sent", { dispatchId: String(dispatch._id), reason: result.reason });
+      const res = await automation.finish(dispatch, "skipped", { to: contact.email, subject: rendered.subject, lastError: result.reason });
+      await onDispatchOutcome(dispatch, "skipped", { reason: result.reason, now });
+      return res;
+    }
     if (result && result.success) {
       const sentAt = now;
       const res = await automation.finish(dispatch, "sent", {
         to: contact.email,
         subject: rendered.subject,
         body: rendered.body,
+        from: result.from || "",
         sentAt,
         messageId: result.info?.messageId || null,
         lastError: null,

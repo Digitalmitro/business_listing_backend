@@ -9,6 +9,57 @@ const { onBookingCreated } = require("../services/crmEmailAutomationService");
 const crmSignals = require("../services/crmSignalService");
 const timeService = require("../services/appointmentTimeService");
 const appointmentNotifications = require("../services/appointmentNotificationService");
+const { hasPermission } = require("../middlewares/requireAdmin");
+
+const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const toMinutes = (hhmm) => {
+  const match = /^(\d{1,2}):(\d{2})$/.exec(String(hhmm || "").trim());
+  if (!match) return null;
+  const minutes = Number(match[1]) * 60 + Number(match[2]);
+  return minutes >= 0 && minutes <= 24 * 60 ? minutes : null;
+};
+
+/**
+ * Whether the slot falls inside the business's opening hours for that weekday.
+ * `dateString` and `timeSlot` are in the booking timezone (the business's timezone when it
+ * has one). Businesses with no hours configured at all are not restricted (nothing to
+ * check against); a day not listed, or listed without times, is closed.
+ */
+function isWithinBusinessHours(businessTiming, dateString, timeSlot) {
+  const timing = businessTiming || {};
+  if (timing.isOpen24Hours) return true;
+  const days = Array.isArray(timing.daysOfWeek) ? timing.daysOfWeek : [];
+  const schedule = timing.schedule instanceof Map ? Object.fromEntries(timing.schedule) : timing.schedule || {};
+  if (days.length === 0 && Object.keys(schedule).length === 0) return true;
+
+  const day = WEEKDAYS[new Date(`${dateString}T00:00:00Z`).getUTCDay()];
+  if (days.length && !days.includes(day)) return false;
+  const slot = timeService.parseTimeSlot(timeSlot);
+  if (!slot) return false;
+  const start = slot.hours * 60 + slot.minutes;
+  return (schedule[day] || []).some(({ openAt, closeAt } = {}) => {
+    const open = toMinutes(openAt);
+    const close = toMinutes(closeAt);
+    if (open === null || close === null) return false;
+    if (close > open) return start >= open && start < close;
+    if (close < open) return start >= open || start < close; // overnight, e.g. 18:00–02:00
+    return true; // open == close: open all day
+  });
+}
+
+/** Rejects past starts and slots outside opening hours; returns an error message or null. */
+function bookingRuleError(business, schedule, timeSlot) {
+  if (!schedule.startsAt || schedule.startsAt.getTime() <= Date.now()) {
+    return "This time has already passed. Please choose a future date and time.";
+  }
+  if (!isWithinBusinessHours(business.businessTiming, schedule.dateString, timeSlot)) {
+    return "The business is closed at the selected time. Please choose a time within its opening hours.";
+  }
+  return null;
+}
+
+// Only a booking that is still scheduled can be canceled or moved.
+const ACTIVE_STATUSES = ["Scheduled"];
 
 /**
  * Resolves what a booking request means in time: the timezone the date and slot
@@ -32,6 +83,7 @@ async function resolveSchedule({ appointmentDate, timeSlot, requestedTimezone, b
   }
   return {
     timezone,
+    dateString,
     normalizedDate: timeService.storedAppointmentDate(dateString),
     startsAt: timeService.startInstant(dateString, timeSlot, timezone),
   };
@@ -54,7 +106,7 @@ exports.CreateAppointment = async (req, res) => {
 
     // Fetch business and customer details before anything is written
     const business = await Business.findById(businessId).select(
-      "businessName contact userId"
+      "businessName contact userId businessTiming"
     );
     if (!business) {
       return res.status(404).json({ message: "Business not found." });
@@ -66,6 +118,11 @@ exports.CreateAppointment = async (req, res) => {
       return res.status(400).json({ message: schedule.error });
     }
     const { timezone, normalizedDate, startsAt } = schedule;
+
+    const ruleError = bookingRuleError(business, schedule, timeSlot);
+    if (ruleError) {
+      return res.status(400).json({ message: ruleError });
+    }
 
     // Check if slot already booked
     const existingAppointment = await Appointment.findOne({
@@ -140,10 +197,21 @@ exports.CreateAppointment = async (req, res) => {
     //    the appointment starts (rows + queue; never throws).
     await appointmentNotifications.onAppointmentBooked(appointment);
 
+    // Tell the customer honestly whether a confirmation email will come: only when the
+    // business's plan includes booking emails and its own address is verified.
+    let customerEmail = false;
+    try {
+      const { entitlements } = await require("../services/planEntitlements").getPlanEntitlements(appointment.businessId);
+      customerEmail = Boolean(entitlements.bookingEmails && (await require("../services/businessSenderService").getVerifiedTransport(appointment.businessId)));
+    } catch {
+      customerEmail = false;
+    }
+
     return res.status(201).json({
       success: true,
       message: "Appointment booked successfully!",
       appointment,
+      customerEmail,
     });
   } catch (error) {
     console.error("Create Appointment Error:", error);
@@ -190,17 +258,30 @@ exports.CancelAppointment = async (req, res) => {
   try {
     const { appointmentId } = req.params;
     const userId = req.user.id;
+    if (!mongoose.isValidObjectId(appointmentId)) {
+      return res.status(404).json({ message: "Appointment not found" });
+    }
+
+    // Customers cancel their own bookings; admins (bookings permission) cancel any.
+    const asAdmin = Boolean(req.isAdmin) && hasPermission(req.user, ["bookings"]);
+    const scope = asAdmin ? { _id: appointmentId } : { _id: appointmentId, userId };
 
     const appointment = await Appointment.findOneAndUpdate(
-      { _id: appointmentId, userId },
+      { ...scope, status: { $in: ACTIVE_STATUSES } },
       { status: "Canceled", updatedAt: Date.now() },
       { new: true }
     ).populate("businessId", "businessName contact userId");
 
     if (!appointment) {
-      return res
-        .status(404)
-        .json({ message: "Appointment not found or already canceled" });
+      const existing = await Appointment.findOne(scope).select("status").lean();
+      if (!existing) {
+        return res.status(404).json({ message: "Appointment not found" });
+      }
+      return res.status(400).json({
+        message: existing.status === "Rescheduled"
+          ? "This booking was already rescheduled; cancel the new booking instead."
+          : `This booking is already ${String(existing.status).toLowerCase()} and can't be canceled.`,
+      });
     }
 
     // Log the cancellation on the customer's CRM lead and contact (never throw)
@@ -209,23 +290,24 @@ exports.CancelAppointment = async (req, res) => {
 
     // Notify business owner
     const business = appointment.businessId;
+    const canceledBy = asAdmin ? "an administrator" : "the customer";
     if (business?.userId) {
        await createNotification({
         recipientId: business.userId,
         recipientType: "User",
         title: "Appointment Canceled",
-        description: `Booking for ${appointment.serviceName} was canceled by the customer.`,
+        description: `Booking for ${appointment.serviceName} was canceled by ${canceledBy}.`,
         link: `/business-bookings/${business._id}`,
         category: "booking",
       });
     }
 
-    // 2. Notify User
+    // 2. Notify the customer who made the booking
     await createNotification({
-      recipientId: userId,
+      recipientId: appointment.userId,
       recipientType: "User",
       title: "Booking Canceled",
-      description: `Your booking for ${appointment.serviceName} at ${business.businessName} has been canceled.`,
+      description: `Your booking for ${appointment.serviceName} at ${business?.businessName || "the business"} has been canceled${asAdmin ? " by an administrator" : ""}.`,
       link: `/bookinghistory`,
       category: "booking",
     });
@@ -264,10 +346,12 @@ exports.RescheduleAppointment = async (req, res) => {
       return res.status(404).json({ message: "Appointment not found" });
     }
 
-    if (oldAppointment.status === "Canceled") {
-      return res
-        .status(400)
-        .json({ message: "Cannot reschedule a canceled appointment" });
+    if (!ACTIVE_STATUSES.includes(oldAppointment.status)) {
+      return res.status(400).json({
+        message: oldAppointment.status === "Rescheduled"
+          ? "This booking was already rescheduled; change the new booking instead."
+          : `Cannot reschedule a ${String(oldAppointment.status).toLowerCase()} appointment`,
+      });
     }
 
     const business = oldAppointment.businessId;
@@ -285,6 +369,11 @@ exports.RescheduleAppointment = async (req, res) => {
     }
     const { timezone, normalizedDate: normalizedNewDate, startsAt } = schedule;
 
+    const ruleError = bookingRuleError(business, schedule, timeSlot);
+    if (ruleError) {
+      return res.status(400).json({ message: ruleError });
+    }
+
     // Check if new slot is already taken
     const slotTaken = await Appointment.findOne({
       businessId: business._id,
@@ -300,10 +389,16 @@ exports.RescheduleAppointment = async (req, res) => {
         .json({ message: "This new time slot is already booked" });
     }
 
-    // Mark old as Rescheduled
+    // Mark old as Rescheduled (only if nobody changed it meanwhile)
+    const marked = await Appointment.updateOne(
+      { _id: oldAppointment._id, status: { $in: ACTIVE_STATUSES } },
+      { $set: { status: "Rescheduled", updatedAt: Date.now() } }
+    );
+    if (!marked.modifiedCount) {
+      return res.status(409).json({ message: "This booking was changed in the meantime. Please refresh and try again." });
+    }
     oldAppointment.status = "Rescheduled";
     oldAppointment.updatedAt = Date.now();
-    await oldAppointment.save();
 
     // Create new appointment
     const newAppointment = new Appointment({
@@ -418,3 +513,5 @@ exports.getAppointmentNotifications = async (req, res) => {
     return res.status(500).json({ success: false, message: "Server error" });
   }
 };
+
+exports.isWithinBusinessHours = isWithinBusinessHours;

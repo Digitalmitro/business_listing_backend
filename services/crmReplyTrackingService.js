@@ -1,5 +1,6 @@
 // backend/services/crmReplyTrackingService.js
 "use strict";
+const { escapeRegex } = require("../utils/regex");
 
 const mongoose = require("mongoose");
 const { ownerFilter, leadIdsForBusiness } = require("./crmScope");
@@ -65,6 +66,10 @@ function classifyReplyText(subject = "", body = "") {
   };
 }
 
+// Stored keywords carry `classification` ("Positive"/"Negative", models/CrmConfig.js);
+// older rows used `category` ("positive"/"negative").
+const keywordKind = (k) => String(k.category || k.classification || "").toLowerCase();
+
 async function classifyReplyTextAsync(subject = "", body = "") {
   const fullText = `${subject || ""} ${body || ""}`.toLowerCase().replace(/\s+/g, " ").trim();
 
@@ -79,8 +84,8 @@ async function classifyReplyTextAsync(subject = "", body = "") {
         }
       }
       if (cachedReplyKeywords) {
-        for (const kw of cachedReplyKeywords.filter((k) => k.category === "negative")) {
-          const rx = new RegExp(`\\b${kw.keyword}\\b`, "i");
+        for (const kw of cachedReplyKeywords.filter((k) => keywordKind(k) === "negative")) {
+          const rx = new RegExp(`\\b${escapeRegex(kw.keyword)}\\b`, "i");
           if (rx.test(fullText)) {
             return {
               classification: "Negative",
@@ -89,8 +94,8 @@ async function classifyReplyTextAsync(subject = "", body = "") {
             };
           }
         }
-        for (const kw of cachedReplyKeywords.filter((k) => k.category === "positive")) {
-          const rx = new RegExp(`\\b${kw.keyword}\\b`, "i");
+        for (const kw of cachedReplyKeywords.filter((k) => keywordKind(k) === "positive")) {
+          const rx = new RegExp(`\\b${escapeRegex(kw.keyword)}\\b`, "i");
           if (rx.test(fullText)) {
             return {
               classification: "Positive",

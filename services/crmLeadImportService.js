@@ -4,6 +4,7 @@
 const fs = require("node:fs");
 const csvParser = require("csv-parser");
 const xlsx = require("xlsx");
+const validator = require("validator");
 const { createLead } = require("./crmLeadService");
 const logger = require("../utils/logger");
 
@@ -20,12 +21,18 @@ const logger = require("../utils/logger");
  *  - source / lead source
  *  - notes / comments / description
  *
+ * Every imported lead is attached to `businessId` (the business's own CRM) and goes
+ * through the same "new lead" path as a lead created by hand: the business's
+ * "New lead" email automation fires for each lead with an email address, if the
+ * business has it switched on (sending itself is checked by plan and sender).
+ *
  * @param {string} ownerId
  * @param {string|Buffer} fileInput - Absolute path to uploaded file or file buffer
  * @param {string} fileType - "csv" or "xlsx"
- * @returns {Promise<{ success: boolean, importedCount: number, failedCount: number, errors: Array }>}
+ * @param {{ businessId?: string|null, performedBy?: string|null }} [options]
+ * @returns {Promise<{ success: boolean, importedCount: number, failedCount: number, emailsQueued: number, errors: Array }>}
  */
-async function importLeads(ownerId, fileInput, fileType = "csv") {
+async function importLeads(ownerId, fileInput, fileType = "csv", { businessId = null, performedBy = null } = {}) {
   if (!ownerId) {
     throw new Error("ownerId is required to import leads");
   }
@@ -33,6 +40,8 @@ async function importLeads(ownerId, fileInput, fileType = "csv") {
   const rows = [];
   const errors = [];
   let importedCount = 0;
+  let emailsQueued = 0;
+  const { onLeadCreated } = require("./crmEmailAutomationService");
 
   try {
     if (fileType.toLowerCase() === "csv") {
@@ -98,7 +107,12 @@ async function importLeads(ownerId, fileInput, fileType = "csv") {
         normalizedRow.organization ||
         normalizedRow.companyname ||
         "";
-      const email = normalizedRow.email || normalizedRow.emailaddress || "";
+      const email = String(normalizedRow.email || normalizedRow.emailaddress || "").trim().toLowerCase();
+      // A malformed address would be stored and never deliverable: report the row instead.
+      if (email && !validator.isEmail(email, { require_tld: true })) {
+        errors.push({ row: rowNum, error: `Invalid email address: ${email.slice(0, 80)}` });
+        continue;
+      }
       const phone =
         normalizedRow.phone ||
         normalizedRow.mobile ||
@@ -117,17 +131,25 @@ async function importLeads(ownerId, fileInput, fileType = "csv") {
       const notes = normalizedRow.notes || normalizedRow.comments || normalizedRow.description || "";
 
       try {
-        await createLead(ownerId, {
-          leadName,
-          company,
-          email,
-          phone,
-          expectedRevenue,
-          status,
-          source,
-          notes,
-        });
+        const lead = await createLead(
+          ownerId,
+          {
+            leadName,
+            company,
+            email,
+            phone,
+            expectedRevenue,
+            status,
+            source,
+            notes,
+            businessId,
+          },
+          performedBy
+        );
         importedCount++;
+        // Same automation as a hand-made lead (never throws; null when off/not applicable).
+        // Only leads with an email address can receive it.
+        if (lead?.email && (await onLeadCreated(lead))) emailsQueued++;
       } catch (rowErr) {
         errors.push({ row: rowNum, error: rowErr.message });
       }
@@ -142,10 +164,11 @@ async function importLeads(ownerId, fileInput, fileType = "csv") {
       }
     }
 
-    logger.info("CRM lead import completed", { ownerId, totalRows: rows.length, importedCount, failedCount: errors.length });
+    logger.info("CRM lead import completed", { ownerId, businessId: businessId ? String(businessId) : null, totalRows: rows.length, importedCount, emailsQueued, failedCount: errors.length });
     return {
       success: true,
       importedCount,
+      emailsQueued,
       failedCount: errors.length,
       errors: errors.slice(0, 100), // Limit returned error details
     };

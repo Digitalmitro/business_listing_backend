@@ -7,6 +7,46 @@ const Claim = require("../models/Claim");
 const SenderEmail = require("../models/SenderEmail");
 const { getTemplate } = require("../helpers/emailHelper");
 
+const box = (inner) =>
+  `<div style="font-family: Arial, sans-serif; max-width: 600px; margin: auto; padding: 20px; border: 1px solid #ddd; border-radius: 10px;">${inner}<br><p>Best Regards,<br>The UrbanCitations Team</p></div>`;
+
+/**
+ * A claim was just submitted: confirm receipt to the claimant, and tell the
+ * business's current owner (if any, and not the claimant) that someone claimed it.
+ */
+async function sendClaimSubmittedEmails({ claim, user, sender }) {
+  const received = await getTemplate(
+    "claim_received",
+    { "{{full_name}}": user.full_name, "{{business_name}}": claim.businessName },
+    {
+      subject: "We received your business claim - UrbanCitations",
+      html: box(`<h2 style="color:#0b6bcb;">Claim received</h2><p>Hi {{full_name}},</p>
+        <p>We received your request to claim <strong>{{business_name}}</strong>. Our team will review your documents and email you the decision.</p>`),
+    }
+  );
+  const r1 = await sendMail(sender.email, user.email, received.subject, received.html);
+  if (!r1.success) throw new Error(`Failed to send claim receipt: ${r1.error.message}`);
+
+  const business = await Business.findById(claim.businessId).select("userId businessName").lean();
+  if (business?.userId && String(business.userId) !== String(user._id)) {
+    const owner = await User.findById(business.userId).select("full_name email").lean();
+    if (owner?.email) {
+      const notice = await getTemplate(
+        "claim_owner_notice",
+        { "{{full_name}}": owner.full_name || "there", "{{business_name}}": business.businessName },
+        {
+          subject: "Someone has claimed your business on UrbanCitations",
+          html: box(`<h2 style="color:#F59E0B;">Ownership claim submitted</h2><p>Hi {{full_name}},</p>
+            <p>Someone has asked to claim <strong>{{business_name}}</strong>, which is currently managed by your account. Our team reviews every claim and its documents before any change.</p>
+            <p>If you did not expect this, reply to this email or contact support so we can take it into account.</p>`),
+        }
+      );
+      const r2 = await sendMail(sender.email, owner.email, notice.subject, notice.html);
+      if (!r2.success) throw new Error(`Failed to send claim notice to the owner: ${r2.error.message}`);
+    }
+  }
+}
+
 const claimWorker = new Worker(
   "claim-email",
   async (job) => {
@@ -25,6 +65,11 @@ const claimWorker = new Worker(
       const sender = await SenderEmail.findOne({ isActive: true });
       if (!sender) {
         throw new Error("No active sender email found");
+      }
+
+      if (status === "submitted") {
+        await sendClaimSubmittedEmails({ claim, user, sender });
+        return;
       }
 
       const isApproved = status === "approved";
@@ -62,15 +107,8 @@ const claimWorker = new Worker(
         }
       );
 
-      const unsubscribeLink = `${process.env.FRONTEND_URL}/unsubscribe?userId=${user._id}`;
-      
-      const result = await sendMail(
-        sender.email,
-        user.email,
-        subject,
-        html,
-        unsubscribeLink
-      );
+      // Transactional: no unsubscribe link (the old one pointed at a page the site never had).
+      const result = await sendMail(sender.email, user.email, subject, html);
 
       if (!result.success) {
         throw new Error(`Failed to send claim email: ${result.error.message}`);

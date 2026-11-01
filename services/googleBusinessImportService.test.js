@@ -268,6 +268,8 @@ test("importLocation syncs (does not duplicate) when the location is already lin
     googleLocationId: "locations/111111",
     address: { city: "Unknown City" },
     location: { coordinates: [0, 0] },
+    // Linking/syncing an existing listing is a Silver+ plan feature.
+    subscription: { status: "active", packageName: "Silver" },
     save: async function () { return this; },
   };
   context.mock.method(Business, "findOne", async () => existing);
@@ -399,4 +401,72 @@ test("importLocation refuses to create a business without opening hours, and acc
   });
   assert.equal(createArgs.businessData.businessTiming.isOpen24Hours, true);
   assert.equal(createArgs.businessData.businessTiming.daysOfWeek.length, 7);
+});
+
+test("importLocation refuses to sync an existing listing on a plan without Google integration", async (context) => {
+  stubConnectionAndFetch(context);
+  const existing = {
+    _id: new mongoose.Types.ObjectId(),
+    userId: user._id,
+    businessName: "Art Brain",
+    googleLocationId: "locations/111111",
+    subscription: { status: "inactive", packageName: "Free" },
+    save: async function () { return this; },
+  };
+  context.mock.method(Business, "findOne", async () => existing);
+  await assert.rejects(
+    () => service.importLocation(user, { accountName: "accounts/999", locationName: "locations/111111" }),
+    (error) => error.status === 403 && error.code === "plan_required" && /Silver/.test(error.message)
+  );
+});
+
+test("importLocation asks the owner to link instead of creating a duplicate when a similar listing exists", async (context) => {
+  stubConnectionAndFetch(context);
+  context.mock.method(Business, "findOne", async () => null);
+  const ownListing = { _id: new mongoose.Types.ObjectId(), businessName: "Art Brain", address: { city: "Kolkata", area: "Park St" }, contact: {} };
+  // findLinkedBusiness looks for an exact-name strong match (none); findLinkCandidates finds the similar listing.
+  context.mock.method(Business, "find", async (filter) => (filter.businessName ? [] : [ownListing]));
+  let createCalled = false;
+  context.mock.method(businessService, "createBusiness", async () => { createCalled = true; });
+  await assert.rejects(
+    () => service.importLocation(user, { accountName: "accounts/999", locationName: "locations/111111" }),
+    (error) => error.status === 400 && error.requiresLinkChoice === true && error.candidates.length === 1 && error.candidates[0]._id === String(ownListing._id)
+  );
+  assert.equal(createCalled, false, "no duplicate listing is created");
+});
+
+test("importLocation links the Google location to the owner's chosen existing listing (fill-only)", async (context) => {
+  stubConnectionAndFetch(context);
+  const target = {
+    _id: new mongoose.Types.ObjectId(),
+    userId: user._id,
+    businessName: "My Own Name For It",
+    description: "Owner's own description",
+    address: { city: "Kolkata" },
+    location: { coordinates: [88.36, 22.57] },
+    subscription: { status: "active", packageName: "Gold" },
+    save: async function () { this.saved = true; return this; },
+  };
+  context.mock.method(Business, "findById", async () => target);
+  context.mock.method(Business, "findOne", () => ({ select: () => ({ lean: async () => null }) }));
+  let createCalled = false;
+  context.mock.method(businessService, "createBusiness", async () => { createCalled = true; });
+  const result = await service.importLocation(user, { accountName: "accounts/999", locationName: "locations/111111", linkBusinessId: String(target._id) });
+  assert.equal(result.created, false);
+  assert.equal(result.linked, true);
+  assert.equal(createCalled, false);
+  assert.equal(target.saved, true);
+  assert.ok(target.googleLocationId, "the listing now carries the Google location id");
+  assert.equal(target.businessName, "My Own Name For It", "the owner's name is kept");
+  assert.equal(target.description, "Owner's own description", "the owner's description is kept");
+});
+
+test("importLocation refuses to link a Google location to someone else's listing", async (context) => {
+  stubConnectionAndFetch(context);
+  const notMine = { _id: new mongoose.Types.ObjectId(), userId: new mongoose.Types.ObjectId(), businessName: "Other" };
+  context.mock.method(Business, "findById", async () => notMine);
+  await assert.rejects(
+    () => service.importLocation(user, { accountName: "accounts/999", locationName: "locations/111111", linkBusinessId: String(notMine._id) }),
+    (error) => error.status === 403
+  );
 });

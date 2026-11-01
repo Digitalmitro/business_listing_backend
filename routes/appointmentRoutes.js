@@ -1,6 +1,7 @@
 const express = require("express");
 const router = express.Router();
 const { authMiddleware } = require("../middlewares/authMiddleware");
+const { requireAdmin } = require("../middlewares/requireAdmin");
 const {
   CreateAppointment,
   GetAppointment,
@@ -15,7 +16,7 @@ router.post("/appointment", authMiddleware, CreateAppointment);
 router.get("/appointment", authMiddleware, GetAppointment);
 router.get("/appointment/business/:businessId", authMiddleware, getAppointmentsByBusinessId);
 router.get("/appointment/:appointmentId/notifications", authMiddleware, getAppointmentNotifications);
-router.get("/all-appointments", authMiddleware, getAllAppointments);
+router.get("/all-appointments", authMiddleware, requireAdmin("bookings"), getAllAppointments);
 router.put(
   "/appointment/:appointmentId",
   authMiddleware,

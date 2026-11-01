@@ -167,11 +167,18 @@ function identityKey(record) {
   return record.email ? `e:${record.email}` : `p:${record.phone}`;
 }
 
-/** Merges a later duplicate row into an earlier one (later non-empty values win). */
+const isEmptyValue = (v) => v === "" || v === null || v === undefined || (Array.isArray(v) && !v.length);
+
+/**
+ * Merges a later duplicate row into the first one: the first row's values win and a
+ * later row only fills fields the first left empty (so one contact never mixes, say,
+ * row 5's name with row 1's phone). Tags are combined; an opt-out in any row counts.
+ */
 function mergeRecords(a, b) {
+  const filled = Object.fromEntries(Object.entries(b).filter(([k, v]) => !isEmptyValue(v) && isEmptyValue(a[k])));
   return {
     ...a,
-    ...Object.fromEntries(Object.entries(b).filter(([, v]) => v !== "" && v !== null && !(Array.isArray(v) && !v.length))),
+    ...filled,
     tags: [...new Set([...(a.tags || []), ...(b.tags || [])])],
     unsubscribed: a.unsubscribed || b.unsubscribed,
   };
