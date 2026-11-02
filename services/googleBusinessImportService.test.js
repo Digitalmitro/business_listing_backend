@@ -511,6 +511,20 @@ test("syncLinkedBusiness marks the owner's listing as claimed once it is linked 
   assert.equal(unowned.claimed, false, "a listing without an owner is never auto-claimed");
 });
 
+test("syncLinkedBusiness flags a listing at [0, 0] for geocoding when Google has no coordinates", async () => {
+  const listing = {
+    userId: new mongoose.Types.ObjectId(),
+    businessName: "Ark's Den",
+    location: { type: "Point", coordinates: [0, 0] },
+    address: { city: "Kolkata", pincode: "700054" },
+    contact: {},
+    save: async function () { return this; },
+  };
+  await service.syncLinkedBusiness(listing, artBrainProfile({ locationDetails: {} }));
+  assert.equal(listing.needsGeocoding, true);
+  assert.deepEqual(listing.location.coordinates, [0, 0]);
+});
+
 test("importLocation refuses to link a Google location to someone else's listing", async (context) => {
   stubConnectionAndFetch(context);
   const notMine = { _id: new mongoose.Types.ObjectId(), userId: new mongoose.Types.ObjectId(), businessName: "Other" };
@@ -569,7 +583,7 @@ test("autoImportAll merges the only Google location into the owner's only manual
   assert.equal(calls.created, 0, "no second listing is created");
   assert.equal(manual.saved, true);
   assert.equal(manual.businessName, "Art Brain", "Google details are imported into the manual listing");
-  assert.deepEqual(summary, { total: 1, merged: 1, created: 0, pending: 0 });
+  assert.deepEqual(summary, { total: 1, merged: 1, created: 0, pending: 0, photosFailed: 0, photosReason: "" });
 });
 
 test("autoImportAll creates a listing when the owner has no manual listing to merge into", async (context) => {
@@ -580,7 +594,7 @@ test("autoImportAll creates a listing when the owner has no manual listing to me
   const { summary, results } = await service.autoImportAll(user);
   assert.equal(results[0].status, "created");
   assert.equal(calls.created, 1);
-  assert.deepEqual(summary, { total: 1, merged: 0, created: 1, pending: 0 });
+  assert.deepEqual(summary, { total: 1, merged: 0, created: 1, pending: 0, photosFailed: 0, photosReason: "" });
 });
 
 test("autoImportAll asks instead of guessing when several manual listings could be the Google location", async (context) => {

@@ -340,7 +340,7 @@ async function linkExistingBusiness(user, businessId, profile, { accountName, lo
   if (accountName) media = await googleBusinessService.fetchLocationMedia(user, accountName, locationName);
   const synced = await syncLinkedBusiness(target, profile, media, { accountName: media.accountVerified ? accountName : undefined });
   logger.info("google_business.import.linked_existing", { userId: user._id, businessId: synced._id, locationName });
-  return { business: synced, created: false, linked: true };
+  return { business: synced, created: false, linked: true, mediaError: media.mediaError };
 }
 
 /**
@@ -379,7 +379,7 @@ async function takeOverBusiness(user, business, profile, { accountName, location
     fromUserId: previousOwnerId,
     toUserId: user._id,
   });
-  return { business: synced, created: false, linked: true, movedFromAnotherAccount: true };
+  return { business: synced, created: false, linked: true, movedFromAnotherAccount: true, mediaError: media.mediaError };
 }
 
 async function findLinkedBusiness(userId, profile) {
@@ -456,9 +456,15 @@ async function syncLinkedBusiness(business, profile, media = {}, { accountName }
   const googleTiming = mapGoogleHoursToBusinessTiming(profile.businessHours?.periods);
   if (hasUsableTiming(googleTiming) || mirrorGoogle) business.businessTiming = googleTiming;
 
+  let geocode = false;
   if (hasUsableCoordinates(profile)) {
     business.location = { type: "Point", coordinates: [profile.locationDetails.longitude, profile.locationDetails.latitude] };
     business.needsGeocoding = false;
+  } else {
+    // Google often returns no latlng; without this the listing keeps [0, 0] and shows in the ocean.
+    const [lng, lat] = business.location?.coordinates || [];
+    geocode = !(Number(lng) || Number(lat)) && Boolean(business.address?.city || business.address?.pincode);
+    if (geocode) business.needsGeocoding = true;
   }
 
   if (media.logoUrl) business.businessLogo = media.logoUrl;
@@ -469,6 +475,13 @@ async function syncLinkedBusiness(business, profile, media = {}, { accountName }
 
   business.googleLastSyncedAt = new Date();
   await business.save();
+  if (geocode && business._id) {
+    try {
+      await require("../utils/queue").addJob("geocoding-batch", { businessId: business._id });
+    } catch (error) {
+      logger.warn("google_business.geocoding_queue.failed", { businessId: business._id, error: error.message });
+    }
+  }
   return business;
 }
 
@@ -525,7 +538,7 @@ async function importLocation(
       }
       const verifiedAccountName = media.accountVerified ? accountName : undefined;
       const synced = await syncLinkedBusiness(linked, profile, media, { accountName: verifiedAccountName });
-      return { business: synced, created: false };
+      return { business: synced, created: false, mediaError: media.mediaError };
     }
     if (takeOver) return takeOverBusiness(user, linked, profile, { accountName, locationName });
     throw new LinkedToOtherAccountError(linked._id);
@@ -614,6 +627,7 @@ async function importLocation(
             accountName: media.accountVerified ? accountName : undefined,
           }),
           created: false,
+          mediaError: media.mediaError,
         };
       }
       if (raced) throw new LinkedToOtherAccountError(raced._id);
@@ -632,7 +646,7 @@ async function importLocation(
   }
 
   logger.info("google_business.import.created", { userId: user._id, businessId: business._id, locationName });
-  return { business, created: true };
+  return { business, created: true, mediaError: media.mediaError };
 }
 
 /** Upper bound per run so the OAuth callback redirect never waits on a huge account. */
@@ -714,6 +728,7 @@ async function autoImportAll(user) {
         status: outcome.created ? "created" : linkBusinessId ? "merged" : "synced",
         businessId: String(outcome.business._id),
         businessName: outcome.business.businessName,
+        ...(outcome.mediaError ? { mediaError: outcome.mediaError } : {}),
       });
     } catch (error) {
       logger.warn("google_business.auto_import.location_failed", { userId: user._id, locationName: profile.businessId, error: error.message });
@@ -727,6 +742,10 @@ async function autoImportAll(user) {
     merged: count("merged") + count("synced"),
     created: count("created"),
     pending: results.length - count("merged") - count("synced") - count("created"),
+    // Photos and logo come from a different Google API than the profile details; when Google
+    // refuses it the details still import, so report it instead of silently skipping photos.
+    photosFailed: results.filter((r) => r.mediaError).length,
+    photosReason: results.find((r) => r.mediaError)?.mediaError || "",
   };
   logger.info("google_business.auto_import.done", { userId: user._id, ...summary });
   return { summary, results };

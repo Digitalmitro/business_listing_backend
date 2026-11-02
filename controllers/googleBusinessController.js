@@ -131,6 +131,7 @@ exports.handleCallback = async (req, res) => {
           merged: summary.merged,
           created: summary.created,
           pending: summary.pending,
+          ...(summary.photosFailed ? { photos: "failed", photosReason: summary.photosReason } : {}),
         });
       }
     } catch (importError) {

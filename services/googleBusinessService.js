@@ -412,7 +412,10 @@ async function fetchLocationMedia(user, accountName, locationName) {
     return { logoUrl: logo ? logo.googleUrl : null, photoUrls, accountVerified: true };
   } catch (error) {
     logger.warn("google.media.fetch_failed", { userId: user?._id, accountName, locationName, error: error.message, googleMessage: error.response?.data?.error?.message });
-    return empty;
+    // Photos come from the v4 API (mybusiness.googleapis.com), which Google unlocks separately
+    // from the profile APIs; the caller still imports the details and reports this reason.
+    const apiError = toGoogleApiError(error);
+    return { ...empty, mediaError: apiError?.code || "media_unavailable" };
   }
 }
 

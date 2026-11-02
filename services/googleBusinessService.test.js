@@ -78,7 +78,7 @@ test("fetchLocationMedia rejects a malformed accountName/locationName without ca
 
 test("fetchLocationMedia returns an empty result (never throws) when the underlying call fails, e.g. no usable Google connection", async () => {
   const result = await service.fetchLocationMedia({ _id: "u1" }, "accounts/1", "locations/1");
-  assert.deepEqual(result, { logoUrl: null, photoUrls: [], accountVerified: false });
+  assert.deepEqual(result, { logoUrl: null, photoUrls: [], accountVerified: false, mediaError: "media_unavailable" });
 });
 
 test("fetchAllPages follows Google nextPageToken without dropping results", async (context) => {
@@ -218,4 +218,28 @@ test("fetchLocationMedia imports every photo (cover first), the logo separately,
   assert.equal(media.photoUrls.length, 8, "all 8 photos, not just 5");
   assert.ok(!media.photoUrls.some((u) => u.endsWith("/v1")), "videos are skipped");
   assert.ok(!media.photoUrls.some((u) => u.endsWith("/logo")), "the logo is not repeated as a photo");
+});
+
+test("fetchLocationMedia reports a disabled My Business API instead of silently returning no photos", async (context) => {
+  process.env.ENCRYPTION_KEY = process.env.ENCRYPTION_KEY && process.env.ENCRYPTION_KEY.length >= 32
+    ? process.env.ENCRYPTION_KEY
+    : "test-encryption-key-test-encryption-key";
+  const { encrypt } = require("../utils/cryptoUtils");
+  const GoogleConnection = require("../models/GoogleBusinessConnection");
+  const realDb = Object.getOwnPropertyDescriptor(GoogleConnection, "db");
+  Object.defineProperty(GoogleConnection, "db", { value: { readyState: 1 }, configurable: true, writable: true });
+  context.after(() => Object.defineProperty(GoogleConnection, "db", realDb));
+  context.mock.method(GoogleConnection, "findOne", () => ({
+    select: async () => ({ status: "connected", accessToken: encrypt("tok"), tokenExpiresAt: new Date(Date.now() + 3600e3) }),
+  }));
+  context.mock.method(axios, "get", async () => {
+    throw googleHttpError(403, {
+      status: "PERMISSION_DENIED",
+      message: "Google My Business API has not been used in project 157093348458 before or it is disabled.",
+      details: [{ reason: "SERVICE_DISABLED", metadata: { service: "mybusiness.googleapis.com", consumer: "projects/157093348458" } }],
+    });
+  });
+  const media = await service.fetchLocationMedia({ _id: "u1" }, "accounts/1", "locations/2");
+  assert.deepEqual(media.photoUrls, []);
+  assert.equal(media.mediaError, "api_disabled");
 });
