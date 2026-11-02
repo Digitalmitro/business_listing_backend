@@ -830,19 +830,71 @@ async function listDispatches(businessId, query = {}) {
   if (query.contactId && mongoose.isValidObjectId(query.contactId)) filter.contactId = query.contactId;
   if (query.status && CrmEmailDispatch.DISPATCH_STATUSES.includes(query.status)) filter.status = query.status;
 
-  const [total, logs] = await Promise.all([
+  // Booking confirmations/reminders (AppointmentNotification) belong in the same log,
+  // unless the caller is filtering to one CRM trigger, journey or contact.
+  const withBookings = !filter.trigger && !filter.journeyId && !filter.contactId;
+  if (!withBookings) {
+    const [total, logs] = await Promise.all([
+      CrmEmailDispatch.countDocuments(filter),
+      CrmEmailDispatch.find(filter)
+        .sort({ createdAt: -1 })
+        .skip((page - 1) * limit)
+        .limit(limit)
+        .select("-body -dedupeKey")
+        .populate("leadId", "leadName email status")
+        .populate("contactId", "name email")
+        .populate("journeyId", "name")
+        .lean(),
+    ]);
+    return { logs, total, page, limit, totalPages: Math.ceil(total / limit) || 1 };
+  }
+
+  const AppointmentNotification = require("../models/AppointmentNotification");
+  // Reminder steps skipped at booking time (already in the past) never were emails; leave them out.
+  const bookingFilter = { businessId, $nor: [{ status: "skipped", attempts: 0 }] };
+  if (filter.status) bookingFilter.status = filter.status;
+  const window = page * limit;
+  const [dispatchTotal, bookingTotal, dispatches, bookings] = await Promise.all([
     CrmEmailDispatch.countDocuments(filter),
+    AppointmentNotification.countDocuments(bookingFilter),
     CrmEmailDispatch.find(filter)
       .sort({ createdAt: -1 })
-      .skip((page - 1) * limit)
-      .limit(limit)
+      .limit(window)
       .select("-body -dedupeKey")
       .populate("leadId", "leadName email status")
       .populate("contactId", "name email")
       .populate("journeyId", "name")
       .lean(),
+    AppointmentNotification.find(bookingFilter).sort({ createdAt: -1 }).limit(window).lean(),
   ]);
+  const logs = [...dispatches, ...bookings.map(bookingLogRow)]
+    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+    .slice((page - 1) * limit, page * limit);
+  const total = dispatchTotal + bookingTotal;
   return { logs, total, page, limit, totalPages: Math.ceil(total / limit) || 1 };
+}
+
+const BOOKING_KEY_LABELS = { confirmation: "Booking confirmation", rescheduled: "Booking rescheduled", canceled: "Booking canceled" };
+
+/** An AppointmentNotification shaped like a dispatch row for the delivery log. */
+function bookingLogRow(n) {
+  const what = BOOKING_KEY_LABELS[n.key] || `Booking reminder (${n.key} before)`;
+  return {
+    _id: n._id,
+    source: "booking",
+    trigger: `${what} - ${n.recipient === "owner" ? "to owner" : "to customer"}`,
+    appointmentId: n.appointmentId,
+    leadId: null,
+    to: n.to,
+    from: n.from,
+    status: n.status,
+    subject: n.subject,
+    lastError: n.lastError,
+    attempts: n.attempts,
+    scheduledFor: n.scheduledFor,
+    sentAt: n.sentAt,
+    createdAt: n.createdAt,
+  };
 }
 
 module.exports = {

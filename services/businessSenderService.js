@@ -131,6 +131,16 @@ function buildTransport({ smtpHost, smtpPort, secure, smtpUser, smtpPass }) {
 
 function friendlySmtpError(error) {
   const msg = String(error?.message || error || "");
+  // Gmail / Google Workspace give a specific reason; pass it on so the owner knows what to fix.
+  if (/5\.7\.9|Application-specific password required/i.test(msg)) {
+    return "Gmail needs an App Password here; your normal Gmail password won't work. Turn on 2-Step Verification, then create one at myaccount.google.com/apppasswords and paste the 16-letter code.";
+  }
+  if (/5\.7\.8|BadCredentials|Username and Password not accepted/i.test(msg)) {
+    return "Gmail did not accept this email address and App Password together. Check that the email address (and SMTP user name) is exactly the Google account the App Password was created in, that the App Password was copied in full, and that it hasn't been revoked (changing your Google password revokes all App Passwords).";
+  }
+  if (/5\.7\.14|WebLoginRequired|log in via your web browser/i.test(msg)) {
+    return "Google blocked this sign-in. Open Gmail in a browser with this account, approve any security alert, then try again.";
+  }
   if (/Invalid login|auth|535|534|Username and Password/i.test(msg)) {
     return "The SMTP server rejected the user name or password. For Gmail/Google Workspace use an App Password (Google Account → Security → App passwords).";
   }

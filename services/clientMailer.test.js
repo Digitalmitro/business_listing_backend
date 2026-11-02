@@ -58,11 +58,39 @@ test("emails go out FROM the business's own verified address (never a UC address
   assert.equal(sent[0].headers["List-Unsubscribe"], "<https://u>");
 });
 
-test("without a verified sender nothing is sent (no fallback to a UC address)", async (context) => {
+test("without a verified sender the email goes out through the platform sender", async (context) => {
   context.mock.method(businessSender, "getVerifiedTransport", async () => null);
+  const platform = require("./sendMail");
+  const sent = [];
+  context.mock.method(platform, "sendMail", async (to, subject, html, options) => { sent.push({ to, subject, html, options }); return { success: true, info: { messageId: "<p1@uc.test>" } }; });
+  const res = await clientMailer.sendAsBusiness({ business: businessOn("Premium"), kind: "booking", to: "c@x.test", subject: "s", html: "h", replyTo: "owner@x.test" });
+  assert.equal(res.success, true);
+  assert.equal(res.via, "platform");
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].to, "c@x.test");
+  assert.equal(sent[0].options.replyTo, "owner@x.test");
+});
+
+test("a platform-sender failure is returned as an error to retry", async (context) => {
+  context.mock.method(businessSender, "getVerifiedTransport", async () => null);
+  context.mock.method(require("./sendMail"), "sendMail", async () => ({ success: false, error: new Error("535 auth failed") }));
   const res = await clientMailer.sendAsBusiness({ business: businessOn("Premium"), kind: "booking", to: "c@x.test", subject: "s", html: "h" });
-  assert.equal(res.skipped, true);
-  assert.equal(res.code, clientMailer.SKIP.sender);
+  assert.equal(res.success, false);
+  assert.equal(res.skipped, undefined);
+  assert.match(res.error.message, /535/);
+});
+
+test("CLIENT_MAIL_PLATFORM_FALLBACK=false restores the strict own-sender-only rule", async (context) => {
+  context.mock.method(businessSender, "getVerifiedTransport", async () => null);
+  const prev = process.env.CLIENT_MAIL_PLATFORM_FALLBACK;
+  process.env.CLIENT_MAIL_PLATFORM_FALLBACK = "false";
+  try {
+    const res = await clientMailer.sendAsBusiness({ business: businessOn("Premium"), kind: "booking", to: "c@x.test", subject: "s", html: "h" });
+    assert.equal(res.skipped, true);
+    assert.equal(res.code, clientMailer.SKIP.sender);
+  } finally {
+    if (prev === undefined) delete process.env.CLIENT_MAIL_PLATFORM_FALLBACK; else process.env.CLIENT_MAIL_PLATFORM_FALLBACK = prev;
+  }
 });
 
 test("CRM emails need Gold, journeys and AI need Premium", async (context) => {

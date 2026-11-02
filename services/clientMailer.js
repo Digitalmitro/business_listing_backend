@@ -6,9 +6,9 @@
  *
  * Two rules, both enforced here:
  *   1. The business's plan must include that kind of email (planEntitlements).
- *   2. It is sent only from the business's own verified address (businessSender);
- *      when the business hasn't connected and verified one, nothing is sent.
- *      A client email never goes out from a UrbanCitations address.
+ *   2. It is sent from the business's own verified address (businessSender) when
+ *      it has one; otherwise through the platform sender in the business's name
+ *      (see sendViaPlatform; CLIENT_MAIL_PLATFORM_FALLBACK=false disables that).
  *
  * Returns { success: true, info, from } when sent, or
  * { success: false, skipped: true, reason, code } when a rule stops it (callers
@@ -27,6 +27,54 @@ const SKIP = {
 
 function skipped(code, reason) {
   return { success: false, skipped: true, code, reason };
+}
+
+/**
+ * Until a business connects its own address, its customer and lead emails go out
+ * through the UrbanCitations platform sender, named after the business, with
+ * replies going to the owner. CLIENT_MAIL_PLATFORM_FALLBACK=false turns this off
+ * (then nothing is sent until the business verifies a sender).
+ */
+function platformFallbackEnabled() {
+  return String(process.env.CLIENT_MAIL_PLATFORM_FALLBACK || "").trim().toLowerCase() !== "false";
+}
+
+async function sendViaPlatform({ businessId, kind, reminderKey, to, subject, html, headers, replyTo, planName }) {
+  // Required directly: the queue-worker process never registers these models by name.
+  const mongoose = require("mongoose");
+  const Business = require("../models/Business");
+  const User = require("../models/User");
+  const SenderEmail = require("../models/SenderEmail");
+
+  let businessName = "";
+  let ownerEmail = "";
+  const dbReady = mongoose.connection.readyState === 1;
+  if (dbReady && mongoose.isValidObjectId(businessId)) {
+    const biz = await Business.findById(businessId).select("businessName userId").lean();
+    businessName = biz?.businessName || "";
+    if (biz?.userId) ownerEmail = (await User.findById(biz.userId).select("email").lean())?.email || "";
+  }
+  const senderName = businessName ? `${businessName} via UrbanCitations`.slice(0, 100) : "";
+  const reply = replyTo || ownerEmail || undefined;
+
+  let result;
+  let from;
+  const platformSender = dbReady ? await SenderEmail.findOne({ isActive: true }).select("email").lean() : null;
+  if (platformSender) {
+    from = platformSender.email;
+    result = await require("../utils/nodemailer").sendMail(from, to, subject, html, null, { senderName, replyTo: reply, headers });
+  } else {
+    from = process.env.EMAIL_FROM || process.env.EMAIL_USER || "";
+    result = await require("./sendMail").sendMail(to, subject, html, { replyTo: reply, headers });
+  }
+
+  if (result?.success) {
+    logger.info("client_mail.sent_via_platform", "Email sent through the platform sender (business has no verified address)", { businessId, kind, reminderKey, to, from, messageId: result.info?.messageId });
+    return { success: true, info: result.info, from, planName, via: "platform" };
+  }
+  const error = result?.error || new Error("Platform email delivery failed");
+  logger.warn("client_mail.platform_failed", "Sending through the platform sender failed", { businessId, kind, to, error: String(error?.message || error).slice(0, 300) });
+  return { success: false, error };
 }
 
 /**
@@ -51,7 +99,10 @@ async function sendAsBusiness({ business, kind, reminderKey, to, subject, html, 
 
   const verified = await businessSender.getVerifiedTransport(businessId);
   if (!verified) {
-    return skipped(SKIP.sender, "The business hasn't connected and verified its own email address");
+    if (!platformFallbackEnabled()) {
+      return skipped(SKIP.sender, "The business hasn't connected and verified its own email address");
+    }
+    return sendViaPlatform({ businessId, kind, reminderKey, to, subject, html, headers, replyTo, planName });
   }
 
   const from = { name: verified.sender.displayName || verified.sender.email, address: verified.sender.email };

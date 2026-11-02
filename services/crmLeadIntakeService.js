@@ -127,6 +127,14 @@ async function createLeadFromEnquiry(enquiry) {
       `Submitted via the ${business.businessName} profile enquiry form.`,
     ].filter(Boolean).join("\n");
 
+    // The enquiry form has no email field; a signed-in enquirer's account email is
+    // what follow-ups and lead emails need.
+    let email = "";
+    if (enquiry.userId && mongoose.isValidObjectId(enquiry.userId)) {
+      const User = require("../models/User");
+      email = ((await User.findById(enquiry.userId).select("email").lean())?.email || "").trim().toLowerCase();
+    }
+
     const lead = await createIntakeLead({
       business,
       sourceModel: "Enquiry",
@@ -134,7 +142,7 @@ async function createLeadFromEnquiry(enquiry) {
       leadData: {
         leadName: enquiry.name,
         phone: enquiry.phone || "",
-        email: "",
+        email,
         company: "",
         source: ENQUIRY_SOURCE,
         notes,
