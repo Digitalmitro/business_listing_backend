@@ -44,7 +44,9 @@ async function createAuthorizationRequest(user, returnTo) {
     returnTo: returnTo || "/settings/integrations",
     expiresAt: new Date(Date.now() + 10 * 60 * 1000),
   });
-  return client.generateAuthUrl({ access_type: "offline", prompt: "consent", scope: SCOPES, state });
+  // select_account: always let the owner pick which Google account manages the business
+  // (it often differs from the UrbanCitations login and from the browser's default account).
+  return client.generateAuthUrl({ access_type: "offline", prompt: "consent select_account", scope: SCOPES, state });
 }
 async function consume(state) {
   const hash = crypto.createHash("sha256").update(String(state || "")).digest("hex");
@@ -85,7 +87,13 @@ function toGoogleApiError(error) {
 
   logger.error("google_business.api_error", { status, reason, service, project, googleMessage });
 
-  const make = (httpStatus, code, message) => Object.assign(new Error(message), { status: httpStatus, code, googleReason: reason });
+  const make = (httpStatus, code, message) => Object.assign(new Error(message), {
+    status: httpStatus,
+    code,
+    googleReason: reason,
+    googleMessage,
+    googleStatus: status,
+  });
 
   if (reason === "SERVICE_DISABLED" || reason === "accessNotConfigured" || /has not been used in project|is disabled/i.test(googleMessage)) {
     const where = meta.activationUrl || `https://console.cloud.google.com/apis/library/${service}${project ? `?project=${project}` : ""}`;
@@ -301,12 +309,32 @@ async function fetchAllProfilesForUser(user) {
     { headers, itemKey: "accounts", pageSize: 20 }
   );
   const byLocationName = new Map();
+  let firstAccountError = null;
+  let readableAccounts = 0;
   for (const account of accounts) {
     if (!/^accounts\/[A-Za-z0-9_-]+$/.test(account.name || "")) continue;
-    const locations = await fetchAllPages(
-      `https://mybusinessbusinessinformation.googleapis.com/v1/${account.name}/locations`,
-      { headers, params: { readMask: READ_MASK }, itemKey: "locations", pageSize: 100 }
-    );
+    let locations;
+    try {
+      locations = await fetchAllPages(
+        `https://mybusinessbusinessinformation.googleapis.com/v1/${account.name}/locations`,
+        { headers, params: { readMask: READ_MASK }, itemKey: "locations", pageSize: 100 }
+      );
+      readableAccounts += 1;
+    } catch (error) {
+      // One account (e.g. a location group the user can't read) must not hide the
+      // locations of every other account; fail only when no account is readable.
+      const status = error.response?.status;
+      if (status !== 403 && status !== 404) throw error;
+      logger.warn("google_business.account_locations_unreadable", {
+        account: account.name,
+        type: account.type,
+        role: account.role,
+        status,
+        googleMessage: error.response?.data?.error?.message,
+      });
+      firstAccountError = firstAccountError || error;
+      continue;
+    }
     for (const location of locations) {
       const normalized = normalizeLocation({ ...location, accountName: account.name });
       // The signed-in Google user's role on the account holding this location
@@ -317,6 +345,7 @@ async function fetchAllProfilesForUser(user) {
       }
     }
   }
+  if (!readableAccounts && firstAccountError) throw firstAccountError;
   return [...byLocationName.values()];
 }
 const OWNER_ROLES = new Set(["PRIMARY_OWNER", "OWNER"]);

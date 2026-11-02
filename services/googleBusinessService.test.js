@@ -164,3 +164,34 @@ test("only Google Owner roles may move a listing between UrbanCitations accounts
   assert.equal(service.OWNER_ROLES.has("MANAGER"), false);
   assert.equal(service.OWNER_ROLES.has("SITE_MANAGER"), false);
 });
+
+test("fetchAllProfilesForUser still returns readable accounts' locations when one account answers 403", async (context) => {
+  process.env.ENCRYPTION_KEY = process.env.ENCRYPTION_KEY && process.env.ENCRYPTION_KEY.length >= 32
+    ? process.env.ENCRYPTION_KEY
+    : "test-encryption-key-test-encryption-key";
+  const { encrypt } = require("../utils/cryptoUtils");
+  const GoogleConnection = require("../models/GoogleBusinessConnection");
+  // connection() refuses to run without a live database; pretend one is connected.
+  const realDb = Object.getOwnPropertyDescriptor(GoogleConnection, "db");
+  Object.defineProperty(GoogleConnection, "db", { value: { readyState: 1 }, configurable: true, writable: true });
+  context.after(() => Object.defineProperty(GoogleConnection, "db", realDb));
+  context.mock.method(GoogleConnection, "findOne", () => ({
+    select: async () => ({ status: "connected", accessToken: encrypt("tok"), tokenExpiresAt: new Date(Date.now() + 3600e3) }),
+  }));
+  context.mock.method(axios, "get", async (url) => {
+    if (url.endsWith("/v1/accounts")) {
+      return { data: { accounts: [
+        { name: "accounts/1", type: "LOCATION_GROUP", role: "MANAGER" },
+        { name: "accounts/2", type: "PERSONAL", role: "PRIMARY_OWNER" },
+      ] } };
+    }
+    if (url.includes("accounts/1/locations")) {
+      throw Object.assign(new Error("Request failed with status code 403"), { status: 403, response: { status: 403, data: { error: { message: "The caller does not have permission" } } } });
+    }
+    return { data: { locations: [{ name: "locations/42", title: "Ark's Den" }] } };
+  });
+  const profiles = await service.fetchAllProfilesForUser({ _id: "u1" });
+  assert.equal(profiles.length, 1);
+  assert.equal(profiles[0].businessName, "Ark's Den");
+  assert.equal(profiles[0].accountRole, "PRIMARY_OWNER");
+});

@@ -14,6 +14,11 @@ const { oauthResultUrl } = require("../utils/oauthRedirect");
 /** Maps a Google/import-service error to the HTTP status + message the frontend already handles. */
 function respondToGoogleError(res, error, fallbackMessage) {
   logger.error("google_business.request_failed", { error: error.message });
+  // axios >= 1.7 also sets error.status on its own errors, so a raw Google HTTP error
+  // must be translated before the generic error.status branch below, or the page only
+  // ever sees "Request failed with status code 403".
+  const googleError = error.response ? googleBusinessService.toGoogleApiError(error) : null;
+  if (googleError) error = googleError;
   if (error.status) {
     const body = { success: false, message: error.message };
     if (error.existingBusinessId) body.existingBusinessId = error.existingBusinessId;
@@ -25,12 +30,11 @@ function respondToGoogleError(res, error, fallbackMessage) {
     if (error.candidates) body.candidates = error.candidates;
     if (error.googleBusinessName) body.googleBusinessName = error.googleBusinessName;
     if (error.code) body.code = error.code;
+    if (error.googleMessage || error.googleReason) {
+      body.google = { status: error.googleStatus, reason: error.googleReason || null, message: error.googleMessage || null };
+    }
     if (error.canTakeOver) body.canTakeOver = true;
     return res.status(error.status).json(body);
-  }
-  const googleError = googleBusinessService.toGoogleApiError(error);
-  if (googleError) {
-    return res.status(googleError.status).json({ success: false, code: googleError.code, message: googleError.message });
   }
   return res.status(500).json({ success: false, message: `${fallbackMessage}: ${error.message}` });
 }
@@ -217,6 +221,7 @@ exports.getProfiles = async (req, res) => {
       success: true,
       count: annotatedProfiles.length,
       profiles: annotatedProfiles,
+      googleEmail: connection.googleEmail || null,
     });
   } catch (error) {
     logger.error("Error fetching Google Business Profiles", { error: error.message });
@@ -287,7 +292,7 @@ exports.autoImport = async (req, res) => {
       return res.status(401).json({ success: false, message: "Google account not connected" });
     }
     const { summary, results } = await googleBusinessImportService.autoImportAll(req.user);
-    return res.status(200).json({ success: true, summary, results });
+    return res.status(200).json({ success: true, summary, results, googleEmail: connection.googleEmail || null });
   } catch (error) {
     if (!error.response && !error.status && /reconnect is required/i.test(error.message || "")) {
       return res.status(401).json({ success: false, message: "Google authorization expired or was revoked; reconnect is required" });

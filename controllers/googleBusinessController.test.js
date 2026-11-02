@@ -60,3 +60,24 @@ test("OAuth callback sends the user back with scope_missing when the Business Pr
   assert.equal(url.searchParams.get("reason"), "scope_missing");
   assert.equal(url.searchParams.get("mode"), "google");
 });
+
+function jsonRes() {
+  return { statusCode: 200, body: null, status(code) { this.statusCode = code; return this; }, json(body) { this.body = body; return this; } };
+}
+
+test("profiles endpoint shows Google's real reason even though axios sets error.status on its own errors", async (context) => {
+  context.mock.method(googleBusinessService, "connection", async () => ({ status: "connected", googleEmail: "owner@example.com" }));
+  context.mock.method(googleBusinessService, "fetchAllProfilesForUser", async () => {
+    throw Object.assign(new Error("Request failed with status code 403"), {
+      status: 403, // what axios >= 1.7 puts on the error
+      response: { status: 403, data: { error: { status: "PERMISSION_DENIED", message: "My Business Account Management API has not been used in project 157093348458 before or it is disabled.", details: [{ reason: "SERVICE_DISABLED", metadata: { service: "mybusinessaccountmanagement.googleapis.com", consumer: "projects/157093348458" } }] } } },
+    });
+  });
+  const res = jsonRes();
+  await controller.getProfiles({ user: { _id: userId } }, res);
+  assert.equal(res.statusCode, 403);
+  assert.equal(res.body.code, "api_disabled");
+  assert.doesNotMatch(res.body.message, /Request failed with status code/);
+  assert.equal(res.body.google.reason, "SERVICE_DISABLED");
+  assert.match(res.body.google.message, /has not been used in project 157093348458/);
+});
