@@ -200,6 +200,7 @@ async function createBusiness({ ownerId, isAdmin = false, businessData, files = 
   if (extra.website || businessData.website) newBusinessData.website = extra.website || businessData.website;
   if (businessData.businessSummary) newBusinessData.businessSummary = businessData.businessSummary;
   if (extra.importedCategory) newBusinessData.importedCategory = extra.importedCategory;
+  if (extra.yearsOfEstablishment) newBusinessData.yearsOfEstablishment = extra.yearsOfEstablishment;
   const servicesTypes = extra.servicesTypes || businessData.servicesTypes;
   if (servicesTypes?.length) newBusinessData.servicesTypes = servicesTypes;
   const socialLinks = extra.socialLinks || businessData.socialLinks;

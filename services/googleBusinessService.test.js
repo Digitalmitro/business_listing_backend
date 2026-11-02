@@ -195,3 +195,27 @@ test("fetchAllProfilesForUser still returns readable accounts' locations when on
   assert.equal(profiles[0].businessName, "Ark's Den");
   assert.equal(profiles[0].accountRole, "PRIMARY_OWNER");
 });
+
+test("fetchLocationMedia imports every photo (cover first), the logo separately, and skips videos", async (context) => {
+  process.env.ENCRYPTION_KEY = process.env.ENCRYPTION_KEY && process.env.ENCRYPTION_KEY.length >= 32
+    ? process.env.ENCRYPTION_KEY
+    : "test-encryption-key-test-encryption-key";
+  const { encrypt } = require("../utils/cryptoUtils");
+  const GoogleConnection = require("../models/GoogleBusinessConnection");
+  const realDb = Object.getOwnPropertyDescriptor(GoogleConnection, "db");
+  Object.defineProperty(GoogleConnection, "db", { value: { readyState: 1 }, configurable: true, writable: true });
+  context.after(() => Object.defineProperty(GoogleConnection, "db", realDb));
+  context.mock.method(GoogleConnection, "findOne", () => ({
+    select: async () => ({ status: "connected", accessToken: encrypt("tok"), tokenExpiresAt: new Date(Date.now() + 3600e3) }),
+  }));
+  const photo = (id, category, mediaFormat = "PHOTO") => ({ googleUrl: `https://lh3.googleusercontent.com/${id}`, mediaFormat, locationAssociation: { category } });
+  context.mock.method(axios, "get", async (url, { params }) => (params.pageToken
+    ? { data: { mediaItems: [photo("p7", "INTERIOR"), photo("p8", "PRODUCT")] } }
+    : { data: { mediaItems: [photo("e1", "EXTERIOR"), photo("logo", "LOGO"), photo("v1", "ADDITIONAL", "VIDEO"), photo("cover", "COVER"), photo("e2", "EXTERIOR"), photo("e3", "AT_WORK"), photo("e4", "TEAMS"), photo("e5", "ADDITIONAL")], nextPageToken: "next" } }));
+  const media = await service.fetchLocationMedia({ _id: "u1" }, "accounts/1", "locations/2");
+  assert.equal(media.logoUrl, "https://lh3.googleusercontent.com/logo");
+  assert.equal(media.photoUrls[0], "https://lh3.googleusercontent.com/cover");
+  assert.equal(media.photoUrls.length, 8, "all 8 photos, not just 5");
+  assert.ok(!media.photoUrls.some((u) => u.endsWith("/v1")), "videos are skipped");
+  assert.ok(!media.photoUrls.some((u) => u.endsWith("/logo")), "the logo is not repeated as a photo");
+});

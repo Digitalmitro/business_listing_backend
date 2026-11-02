@@ -181,7 +181,7 @@ function mapProfileToBusinessPayload(profile, user, { categoryId, subCategoryIds
     address: {
       blockName: "",
       streetName: profile.address?.streetName || "",
-      area: "",
+      area: profile.address?.area || "",
       landmark: "",
       city: profile.address?.city || DEFAULT_CITY,
       state: profile.address?.state || DEFAULT_STATE,
@@ -219,6 +219,7 @@ function mapProfileToBusinessPayload(profile, user, { categoryId, subCategoryIds
     description: profile.description || undefined,
     website: profile.website || undefined,
     importedCategory: profile.category || undefined,
+    yearsOfEstablishment: profile.openingYear || undefined,
     servicesTypes: profile.additionalCategories?.length ? profile.additionalCategories : undefined,
     socialLinks: profile.mapsUri ? { googleMaps: profile.mapsUri } : undefined,
     needsGeocoding: !hasCoords,
@@ -397,138 +398,74 @@ async function findLinkedBusiness(userId, profile) {
   return null;
 }
 
-/** Refreshes provider-owned fields on Google imports; manual links are fill-only. */
+/**
+ * Copies a Google Business Profile into a linked UrbanCitations listing. Google is the
+ * source of truth: every detail Google has (name, description, website, address,
+ * coordinates, phones, hours, categories, opening year, Maps link, logo) replaces the
+ * listing's value. Where Google has nothing, the listing keeps its own value, except on
+ * listings that were created by a Google import, which mirror Google exactly. Nothing
+ * the owner uploaded is lost: Google photos go in front of the owner's photos and
+ * Google phone numbers are added to the owner's.
+ */
 async function syncLinkedBusiness(business, profile, media = {}, { accountName } = {}) {
-  let dirty = false;
-  const replaceGoogleFields = business.creationSource === "google_business";
+  const mirrorGoogle = business.creationSource === "google_business";
+  const has = (value) => !isUnset(value);
+  const take = (googleValue, current, fallback = "") => (has(googleValue) ? googleValue : mirrorGoogle ? fallback : current);
 
-  const assign = (target, key, value, { canClear = false } = {}) => {
-    if ((!canClear && isUnset(value)) || target[key] === value) return;
-    target[key] = value;
-    dirty = true;
-  };
+  if (profile.businessId) business.googleLocationId = profile.businessId;
+  if (accountName) business.googleAccountName = accountName;
 
-  if (!business.googleLocationId && profile.businessId) {
-    business.googleLocationId = profile.businessId;
-    dirty = true;
-  }
-  if (accountName && business.googleAccountName !== accountName) {
-    business.googleAccountName = accountName;
-    dirty = true;
-  }
-  if (replaceGoogleFields && profile.businessName) assign(business, "businessName", profile.businessName);
-  if (isUnset(business.description) && profile.description) {
-    business.description = profile.description;
-    dirty = true;
-  }
-  if (replaceGoogleFields) {
-    assign(business, "description", profile.description || "", { canClear: true });
-    assign(business, "website", profile.website || "", { canClear: true });
-    assign(business, "importedCategory", profile.category || "", { canClear: true });
-    business.servicesTypes = profile.additionalCategories || [];
-    dirty = true;
-  }
-  if (isUnset(business.website) && profile.website) {
-    business.website = profile.website;
-    dirty = true;
-  }
-  if (isUnset(business.importedCategory) && profile.category) {
-    business.importedCategory = profile.category;
-    dirty = true;
-  }
-  if (!replaceGoogleFields && (!business.servicesTypes || business.servicesTypes.length === 0) && profile.additionalCategories?.length) {
-    business.servicesTypes = profile.additionalCategories;
-    dirty = true;
-  }
+  business.businessName = take(profile.businessName, business.businessName, business.businessName);
+  business.description = take(profile.description, business.description);
+  business.website = take(profile.website, business.website);
+  business.importedCategory = take(profile.category, business.importedCategory);
+  if (profile.additionalCategories?.length || mirrorGoogle) business.servicesTypes = profile.additionalCategories || [];
+  if (profile.openingYear) business.yearsOfEstablishment = profile.openingYear;
   if (profile.mapsUri) {
     const links = business.socialLinks instanceof Map ? business.socialLinks : new Map(Object.entries(business.socialLinks || {}));
-    if (!links.get("googleMaps") || (replaceGoogleFields && links.get("googleMaps") !== profile.mapsUri)) {
-      links.set("googleMaps", profile.mapsUri);
-      business.socialLinks = links;
-      dirty = true;
-    }
+    links.set("googleMaps", profile.mapsUri);
+    business.socialLinks = links;
   }
 
   const addr = business.address ? business.address.toObject?.() || { ...business.address } : {};
-  let addrChanged = false;
-  if (isUnset(addr.city) && profile.address?.city) { addr.city = profile.address.city; addrChanged = true; }
-  if (isUnset(addr.state) && profile.address?.state) { addr.state = profile.address.state; addrChanged = true; }
-  if (isUnset(addr.pincode) && profile.address?.pincode) { addr.pincode = profile.address.pincode; addrChanged = true; }
-  if (isUnset(addr.streetName) && profile.address?.streetName) { addr.streetName = profile.address.streetName; addrChanged = true; }
-  if (isUnset(addr.country) && profile.address?.country) {
-    addr.country = normalizeCountry(countryNameFromRegionCode(profile.address.country) || profile.address.country);
-    addrChanged = true;
-  }
-  if (addrChanged) {
-    business.address = addr;
-    dirty = true;
-  }
+  const g = profile.address || {};
+  const googleCountry = g.country ? normalizeCountry(countryNameFromRegionCode(g.country) || g.country) : "";
+  business.address = {
+    ...addr,
+    streetName: take(g.streetName, addr.streetName),
+    area: take(g.area, addr.area),
+    city: take(g.city, addr.city, DEFAULT_CITY),
+    state: take(g.state, addr.state, DEFAULT_STATE),
+    pincode: take(g.pincode, addr.pincode, DEFAULT_PINCODE),
+    country: take(googleCountry, addr.country, normalizeCountry(DEFAULT_COUNTRY)),
+  };
 
-  if (replaceGoogleFields) {
-    const regionName = countryNameFromRegionCode(profile.address?.country);
-    business.address = {
-      ...addr,
-      streetName: profile.address?.streetName || "",
-      city: profile.address?.city || DEFAULT_CITY,
-      state: profile.address?.state || DEFAULT_STATE,
-      pincode: profile.address?.pincode || DEFAULT_PINCODE,
-      country: normalizeCountry(regionName || profile.address?.country || DEFAULT_COUNTRY),
-    };
-    const phones = [profile.phoneNumber, ...(profile.additionalPhones || [])].filter(Boolean);
-    business.contact = business.contact || {};
+  const googlePhones = [profile.phoneNumber, ...(profile.additionalPhones || [])].filter(Boolean);
+  business.contact = business.contact || {};
+  const ownPhones = mirrorGoogle ? [] : business.contact.mobile || [];
+  const phones = [...new Set([...googlePhones, ...ownPhones])];
+  if (phones.length || mirrorGoogle) {
     business.contact.mobile = phones;
     const details = business.contact.contactDetails || [];
-    if (details.length > 0) details[0].mobileNumbers = phones;
-    business.businessTiming = mapGoogleHoursToBusinessTiming(profile.businessHours?.periods);
-    dirty = true;
-  } else {
-    const phones = [profile.phoneNumber, ...(profile.additionalPhones || [])].filter(Boolean);
-    business.contact = business.contact || {};
-    if ((!business.contact.mobile || business.contact.mobile.length === 0) && phones.length) {
-      business.contact.mobile = phones;
-      const details = business.contact.contactDetails || [];
-      if (details.length > 0 && (!details[0].mobileNumbers || details[0].mobileNumbers.length === 0)) {
-        details[0].mobileNumbers = phones;
-      }
-      dirty = true;
-    }
-    const existingDays = business.businessTiming?.daysOfWeek || [];
-    if (existingDays.length === 0 && profile.businessHours?.periods?.length) {
-      business.businessTiming = mapGoogleHoursToBusinessTiming(profile.businessHours.periods);
-      dirty = true;
-    }
+    if (details.length > 0) details[0].mobileNumbers = [...new Set([...googlePhones, ...(mirrorGoogle ? [] : details[0].mobileNumbers || [])])];
   }
 
-  const [lng, lat] = business.location?.coordinates || [0, 0];
-  if ((replaceGoogleFields || (!lng && !lat)) && hasUsableCoordinates(profile)) {
+  const googleTiming = mapGoogleHoursToBusinessTiming(profile.businessHours?.periods);
+  if (hasUsableTiming(googleTiming) || mirrorGoogle) business.businessTiming = googleTiming;
+
+  if (hasUsableCoordinates(profile)) {
     business.location = { type: "Point", coordinates: [profile.locationDetails.longitude, profile.locationDetails.latitude] };
     business.needsGeocoding = false;
-    dirty = true;
   }
 
-  if ((!business.businessLogo || business.businessLogo === DEFAULT_LOGO) && media.logoUrl) {
-    business.businessLogo = media.logoUrl;
-    dirty = true;
-  }
-  const hasOnlyDefaultPhoto = !business.photos || (business.photos.length === 1 && business.photos[0] === DEFAULT_PHOTO) || business.photos.length === 0;
-  if (hasOnlyDefaultPhoto && media.photoUrls?.length) {
-    business.photos = media.photoUrls;
-    dirty = true;
-  }
-
-  if (replaceGoogleFields && media.logoUrl && business.businessLogo !== media.logoUrl) {
-    business.businessLogo = media.logoUrl;
-    dirty = true;
-  }
-  if (replaceGoogleFields && media.photoUrls?.length) {
-    business.photos = media.photoUrls;
-    dirty = true;
+  if (media.logoUrl) business.businessLogo = media.logoUrl;
+  if (media.photoUrls?.length) {
+    const ownPhotos = mirrorGoogle ? [] : (business.photos || []).filter((photo) => photo && photo !== DEFAULT_PHOTO);
+    business.photos = [...new Set([...media.photoUrls, ...ownPhotos])];
   }
 
   business.googleLastSyncedAt = new Date();
-  dirty = true;
-
-  if (dirty) await business.save();
+  await business.save();
   return business;
 }
 

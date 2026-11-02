@@ -264,6 +264,7 @@ function normalizeLocation(location = {}) {
     additionalCategories,
     address: {
       streetName: lines,
+      area: a.sublocality || "",
       city: a.locality || "",
       state: a.administrativeArea || "",
       pincode: a.postalCode || "",
@@ -278,6 +279,7 @@ function normalizeLocation(location = {}) {
     locationDetails: { latitude: location.latlng?.latitude || 0, longitude: location.latlng?.longitude || 0 },
     mapsUri: location.metadata?.mapsUri || "",
     openStatus: location.openInfo?.status || "",
+    openingYear: Number(location.openInfo?.openingDate?.year) || null,
   };
 }
 const READ_MASK = "name,title,categories,storefrontAddress,phoneNumbers,websiteUri,profile,regularHours,latlng,metadata,openInfo";
@@ -376,7 +378,11 @@ async function fetchProfileByLocationName(user, name) {
  * media on a Business Profile location. Never throws: any failure (missing scope,
  * API not enabled, rate limit) yields an empty result so an import never fails over
  * a photo fetch alone.
+ *
+ * logoUrl is the LOGO image (else the PROFILE image); photoUrls lists the COVER image
+ * first, then every other photo, up to MAX_MEDIA_PHOTOS. Videos are skipped.
  */
+const MAX_MEDIA_PHOTOS = 50;
 async function fetchLocationMedia(user, accountName, locationName) {
   const empty = { logoUrl: null, photoUrls: [], accountVerified: false };
   if (!/^accounts\/[A-Za-z0-9_-]+$/.test(accountName || "") || !/^locations\/[A-Za-z0-9_-]+$/.test(locationName || "")) {
@@ -384,30 +390,28 @@ async function fetchLocationMedia(user, accountName, locationName) {
   }
   try {
     const token = await getValidAccessToken(user);
-    const data = (await axios.get(
-      `https://mybusiness.googleapis.com/v4/${accountName}/${locationName}/media`,
-      { headers: { Authorization: `Bearer ${token}` }, params: { pageSize: 20 } }
-    )).data;
-    const items = Array.isArray(data.mediaItems)
-      ? data.mediaItems
-      : Array.isArray(data.mediaItem)
-        ? data.mediaItem
-        : [];
-    let logoUrl = null;
-    const photoUrls = [];
-    for (const item of items) {
-      const url = item.googleUrl;
-      if (!url) continue;
-      const category = item.locationAssociation?.category;
-      if (!logoUrl && (category === "PROFILE" || category === "LOGO" || category === "COVER")) {
-        logoUrl = url;
-      } else if (photoUrls.length < 5) {
-        photoUrls.push(url);
-      }
-    }
-    return { logoUrl, photoUrls, accountVerified: true };
+    const items = [];
+    let pageToken;
+    do {
+      const data = (await axios.get(
+        `https://mybusiness.googleapis.com/v4/${accountName}/${locationName}/media`,
+        { headers: { Authorization: `Bearer ${token}` }, params: { pageSize: 100, ...(pageToken ? { pageToken } : {}) } }
+      )).data || {};
+      items.push(...(Array.isArray(data.mediaItems) ? data.mediaItems : Array.isArray(data.mediaItem) ? data.mediaItem : []));
+      pageToken = data.nextPageToken || null;
+    } while (pageToken && items.length < MAX_MEDIA_PHOTOS * 2);
+
+    const photos = items.filter((item) => item.googleUrl && (item.mediaFormat || "PHOTO") === "PHOTO");
+    const byCategory = (category) => photos.find((item) => item.locationAssociation?.category === category);
+    const logo = byCategory("LOGO") || byCategory("PROFILE");
+    const cover = byCategory("COVER");
+    const photoUrls = [...new Set([
+      ...(cover ? [cover.googleUrl] : []),
+      ...photos.filter((item) => item !== logo && item !== cover).map((item) => item.googleUrl),
+    ])].slice(0, MAX_MEDIA_PHOTOS);
+    return { logoUrl: logo ? logo.googleUrl : null, photoUrls, accountVerified: true };
   } catch (error) {
-    logger.warn("google.media.fetch_failed", { userId: user?._id, accountName, locationName, error: error.message });
+    logger.warn("google.media.fetch_failed", { userId: user?._id, accountName, locationName, error: error.message, googleMessage: error.response?.data?.error?.message });
     return empty;
   }
 }

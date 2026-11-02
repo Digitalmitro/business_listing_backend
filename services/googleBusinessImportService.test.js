@@ -435,14 +435,21 @@ test("importLocation asks the owner to link instead of creating a duplicate when
   assert.equal(createCalled, false, "no duplicate listing is created");
 });
 
-test("importLocation links the Google location to the owner's chosen existing listing (fill-only)", async (context) => {
+test("importLocation links the owner's chosen listing and imports Google's details, photos and logo into it", async (context) => {
   stubConnectionAndFetch(context);
+  context.mock.method(googleBusinessService, "fetchLocationMedia", async () => ({
+    logoUrl: "https://lh3.googleusercontent.com/logo",
+    photoUrls: ["https://lh3.googleusercontent.com/cover", "https://lh3.googleusercontent.com/p1"],
+    accountVerified: true,
+  }));
   const target = {
     _id: new mongoose.Types.ObjectId(),
     userId: user._id,
     businessName: "My Own Name For It",
     description: "Owner's own description",
-    address: { city: "Kolkata" },
+    photos: ["owner-upload.jpg"],
+    contact: { mobile: ["+911111111111"], contactDetails: [{ mobileNumbers: ["+911111111111"] }] },
+    address: { city: "Kolkata", area: "Owner Area", landmark: "Near the park" },
     location: { coordinates: [88.36, 22.57] },
     subscription: { status: "active", packageName: "Gold" },
     save: async function () { this.saved = true; return this; },
@@ -457,8 +464,33 @@ test("importLocation links the Google location to the owner's chosen existing li
   assert.equal(createCalled, false);
   assert.equal(target.saved, true);
   assert.ok(target.googleLocationId, "the listing now carries the Google location id");
-  assert.equal(target.businessName, "My Own Name For It", "the owner's name is kept");
-  assert.equal(target.description, "Owner's own description", "the owner's description is kept");
+  assert.equal(target.businessName, "Art Brain", "Google's name is imported");
+  assert.equal(target.description, "A creative studio.", "Google's description is imported");
+  assert.equal(target.website, "https://artbrain.example");
+  assert.equal(target.address.city, "Bengaluru", "Google's address is imported");
+  assert.equal(target.address.streetName, "12 MG Road");
+  assert.equal(target.address.landmark, "Near the park", "details Google has no field for are kept");
+  assert.equal(target.businessLogo, "https://lh3.googleusercontent.com/logo");
+  assert.deepEqual(target.photos, ["https://lh3.googleusercontent.com/cover", "https://lh3.googleusercontent.com/p1", "owner-upload.jpg"], "Google photos first, the owner's uploads kept");
+  assert.deepEqual(target.contact.mobile, ["+919876500000", "+911111111111"], "Google's phone added, the owner's kept");
+  assert.deepEqual(target.location.coordinates, [77.59, 12.97]);
+});
+
+test("syncLinkedBusiness keeps the owner's value where Google has none", async () => {
+  const listing = {
+    businessName: "Owner Name",
+    description: "Owner description",
+    website: "https://owner.example",
+    address: { city: "Kolkata", pincode: "700054" },
+    contact: {},
+    save: async function () { return this; },
+  };
+  await service.syncLinkedBusiness(listing, artBrainProfile({ description: "", website: "", address: { city: "", pincode: "" } }));
+  assert.equal(listing.businessName, "Art Brain");
+  assert.equal(listing.description, "Owner description");
+  assert.equal(listing.website, "https://owner.example");
+  assert.equal(listing.address.city, "Kolkata");
+  assert.equal(listing.address.pincode, "700054");
 });
 
 test("importLocation refuses to link a Google location to someone else's listing", async (context) => {
@@ -518,7 +550,7 @@ test("autoImportAll merges the only Google location into the owner's only manual
   assert.equal(results[0].businessId, String(manual._id));
   assert.equal(calls.created, 0, "no second listing is created");
   assert.equal(manual.saved, true);
-  assert.equal(manual.businessName, "My Studio", "the owner's own details are kept");
+  assert.equal(manual.businessName, "Art Brain", "Google details are imported into the manual listing");
   assert.deepEqual(summary, { total: 1, merged: 1, created: 0, pending: 0 });
 });
 
