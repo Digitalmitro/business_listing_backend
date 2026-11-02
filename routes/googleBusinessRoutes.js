@@ -13,6 +13,7 @@ const {
   getSelectedProfile,
   populateProfile,
   importLocation,
+  autoImport,
 } = require("../controllers/googleBusinessController");
 
 const requireCustomerUser = (req, res, next) => {
@@ -35,5 +36,6 @@ router.post("/select-profile", authMiddleware, requireCustomerUser, selectProfil
 router.get("/selected-profile", authMiddleware, requireCustomerUser, getSelectedProfile);
 router.post("/populate-profile", authMiddleware, requireCustomerUser, populateProfile);
 router.post("/import-location", authMiddleware, requireCustomerUser, importLocation);
+router.post("/auto-import", authMiddleware, requireCustomerUser, autoImport);
 
 module.exports = router;

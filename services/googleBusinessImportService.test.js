@@ -470,3 +470,154 @@ test("importLocation refuses to link a Google location to someone else's listing
     (error) => error.status === 403
   );
 });
+
+// ---- autoImportAll: connecting Google merges into the owner's manual listings ----------------
+
+function stubAutoImport(context, { profiles, unlinkedOwned = [], linked = null, candidates = [] }) {
+  stubConnectionAndFetch(context, { profile: profiles[0] });
+  context.mock.method(googleBusinessService, "fetchAllProfilesForUser", async () => profiles);
+  const calls = { created: 0, linkedTo: null };
+  context.mock.method(Business, "find", async (filter) => {
+    if (filter.businessName) return linked ? [linked] : []; // findLinkedBusiness exact-name lookup
+    if ("googleLocationId" in filter && filter.userId && !filter.businessName) {
+      return candidates.length ? candidates : unlinkedOwned;
+    }
+    return [];
+  });
+  context.mock.method(businessService, "createBusiness", async () => {
+    calls.created += 1;
+    return { _id: new mongoose.Types.ObjectId(), businessName: "Art Brain" };
+  });
+  return calls;
+}
+
+function ownManualListing(overrides = {}) {
+  return {
+    _id: new mongoose.Types.ObjectId(),
+    userId: user._id,
+    businessName: "My Studio",
+    address: { city: "Kolkata", area: "Park St" },
+    contact: {},
+    location: { coordinates: [88.36, 22.57] },
+    subscription: { status: "active", packageName: "Gold" },
+    save: async function () { this.saved = true; return this; },
+    ...overrides,
+  };
+}
+
+test("autoImportAll merges the only Google location into the owner's only manual listing without asking", async (context) => {
+  const manual = ownManualListing();
+  const calls = stubAutoImport(context, { profiles: [artBrainProfile()], unlinkedOwned: [manual] });
+  context.mock.method(Business, "findById", async () => manual);
+  context.mock.method(Business, "findOne", (filter) => (filter.googleLocationId && filter._id
+    ? { select: () => ({ lean: async () => null }) }
+    : Promise.resolve(null)));
+
+  const { summary, results } = await service.autoImportAll(user);
+  assert.equal(results[0].status, "merged");
+  assert.equal(results[0].businessId, String(manual._id));
+  assert.equal(calls.created, 0, "no second listing is created");
+  assert.equal(manual.saved, true);
+  assert.equal(manual.businessName, "My Studio", "the owner's own details are kept");
+  assert.deepEqual(summary, { total: 1, merged: 1, created: 0, pending: 0 });
+});
+
+test("autoImportAll creates a listing when the owner has no manual listing to merge into", async (context) => {
+  const calls = stubAutoImport(context, { profiles: [artBrainProfile({ businessHours: { periods: [{ openDay: "MONDAY", openTime: { hours: 9 }, closeDay: "MONDAY", closeTime: { hours: 18 } }] } })] });
+  context.mock.method(Business, "findOne", async () => null);
+  context.mock.method(Category, "findOne", async () => ({ _id: categoryId }));
+
+  const { summary, results } = await service.autoImportAll(user);
+  assert.equal(results[0].status, "created");
+  assert.equal(calls.created, 1);
+  assert.deepEqual(summary, { total: 1, merged: 0, created: 1, pending: 0 });
+});
+
+test("autoImportAll asks instead of guessing when several manual listings could be the Google location", async (context) => {
+  const a = ownManualListing({ businessName: "Art Brain Kolkata" });
+  const b = ownManualListing({ businessName: "Art Brain Howrah" });
+  const calls = stubAutoImport(context, { profiles: [artBrainProfile()], candidates: [a, b] });
+  context.mock.method(Business, "findOne", async () => null);
+
+  const { summary, results } = await service.autoImportAll(user);
+  assert.equal(results[0].status, "needs_choice");
+  assert.equal(results[0].candidates.length, 2);
+  assert.equal(calls.created, 0);
+  assert.equal(summary.pending, 1);
+});
+
+test("autoImportAll surfaces a project-level Google failure with its real cause", async (context) => {
+  const err = Object.assign(new Error("Request failed with status code 403"), {
+    response: { status: 403, data: { error: { status: "PERMISSION_DENIED", message: "API has not been used in project 1 before or it is disabled.", details: [{ reason: "SERVICE_DISABLED", metadata: { service: "mybusinessaccountmanagement.googleapis.com", consumer: "projects/1" } }] } } },
+  });
+  context.mock.method(googleBusinessService, "fetchAllProfilesForUser", async () => { throw err; });
+  await assert.rejects(() => service.autoImportAll(user), (thrown) => thrown.code === "api_disabled" && thrown.status === 403);
+});
+
+// ---- moving a listing from another UC account when Google confirms ownership ----------------
+
+function otherAccountsListing() {
+  return {
+    _id: new mongoose.Types.ObjectId(),
+    userId: new mongoose.Types.ObjectId(),
+    googleLocationId: "locations/111111",
+    businessName: "Art Brain",
+    address: { city: "Bengaluru" },
+    contact: {},
+    subscription: { status: "active", packageName: "Gold" },
+    saves: 0,
+    save: async function () { this.saves += 1; return this; },
+  };
+}
+
+function stubUserBookkeeping(context) {
+  const ops = [];
+  const User = require("../models/User");
+  context.mock.method(User, "updateMany", async (...args) => { ops.push(["updateMany", ...args]); });
+  context.mock.method(User, "updateOne", async (...args) => { ops.push(["updateOne", ...args]); });
+  context.mock.method(Business, "exists", async () => null);
+  return ops;
+}
+
+test("importLocation still refuses another account's listing unless the owner explicitly asks to move it", async (context) => {
+  stubConnectionAndFetch(context);
+  const theirs = otherAccountsListing();
+  context.mock.method(Business, "findOne", async () => theirs);
+  await assert.rejects(
+    () => service.importLocation(user, { accountName: "accounts/999", locationName: "locations/111111" }),
+    (error) => error.status === 409 && error.canTakeOver === true
+  );
+  assert.equal(theirs.saves, 0);
+});
+
+test("importLocation moves another account's listing into the user's account when Google says they are an Owner", async (context) => {
+  stubConnectionAndFetch(context);
+  const theirs = otherAccountsListing();
+  const previousOwner = theirs.userId;
+  context.mock.method(Business, "findOne", async () => theirs);
+  context.mock.method(googleBusinessService, "isLocationOwner", async () => true);
+  const ops = stubUserBookkeeping(context);
+
+  const result = await service.importLocation(user, { accountName: "accounts/999", locationName: "locations/111111", takeOver: true });
+  assert.equal(result.movedFromAnotherAccount, true);
+  assert.equal(String(theirs.userId), String(user._id));
+  assert.equal(theirs.claimed, true);
+  assert.ok(theirs.saves >= 1, "the ownership change is saved even when Google changed nothing");
+  assert.ok(ops.some(([op, filter, update]) => op === "updateOne" && String(filter._id) === String(user._id) && update.$addToSet));
+  assert.ok(ops.some(([op, filter, update]) => op === "updateOne" && String(filter._id) === String(previousOwner) && update.$set.isSeller === false));
+});
+
+test("importLocation does not move another account's listing for a Google Manager (non-owner)", async (context) => {
+  stubConnectionAndFetch(context);
+  const theirs = otherAccountsListing();
+  const previousOwner = theirs.userId;
+  context.mock.method(Business, "findOne", async () => theirs);
+  context.mock.method(googleBusinessService, "isLocationOwner", async () => false);
+  stubUserBookkeeping(context);
+  await assert.rejects(
+    () => service.importLocation(user, { accountName: "accounts/999", locationName: "locations/111111", takeOver: true }),
+    (error) => error.status === 403 && error.code === "google_owner_required"
+  );
+  assert.equal(String(theirs.userId), String(previousOwner));
+  assert.equal(theirs.saves, 0);
+});

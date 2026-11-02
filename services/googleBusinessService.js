@@ -60,11 +60,66 @@ async function cancelAuthorizationRequest(state) {
     return null;
   }
 }
+const BUSINESS_SCOPE = "https://www.googleapis.com/auth/business.manage";
+
+/**
+ * Turns an axios error from a Google Business Profile API call into an Error carrying
+ * the HTTP status, a stable `code` and a message naming the real cause. Google answers
+ * 403 both when the API is merely switched off in the Cloud project and when the user
+ * unticked the permission on the consent screen, and 429 with a quota of 0 when the
+ * project has not been approved, so the status alone cannot say which one happened.
+ * Returns null when the error is not an HTTP error from Google.
+ */
+function toGoogleApiError(error) {
+  const status = error?.response?.status;
+  if (!status) return null;
+  const body = error.response.data?.error || {};
+  const details = Array.isArray(body.details) ? body.details : [];
+  const info = details.find((d) => d && d.reason) || {};
+  const meta = info.metadata || {};
+  const reason = info.reason || body.errors?.[0]?.reason || body.status || "";
+  const googleMessage = typeof body.message === "string" ? body.message : "";
+  const project = String(meta.consumer || meta.containerInfo || "").replace(/^projects\//, "")
+    || (googleMessage.match(/project[ _](?:number:)?(\d+)/i) || [])[1] || "";
+  const service = meta.service || (googleMessage.match(/([a-z]+\.googleapis\.com)/) || [])[1] || "the Business Profile API";
+
+  logger.error("google_business.api_error", { status, reason, service, project, googleMessage });
+
+  const make = (httpStatus, code, message) => Object.assign(new Error(message), { status: httpStatus, code, googleReason: reason });
+
+  if (reason === "SERVICE_DISABLED" || reason === "accessNotConfigured" || /has not been used in project|is disabled/i.test(googleMessage)) {
+    const where = meta.activationUrl || `https://console.cloud.google.com/apis/library/${service}${project ? `?project=${project}` : ""}`;
+    return make(403, "api_disabled", `${service} is not enabled in this site's Google Cloud project${project ? ` (${project})` : ""}. Enable it at ${where} and try again in a few minutes.`);
+  }
+  if (reason === "ACCESS_TOKEN_SCOPE_INSUFFICIENT" || reason === "insufficientPermissions") {
+    return make(401, "scope_missing", "Google did not grant permission to manage your Business Profile. Reconnect and keep the Business Profile permission ticked on Google's consent screen.");
+  }
+  if (status === 429) {
+    const quotaZero = String(meta.quota_limit_value ?? "") === "0" || /limit '?0'?\b/i.test(googleMessage);
+    if (quotaZero) {
+      return make(403, "api_not_approved", `Google has not approved this site's Google Cloud project${project ? ` (${project})` : ""} for the Business Profile API yet (its quota is 0). Request access at https://developers.google.com/my-business/content/prereqs.`);
+    }
+    return make(429, "rate_limited", "Google API rate limit exceeded. Please wait a moment and try again.");
+  }
+  if (status === 401) {
+    return make(401, "reconnect_required", "Google authorization expired or was revoked; reconnect is required");
+  }
+  if (status === 403) {
+    return make(403, "google_forbidden", `Google refused the request${googleMessage ? `: ${googleMessage}` : "."}`);
+  }
+  return null;
+}
+
 async function exchangeCodeForTokens(code, tenantId, existingEncryptedRefreshToken = null) {
   if (!code) throw new Error("Authorization code is required");
   const { client, clientId } = await oauth(tenantId);
   const { tokens } = await client.getToken(code);
   if (!tokens.access_token) throw new Error("Google did not return an access token");
+  // Google's granular consent lets the user untick Business Profile access; without it
+  // every later Business Profile call fails with 403, so refuse the connection up front.
+  if (typeof tokens.scope === "string" && !tokens.scope.split(/\s+/).includes(BUSINESS_SCOPE)) {
+    throw Object.assign(new Error("Google Business Profile permission was not granted"), { code: "scope_missing" });
+  }
   const encryptedRefreshToken = tokens.refresh_token
     ? encrypt(tokens.refresh_token)
     : existingEncryptedRefreshToken;
@@ -108,7 +163,13 @@ async function exchangeCodeForTokens(code, tenantId, existingEncryptedRefreshTok
 async function connectFromCallback(code, state) {
   const tx = await consume(state);
   const existing = await GoogleConnection.findOne({ tenantId: tx.tenantId, userId: tx.userId }).select("+refreshToken");
-  const token = await exchangeCodeForTokens(code, tx.tenantId, existing?.refreshToken || null);
+  let token;
+  try {
+    token = await exchangeCodeForTokens(code, tx.tenantId, existing?.refreshToken || null);
+  } catch (error) {
+    error.returnTo = tx.returnTo; // so the callback can send the user back where they started
+    throw error;
+  }
   const saved = await GoogleConnection.findOneAndUpdate(
     { tenantId: tx.tenantId, userId: tx.userId },
     { tenantId: tx.tenantId, userId: tx.userId, ...token, status: "connected", connectedAt: new Date() },
@@ -248,6 +309,9 @@ async function fetchAllProfilesForUser(user) {
     );
     for (const location of locations) {
       const normalized = normalizeLocation({ ...location, accountName: account.name });
+      // The signed-in Google user's role on the account holding this location
+      // (PRIMARY_OWNER, OWNER, MANAGER, SITE_MANAGER), used to gate ownership moves.
+      normalized.accountRole = account.role || "";
       if (normalized.businessId && !byLocationName.has(normalized.businessId)) {
         byLocationName.set(normalized.businessId, normalized);
       }
@@ -255,6 +319,18 @@ async function fetchAllProfilesForUser(user) {
   }
   return [...byLocationName.values()];
 }
+const OWNER_ROLES = new Set(["PRIMARY_OWNER", "OWNER"]);
+
+/**
+ * True when the connected Google account is an Owner (not just a Manager) of the
+ * account that holds this location, checked live against Google.
+ */
+async function isLocationOwner(user, locationName) {
+  const profiles = await fetchAllProfilesForUser(user);
+  const match = profiles.find((p) => p.businessId === locationName);
+  return Boolean(match && OWNER_ROLES.has(match.accountRole));
+}
+
 async function fetchProfileByLocationName(user, name) {
   if (!/^locations\/[A-Za-z0-9_-]+$/.test(name || "")) throw new Error("Invalid location ID");
   const token = await getValidAccessToken(user);
@@ -323,9 +399,12 @@ module.exports = {
   exchangeCodeForTokens,
   getValidAccessToken,
   normalizeLocation,
+  toGoogleApiError,
   fetchAllPages,
   fetchAllProfilesForUser,
   fetchProfileByLocationName,
+  isLocationOwner,
+  OWNER_ROLES,
   fetchLocationMedia,
   connection,
 };

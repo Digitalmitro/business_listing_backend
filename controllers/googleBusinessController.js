@@ -3,6 +3,7 @@
 const mongoose = require("mongoose");
 const Business = require("../models/Business");
 const Category = require("../models/Category");
+const User = require("../models/User");
 const logger = require("../utils/logger");
 const googleBusinessService = require("../services/googleBusinessService");
 const googleBusinessImportService = require("../services/googleBusinessImportService");
@@ -24,14 +25,12 @@ function respondToGoogleError(res, error, fallbackMessage) {
     if (error.candidates) body.candidates = error.candidates;
     if (error.googleBusinessName) body.googleBusinessName = error.googleBusinessName;
     if (error.code) body.code = error.code;
+    if (error.canTakeOver) body.canTakeOver = true;
     return res.status(error.status).json(body);
   }
-  const httpStatus = error.response?.status;
-  if (httpStatus === 429) {
-    return res.status(429).json({ success: false, message: "Google API rate limit exceeded. Please wait a moment and try again." });
-  }
-  if (httpStatus === 403) {
-    return res.status(403).json({ success: false, message: "Google Business Profile API access not granted. This API requires explicit approval from Google — see the Google Cloud Console." });
+  const googleError = googleBusinessService.toGoogleApiError(error);
+  if (googleError) {
+    return res.status(googleError.status).json({ success: false, code: googleError.code, message: googleError.message });
   }
   return res.status(500).json({ success: false, message: `${fallbackMessage}: ${error.message}` });
 }
@@ -114,13 +113,33 @@ exports.handleCallback = async (req, res) => {
   try {
     const result = await googleBusinessService.connectFromCallback(code, state);
     logger.info("Google OAuth callback: account connected successfully", { userId: result.userId });
-    // NOTE: We intentionally do NOT prefetch profiles here to avoid burning Google API quota
-    // (mybusinessaccountmanagement.googleapis.com has strict rate limits).
-    // Profiles are fetched lazily when the user opens the Business Edit or Integrations page.
-    return res.redirect(oauthResultUrl(result.returnTo, { gmb: "connected" }));
+    // Connecting Google merges its Business Profile data into the owner's account straight away
+    // (see autoImportAll). A failure here never undoes the connection: the user lands back
+    // connected and the frontend shows why the merge could not run.
+    const params = { gmb: "connected" };
+    try {
+      // Same principal shape authMiddleware puts on req.user for the other endpoints.
+      const user = await User.findById(result.userId).select("-password");
+      if (user) {
+        const { summary } = await googleBusinessImportService.autoImportAll(user);
+        Object.assign(params, {
+          gmbImport: "done",
+          merged: summary.merged,
+          created: summary.created,
+          pending: summary.pending,
+        });
+      }
+    } catch (importError) {
+      logger.error("google_business.auto_import.failed", { userId: result.userId, error: importError.message, code: importError.code });
+      Object.assign(params, { gmbImport: "failed", importReason: importError.code || "import_failed" });
+    }
+    return res.redirect(oauthResultUrl(result.returnTo, params));
   } catch (error) {
-    logger.error("Google OAuth callback: token exchange failed", { error: error.message });
-    return res.redirect(oauthResultUrl("/settings/integrations", { gmb: "error", reason: "oauth_failed" }));
+    logger.error("Google OAuth callback: token exchange failed", { error: error.message, code: error.code });
+    return res.redirect(oauthResultUrl(error.returnTo || "/settings/integrations", {
+      gmb: "error",
+      reason: error.code === "scope_missing" ? "scope_missing" : "oauth_failed",
+    }));
   }
 };
 
@@ -204,17 +223,7 @@ exports.getProfiles = async (req, res) => {
     if (!error.response && /reconnect is required/i.test(error.message || "")) {
       return res.status(401).json({ success: false, message: "Google authorization expired or was revoked; reconnect is required" });
     }
-    const httpStatus = error.response?.status;
-    if (httpStatus === 429) {
-      return res.status(429).json({ success: false, message: "Google API rate limit exceeded. Please wait a moment and try again." });
-    }
-    if (httpStatus === 403) {
-      return res.status(403).json({ success: false, message: "Google Business Profile API access not granted. This API requires explicit approval from Google — see the Google Cloud Console." });
-    }
-    return res.status(500).json({
-      success: false,
-      message: "Failed to fetch Business Profiles: " + error.message,
-    });
+    return respondToGoogleError(res, error, "Failed to fetch Business Profiles");
   }
 };
 
@@ -230,12 +239,12 @@ exports.importLocation = async (req, res) => {
     if (!req.user) {
       return res.status(401).json({ success: false, message: "User not authenticated" });
     }
-    const { accountName, locationName, categoryId, subCategoryIds, businessTiming, linkBusinessId, createNew } = req.body || {};
+    const { accountName, locationName, categoryId, subCategoryIds, businessTiming, linkBusinessId, createNew, takeOver } = req.body || {};
     if (!locationName) {
       return res.status(400).json({ success: false, message: "locationName is required." });
     }
 
-    const { business, created } = await googleBusinessImportService.importLocation(req.user, {
+    const { business, created, movedFromAnotherAccount } = await googleBusinessImportService.importLocation(req.user, {
       accountName,
       locationName,
       categoryId,
@@ -243,20 +252,47 @@ exports.importLocation = async (req, res) => {
       businessTiming,
       linkBusinessId: linkBusinessId || null,
       createNew: createNew === true || createNew === "true",
+      takeOver: takeOver === true || takeOver === "true",
     });
 
     return res.status(created ? 201 : 200).json({
       success: true,
       created,
       linked: !created,
+      movedFromAnotherAccount: Boolean(movedFromAnotherAccount),
       message: created
         ? "Business imported from Google Business Profile."
-        : "Your existing business is now connected to Google Business Profile and its missing details were filled in.",
+        : movedFromAnotherAccount
+          ? "The listing was moved into your account and updated from Google Business Profile."
+          : "Your existing business is now connected to Google Business Profile and its missing details were filled in.",
       business,
       businessId: business._id,
     });
   } catch (error) {
     return respondToGoogleError(res, error, "Failed to import Business Profile");
+  }
+};
+
+/**
+ * POST /api/google-business/auto-import
+ * Merges every location of the connected Google account into the current user's account
+ * (the same step the OAuth callback runs right after connecting) and returns a per-location
+ * outcome so the import page can finish the ones that need the owner's input.
+ */
+exports.autoImport = async (req, res) => {
+  try {
+    if (!req.user) return res.status(401).json({ success: false, message: "User not authenticated" });
+    const connection = await googleBusinessService.connection(req.user);
+    if (!connection || connection.status !== "connected") {
+      return res.status(401).json({ success: false, message: "Google account not connected" });
+    }
+    const { summary, results } = await googleBusinessImportService.autoImportAll(req.user);
+    return res.status(200).json({ success: true, summary, results });
+  } catch (error) {
+    if (!error.response && !error.status && /reconnect is required/i.test(error.message || "")) {
+      return res.status(401).json({ success: false, message: "Google authorization expired or was revoked; reconnect is required" });
+    }
+    return respondToGoogleError(res, error, "Failed to import from Google Business Profile");
   }
 };
 

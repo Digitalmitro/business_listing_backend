@@ -97,3 +97,70 @@ test("fetchAllPages follows Google nextPageToken without dropping results", asyn
   assert.deepEqual(seenTokens, [null, "next"]);
   assert.deepEqual(locations.map((location) => location.name), ["locations/1", "locations/2"]);
 });
+
+function googleHttpError(status, error) {
+  return Object.assign(new Error(`Request failed with status code ${status}`), { response: { status, data: { error } } });
+}
+
+test("toGoogleApiError names a disabled API and links to where it is enabled, instead of calling it 'not approved'", () => {
+  const mapped = service.toGoogleApiError(googleHttpError(403, {
+    code: 403,
+    status: "PERMISSION_DENIED",
+    message: "My Business Account Management API has not been used in project 157093348458 before or it is disabled.",
+    details: [{
+      "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+      reason: "SERVICE_DISABLED",
+      metadata: {
+        service: "mybusinessaccountmanagement.googleapis.com",
+        consumer: "projects/157093348458",
+        activationUrl: "https://console.developers.google.com/apis/api/mybusinessaccountmanagement.googleapis.com/overview?project=157093348458",
+      },
+    }],
+  }));
+  assert.equal(mapped.status, 403);
+  assert.equal(mapped.code, "api_disabled");
+  assert.match(mapped.message, /mybusinessaccountmanagement\.googleapis\.com is not enabled/);
+  assert.match(mapped.message, /157093348458/);
+  assert.match(mapped.message, /overview\?project=157093348458/);
+});
+
+test("toGoogleApiError asks the user to reconnect when the Business Profile permission was not granted", () => {
+  const mapped = service.toGoogleApiError(googleHttpError(403, {
+    status: "PERMISSION_DENIED",
+    message: "Request had insufficient authentication scopes.",
+    details: [{ reason: "ACCESS_TOKEN_SCOPE_INSUFFICIENT" }],
+  }));
+  assert.equal(mapped.status, 401);
+  assert.equal(mapped.code, "scope_missing");
+});
+
+test("toGoogleApiError reports a zero quota as an unapproved project and an ordinary 429 as a rate limit", () => {
+  const notApproved = service.toGoogleApiError(googleHttpError(429, {
+    status: "RESOURCE_EXHAUSTED",
+    message: "Quota exceeded for quota metric 'Requests' and limit 'Requests per minute' of service 'mybusinessaccountmanagement.googleapis.com' for consumer 'project_number:157093348458'.",
+    details: [{ reason: "RATE_LIMIT_EXCEEDED", metadata: { quota_limit_value: "0", consumer: "projects/157093348458" } }],
+  }));
+  assert.equal(notApproved.code, "api_not_approved");
+  assert.equal(notApproved.status, 403);
+
+  const throttled = service.toGoogleApiError(googleHttpError(429, {
+    status: "RESOURCE_EXHAUSTED",
+    details: [{ reason: "RATE_LIMIT_EXCEEDED", metadata: { quota_limit_value: "300" } }],
+  }));
+  assert.equal(throttled.code, "rate_limited");
+  assert.equal(throttled.status, 429);
+});
+
+test("toGoogleApiError passes Google's own message through for other 403s and ignores non-HTTP errors", () => {
+  const mapped = service.toGoogleApiError(googleHttpError(403, { status: "PERMISSION_DENIED", message: "The caller does not have permission" }));
+  assert.equal(mapped.code, "google_forbidden");
+  assert.match(mapped.message, /The caller does not have permission/);
+  assert.equal(service.toGoogleApiError(new Error("socket hang up")), null);
+});
+
+test("only Google Owner roles may move a listing between UrbanCitations accounts", () => {
+  assert.equal(service.OWNER_ROLES.has("OWNER"), true);
+  assert.equal(service.OWNER_ROLES.has("PRIMARY_OWNER"), true);
+  assert.equal(service.OWNER_ROLES.has("MANAGER"), false);
+  assert.equal(service.OWNER_ROLES.has("SITE_MANAGER"), false);
+});

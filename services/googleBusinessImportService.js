@@ -9,6 +9,7 @@ const logger = require("../utils/logger");
 const { normalizeCountry, countryNameFromRegionCode } = require("../helpers/country");
 const { escapeRegex } = require("./businessImportService");
 const businessService = require("./businessService");
+const User = require("../models/User");
 const googleBusinessService = require("./googleBusinessService");
 
 class ValidationError extends Error {
@@ -31,11 +32,12 @@ class NotAuthorizedError extends Error {
 /** Thrown when the Google location is already linked to a Business owned by a different UC account. */
 class LinkedToOtherAccountError extends Error {
   constructor(existingBusinessId) {
-    super("This Google Business Profile is already linked to another Urban Citation business");
+    super("This Google Business Profile is already linked to a listing in another UrbanCitations account. If you are an Owner of it on Google, you can move that listing into your account.");
     this.name = "LinkedToOtherAccountError";
     this.status = 409;
     this.existingBusinessId = existingBusinessId;
     this.claimable = true;
+    this.canTakeOver = true;
   }
 }
 
@@ -340,6 +342,45 @@ async function linkExistingBusiness(user, businessId, profile, { accountName, lo
   return { business: synced, created: false, linked: true };
 }
 
+/**
+ * Moves a listing that another UrbanCitations account linked to this Google location
+ * into the requesting user's account. Allowed only when Google confirms the requester's
+ * connected Google account is an Owner of the location (Managers must use the normal
+ * claim review), and only when the owner explicitly asked for it (takeOver). The
+ * bookkeeping mirrors an approved claim (claimController.updateClaimStatus).
+ */
+async function takeOverBusiness(user, business, profile, { accountName, locationName } = {}) {
+  if (!(await googleBusinessService.isLocationOwner(user, locationName))) {
+    throw Object.assign(
+      new Error("Only an Owner of this Business Profile on Google can move it into your account. Your connected Google account is not an Owner of it — ask the Owner to make you one on Google, or submit a claim instead."),
+      { status: 403, code: "google_owner_required", existingBusinessId: business._id, claimable: true }
+    );
+  }
+  const previousOwnerId = business.userId;
+  await assertGoogleIntegrationAllowed(business);
+
+  business.userId = user._id;
+  business.claimed = true;
+  await business.save(); // syncLinkedBusiness only saves when Google changed a field
+  let media = {};
+  if (accountName) media = await googleBusinessService.fetchLocationMedia(user, accountName, locationName);
+  const synced = await syncLinkedBusiness(business, profile, media, { accountName: media.accountVerified ? accountName : undefined });
+
+  await User.updateMany({ businesses: business._id, _id: { $ne: user._id } }, { $pull: { businesses: business._id } });
+  await User.updateOne({ _id: user._id }, { $addToSet: { businesses: business._id }, $set: { isSeller: true } });
+  if (previousOwnerId && String(previousOwnerId) !== String(user._id)) {
+    const stillOwnsAny = await Business.exists({ userId: previousOwnerId });
+    if (!stillOwnsAny) await User.updateOne({ _id: previousOwnerId }, { $set: { isSeller: false } });
+  }
+  logger.warn("google_business.import.ownership_moved", {
+    businessId: business._id,
+    locationName,
+    fromUserId: previousOwnerId,
+    toUserId: user._id,
+  });
+  return { business: synced, created: false, linked: true, movedFromAnotherAccount: true };
+}
+
 async function findLinkedBusiness(userId, profile) {
   if (profile.businessId) {
     const byGoogleId = await Business.findOne({ googleLocationId: profile.businessId });
@@ -500,7 +541,7 @@ async function syncLinkedBusiness(business, profile, media = {}, { accountName }
  */
 async function importLocation(
   user,
-  { accountName, locationName, categoryId, subCategoryIds = [], businessTiming = null, linkBusinessId = null, createNew = false } = {}
+  { accountName, locationName, categoryId, subCategoryIds = [], businessTiming = null, linkBusinessId = null, createNew = false, takeOver = false } = {}
 ) {
   if (!/^locations\/[A-Za-z0-9_-]+$/.test(locationName || "")) {
     throw new ValidationError("A valid Google location id is required.");
@@ -519,10 +560,14 @@ async function importLocation(
     profile = await googleBusinessService.fetchProfileByLocationName(user, locationName);
   } catch (error) {
     const httpStatus = error.response?.status;
-    if (httpStatus === 403 || httpStatus === 404) {
+    if (httpStatus === 404) throw new NotAuthorizedError();
+    const googleError = googleBusinessService.toGoogleApiError(error);
+    // A project-level problem (API off, permission unticked, not approved) is not the
+    // user lacking access to this location, so keep Google's real cause for those.
+    if (httpStatus === 403 && (!googleError || googleError.code === "google_forbidden")) {
       throw new NotAuthorizedError();
     }
-    throw error;
+    throw googleError || error;
   }
 
   // The owner chose which of their existing listings this Google location is.
@@ -542,6 +587,7 @@ async function importLocation(
       const synced = await syncLinkedBusiness(linked, profile, media, { accountName: verifiedAccountName });
       return { business: synced, created: false };
     }
+    if (takeOver) return takeOverBusiness(user, linked, profile, { accountName, locationName });
     throw new LinkedToOtherAccountError(linked._id);
   }
 
@@ -649,8 +695,106 @@ async function importLocation(
   return { business, created: true };
 }
 
+/** Upper bound per run so the OAuth callback redirect never waits on a huge account. */
+const AUTO_IMPORT_LIMIT = 10;
+
+/** Maps an importLocation failure to the per-location outcome the frontend shows. */
+function autoImportFailure(error) {
+  if (error.requiresLinkChoice) return { status: "needs_choice", message: error.message, candidates: error.candidates || [] };
+  if (error.requiresCategory) return { status: "needs_category", message: error.message, suggestedCategoryName: error.suggestedCategoryName || null };
+  if (error.requiresBusinessHours) return { status: "needs_hours", message: error.message };
+  if (error.code === "plan_required") return { status: "plan_required", message: error.message };
+  if (error.existingBusinessId) {
+    return { status: "linked_elsewhere", message: error.message, existingBusinessId: String(error.existingBusinessId), canTakeOver: Boolean(error.canTakeOver) };
+  }
+  return { status: "failed", message: error.message };
+}
+
+/**
+ * Merges every Business Profile location of the connected Google account into the
+ * current user's UrbanCitations account, without asking, wherever the target is clear:
+ *   - a location already linked to (or strongly matching) one of the user's listings is synced;
+ *   - a location that looks like exactly one of the user's manually created listings is
+ *     linked to it (fill-only: the owner's own details are kept, Google fills the gaps);
+ *   - one Google location + one unlinked manual listing are merged with each other;
+ *   - a location with no manual listing to merge into is created as a new listing.
+ * Anything ambiguous (several possible listings, no category match, no opening hours,
+ * plan limits, owned by another account) is reported back rather than guessed.
+ */
+async function autoImportAll(user) {
+  let profiles;
+  try {
+    profiles = await googleBusinessService.fetchAllProfilesForUser(user);
+  } catch (error) {
+    throw googleBusinessService.toGoogleApiError(error) || error;
+  }
+
+  const unlinkedOwned = await Business.find(
+    { userId: user._id, googleLocationId: { $in: [null, ""] } },
+    "_id businessName address",
+    { limit: 200, lean: true }
+  );
+
+  const results = [];
+  for (const [index, profile] of profiles.entries()) {
+    const base = { locationName: profile.businessId, accountName: profile.accountName, googleBusinessName: profile.businessName || "" };
+    if (index >= AUTO_IMPORT_LIMIT) {
+      results.push({ ...base, status: "skipped", message: "Open the Google import page to import the remaining locations." });
+      continue;
+    }
+    try {
+      let linkBusinessId = null;
+      if (!(await findLinkedBusiness(user._id, profile))) {
+        const candidates = await findLinkCandidates(user._id, profile);
+        if (candidates.length === 1) {
+          linkBusinessId = candidates[0]._id;
+        } else if (!candidates.length && profiles.length === 1 && unlinkedOwned.length === 1) {
+          linkBusinessId = String(unlinkedOwned[0]._id);
+        } else if (candidates.length > 1 || unlinkedOwned.length > 0) {
+          const options = candidates.length
+            ? candidates
+            : unlinkedOwned.map((b) => ({ _id: String(b._id), businessName: b.businessName, city: b.address?.city || "", area: b.address?.area || "" }));
+          results.push({
+            ...base,
+            status: "needs_choice",
+            message: "Choose which of your listings this Google location belongs to, or import it as a new listing.",
+            candidates: options,
+          });
+          continue;
+        }
+      }
+      const outcome = await importLocation(user, {
+        accountName: profile.accountName,
+        locationName: profile.businessId,
+        linkBusinessId,
+        createNew: !linkBusinessId,
+      });
+      results.push({
+        ...base,
+        status: outcome.created ? "created" : linkBusinessId ? "merged" : "synced",
+        businessId: String(outcome.business._id),
+        businessName: outcome.business.businessName,
+      });
+    } catch (error) {
+      logger.warn("google_business.auto_import.location_failed", { userId: user._id, locationName: profile.businessId, error: error.message });
+      results.push({ ...base, ...autoImportFailure(error) });
+    }
+  }
+
+  const count = (status) => results.filter((r) => r.status === status).length;
+  const summary = {
+    total: results.length,
+    merged: count("merged") + count("synced"),
+    created: count("created"),
+    pending: results.length - count("merged") - count("synced") - count("created"),
+  };
+  logger.info("google_business.auto_import.done", { userId: user._id, ...summary });
+  return { summary, results };
+}
+
 module.exports = {
   ValidationError,
+  autoImportAll,
   NotAuthorizedError,
   LinkedToOtherAccountError,
   mapGoogleHoursToBusinessTiming,
@@ -660,5 +804,6 @@ module.exports = {
   findLinkCandidates,
   linkExistingBusiness,
   syncLinkedBusiness,
+  takeOverBusiness,
   importLocation,
 };
