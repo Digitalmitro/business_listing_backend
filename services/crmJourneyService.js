@@ -254,6 +254,7 @@ async function setJourneyEnabled({ businessId, journeyId, isEnabled, userId }) {
   if (!mongoose.isValidObjectId(journeyId)) throw httpError(404, "Journey not found");
   const doc = await CrmJourney.findOne({ _id: journeyId, businessId });
   if (!doc) throw httpError(404, "Journey not found");
+  const wasEnabled = doc.isEnabled;
   if (isEnabled) {
     const templates = await assertTemplatesBelong(businessId, doc.steps.map((s) => ({ templateId: String(s.templateId) })));
     if (templates.some((t) => !t.approvedAt)) {
@@ -265,7 +266,64 @@ async function setJourneyEnabled({ businessId, journeyId, isEnabled, userId }) {
   doc.updatedBy = userId || null;
   await doc.save();
   logger.info("crm_engagement.journey_toggled", "Journey switched", { businessId: String(businessId), journeyId: String(journeyId), isEnabled: doc.isEnabled });
+  if (doc.isEnabled && !wasEnabled && IMPORT_SIGNALS.includes(doc.trigger?.signal)) {
+    // Contacts uploaded while no such journey was on are waiting; review them now.
+    setImmediate(() => {
+      require("./crmContactImportService")
+        .retriageWaiting(businessId)
+        .catch((error) => logger.error("crm_engagement.import_retriage_failed", "Re-reviewing waiting imported contacts failed", { businessId: String(businessId), error: error.message }));
+    });
+  }
   return getJourneyView(businessId, doc._id);
+}
+
+/** Journeys that imported contacts can be started on (see crmContactImportService triage). */
+const IMPORT_SIGNALS = ["contact_imported", "inactive"];
+
+/**
+ * Uploading a list with email permission means "email these contacts". Makes sure the
+ * business's introduction journey can take them: seeds the starter content if needed,
+ * switches engagement emails on, approves the introduction journey's templates (the
+ * owner can still edit them; editing asks for approval again) and switches the journey
+ * on. Does nothing when a journey for imported contacts is already on.
+ * @returns {Promise<{ journeyId: string|null, changed: string[] }>}
+ */
+async function ensureImportJourneyReady({ business, userId }) {
+  await seedBusiness(business);
+  const changed = [];
+  const settings = await contacts.getSettings(business._id);
+  if (!settings.enabled) {
+    await CrmEngagementSettings.updateOne(
+      { businessId: business._id },
+      { $set: { enabled: true, enabledAt: new Date(), updatedBy: userId || null } }
+    );
+    changed.push("Engagement emails switched on");
+  }
+
+  const alreadyOn = await CrmJourney.findOne({ businessId: business._id, isEnabled: true, "trigger.signal": "contact_imported" }).select("_id").lean();
+  if (alreadyOn) return { journeyId: String(alreadyOn._id), changed };
+
+  const journey =
+    (await CrmJourney.findOne({ businessId: business._id, starterKey: "imported_intro" }).lean()) ||
+    (await CrmJourney.findOne({ businessId: business._id, "trigger.signal": "contact_imported" }).sort({ updatedAt: -1 }).lean());
+  if (!journey || !journey.steps?.length) return { journeyId: null, changed };
+
+  const templateIds = journey.steps.map((s) => s.templateId).filter(Boolean);
+  const templates = await CrmEngagementTemplate.find({ _id: { $in: templateIds }, businessId: business._id });
+  if (templates.length !== new Set(templateIds.map(String)).size || templates.some((t) => t.archived)) {
+    logger.warn("crm_engagement.import_journey_not_ready", "Introduction journey has a missing or archived template; not switched on", { businessId: String(business._id), journeyId: String(journey._id) });
+    return { journeyId: null, changed };
+  }
+  for (const t of templates.filter((x) => !x.approvedAt)) {
+    catalog.validateEngagementTemplate(t);
+    t.approvedAt = new Date();
+    t.approvedBy = userId || null;
+    await t.save();
+  }
+  await setJourneyEnabled({ businessId: business._id, journeyId: journey._id, isEnabled: true, userId });
+  changed.push(`"${journey.name}" journey switched on`);
+  logger.info("crm_engagement.import_journey_ready", "Introduction journey switched on for an uploaded list", { businessId: String(business._id), journeyId: String(journey._id), changed });
+  return { journeyId: String(journey._id), changed };
 }
 
 /** Deletes a journey; its active contacts leave it. */
@@ -1023,6 +1081,7 @@ module.exports = {
   getJourneyView,
   saveJourney,
   setJourneyEnabled,
+  ensureImportJourneyReady,
   deleteJourney,
   disableJourneysUsingTemplate,
   enroll,

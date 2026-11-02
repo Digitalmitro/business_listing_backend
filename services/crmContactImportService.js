@@ -569,7 +569,15 @@ async function commitImport({ business, importId, mapping, options: rawOptions, 
     removeFile(doc.storedPath);
     logger.info("crm_contact_import.completed", "Contact import completed", { importId: String(doc._id), businessId: String(business._id), ...summary, pendingTriage: pending });
 
+    let engagementSetup = [];
     if (pending) {
+      // The owner uploaded a list with email permission: make sure the introduction
+      // journey is on, so the list is emailed without any extra steps.
+      try {
+        engagementSetup = (await require("./crmJourneyService").ensureImportJourneyReady({ business, userId })).changed;
+      } catch (error) {
+        logger.warn("crm_contact_import.journey_setup_failed", "Could not switch on the introduction journey", { importId: String(doc._id), error: error.message });
+      }
       // Review right away; the worker sweep retries if this process stops first.
       setImmediate(() => {
         runTriageForImport(doc._id).catch((error) =>
@@ -577,7 +585,7 @@ async function commitImport({ business, importId, mapping, options: rawOptions, 
         );
       });
     }
-    return { importId: doc._id, summary, errors: rowErrors.slice(0, 100), errorCount: rowErrors.length, triage: { status: pending ? "pending" : "none", pending } };
+    return { importId: doc._id, summary, errors: rowErrors.slice(0, 100), errorCount: rowErrors.length, triage: { status: pending ? "pending" : "none", pending }, engagementSetup };
   } catch (error) {
     await CrmContactImport.updateOne({ _id: doc._id }, { $set: { status: "failed", failureReason: error.message, summary, rowErrors, storedPath: null } });
     removeFile(doc.storedPath);
@@ -784,6 +792,26 @@ async function retriage({ businessId, importId }) {
   return { queued: res.modifiedCount, result: await runTriageForImport(doc._id) };
 }
 
+/**
+ * Re-reviews the waiting contacts of every earlier import made with email permission
+ * and "start journeys" (called when a journey for imported contacts is switched on).
+ */
+async function retriageWaiting(businessId) {
+  const importIds = await CrmContact.distinct("triage.importId", { businessId, "triage.status": "waiting", emailStatus: "subscribed" });
+  if (!importIds.length) return { imports: 0, queued: 0 };
+  const imports = await CrmContactImport.find({
+    _id: { $in: importIds },
+    businessId,
+    status: "completed",
+    "options.consentConfirmed": true,
+    "options.engagement": { $ne: "none" },
+  }).select("_id").lean();
+  let queued = 0;
+  for (const { _id } of imports) queued += (await retriage({ businessId, importId: _id })).queued || 0;
+  logger.info("crm_contact_import.retriaged_waiting", "Waiting imported contacts reviewed again", { businessId: String(businessId), imports: imports.length, queued });
+  return { imports: imports.length, queued };
+}
+
 /** Sweep: pending triage (at most 2 imports per sweep) and expired uploads. */
 async function runPendingTriage({ now = new Date() } = {}) {
   const stale = await CrmContactImport.find({ status: "analyzed", createdAt: { $lt: new Date(now.getTime() - ANALYZE_TTL_MS) } }).select("+storedPath").limit(50);
@@ -846,6 +874,7 @@ module.exports = {
   commitImport,
   runTriageForImport,
   retriage,
+  retriageWaiting,
   runPendingTriage,
   listImports,
   getImport,

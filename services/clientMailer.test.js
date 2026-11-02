@@ -80,6 +80,17 @@ test("a platform-sender failure is returned as an error to retry", async (contex
   assert.match(res.error.message, /535/);
 });
 
+test("journey and AI emails (sent to whole lists) never use the platform sender", async (context) => {
+  context.mock.method(businessSender, "getVerifiedTransport", async () => null);
+  const platform = context.mock.method(require("./sendMail"), "sendMail", async () => ({ success: true, info: {} }));
+  for (const kind of ["journey", "ai"]) {
+    const res = await clientMailer.sendAsBusiness({ business: businessOn("Premium"), kind, to: "c@x.test", subject: "s", html: "h" });
+    assert.equal(res.skipped, true);
+    assert.equal(res.code, clientMailer.SKIP.sender);
+  }
+  assert.equal(platform.mock.callCount(), 0);
+});
+
 test("CLIENT_MAIL_PLATFORM_FALLBACK=false restores the strict own-sender-only rule", async (context) => {
   context.mock.method(businessSender, "getVerifiedTransport", async () => null);
   const prev = process.env.CLIENT_MAIL_PLATFORM_FALLBACK;

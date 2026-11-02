@@ -35,6 +35,14 @@ function skipped(code, reason) {
  * replies going to the owner. CLIENT_MAIL_PLATFORM_FALLBACK=false turns this off
  * (then nothing is sent until the business verifies a sender).
  */
+/**
+ * One-to-one emails a customer or lead expects (bookings, a reply to their enquiry,
+ * follow-ups) may use the platform sender. Journeys and AI campaigns go to whole lists,
+ * so they are sent only from the business's own address: bulk mail from one shared
+ * UrbanCitations mailbox would hit Gmail's daily limit and risk getting it blocked.
+ */
+const PLATFORM_FALLBACK_KINDS = ["booking", "crm_automation", "crm_followup"];
+
 function platformFallbackEnabled() {
   return String(process.env.CLIENT_MAIL_PLATFORM_FALLBACK || "").trim().toLowerCase() !== "false";
 }
@@ -99,7 +107,7 @@ async function sendAsBusiness({ business, kind, reminderKey, to, subject, html, 
 
   const verified = await businessSender.getVerifiedTransport(businessId);
   if (!verified) {
-    if (!platformFallbackEnabled()) {
+    if (!platformFallbackEnabled() || !PLATFORM_FALLBACK_KINDS.includes(kind)) {
       return skipped(SKIP.sender, "The business hasn't connected and verified its own email address");
     }
     return sendViaPlatform({ businessId, kind, reminderKey, to, subject, html, headers, replyTo, planName });
