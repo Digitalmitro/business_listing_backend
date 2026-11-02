@@ -493,6 +493,24 @@ test("syncLinkedBusiness keeps the owner's value where Google has none", async (
   assert.equal(listing.address.pincode, "700054");
 });
 
+test("syncLinkedBusiness marks the owner's listing as claimed once it is linked to Google", async () => {
+  const listing = {
+    userId: new mongoose.Types.ObjectId(),
+    businessName: "Ark's Den",
+    claimed: false,
+    creationSource: "manual",
+    address: {},
+    contact: {},
+    save: async function () { return this; },
+  };
+  await service.syncLinkedBusiness(listing, artBrainProfile());
+  assert.equal(listing.claimed, true);
+
+  const unowned = { claimed: false, address: {}, contact: {}, save: async function () { return this; } };
+  await service.syncLinkedBusiness(unowned, artBrainProfile());
+  assert.equal(unowned.claimed, false, "a listing without an owner is never auto-claimed");
+});
+
 test("importLocation refuses to link a Google location to someone else's listing", async (context) => {
   stubConnectionAndFetch(context);
   const notMine = { _id: new mongoose.Types.ObjectId(), userId: new mongoose.Types.ObjectId(), businessName: "Other" };

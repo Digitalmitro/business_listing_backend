@@ -765,12 +765,22 @@ async function verifyOrPostToPlatform(user, platform, postData = {}) {
       status: error.response?.status,
       error: error.message,
     });
+    const providerMessage = error.response?.data?.error?.message || error.response?.data?.message || error.message;
     if ([401, 403].includes(error.response?.status)) {
       account.status = "revoked";
+      account.lastError = providerMessage;
       await saveConnection(account);
       throw new RevokedPermissionError(config.platform, "provider rejected the request");
     }
-    const providerMessage = error.response?.data?.error?.message || error.response?.data?.message || error.message;
+    // Meta (Facebook, Instagram, Threads) answers an invalidated token with HTTP 400 and
+    // OAuthException code 190 (e.g. after a password change), not 401, so the connection
+    // would otherwise stay "connected" and every later post would fail the same way.
+    if (Number(error.response?.data?.error?.code) === 190) {
+      account.status = "expired";
+      account.lastError = providerMessage;
+      await saveConnection(account);
+      throw new RevokedPermissionError(config.platform, `${providerMessage} Reconnect ${config.name} to keep posting.`);
+    }
     throw new Error(`Failed to publish to ${config.name}: ${providerMessage}`);
   }
 }

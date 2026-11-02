@@ -119,6 +119,14 @@ test("toFriendlyError replaces raw Google errors with actionable messages", () =
     service.toFriendlyError(providerError(403, { details: [{ reason: "ACCESS_TOKEN_SCOPE_INSUFFICIENT" }] })).reconnectRequired,
     true
   );
+  const disabled = service.toFriendlyError(providerError(403, {
+    status: "PERMISSION_DENIED",
+    message: "Google My Business API has not been used in project 157093348458 before or it is disabled.",
+    details: [{ reason: "SERVICE_DISABLED", metadata: { service: "mybusiness.googleapis.com", consumer: "projects/157093348458" } }],
+  }));
+  assert.equal(disabled.code, "API_NOT_ENABLED");
+  assert.match(disabled.message, /mybusiness\.googleapis\.com/);
+  assert.match(disabled.message, /console\.cloud\.google\.com\/apis\/library\/mybusiness\.googleapis\.com\?project=157093348458/);
   assert.equal(service.toFriendlyError(providerError(404)).code, "LOCATION_NOT_FOUND");
   assert.equal(service.toFriendlyError(providerError(400, { status: "INVALID_ARGUMENT", message: "Invalid media sourceUrl" })).code, "INVALID_MEDIA");
   assert.equal(service.toFriendlyError(providerError(503)).code, "PROVIDER_UNAVAILABLE");

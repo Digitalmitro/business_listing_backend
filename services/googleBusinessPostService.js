@@ -156,8 +156,16 @@ function toFriendlyError(error) {
   }
   if (status === 403) {
     if (/SERVICE_DISABLED|accessNotConfigured|has not been used/i.test(reasons + providerMessage)) {
+      // Local posts live on the legacy v4 API (mybusiness.googleapis.com), which is enabled
+      // separately from the APIs the profile import uses, so name the exact service and link.
+      const meta = (providerError.details || []).find((d) => d && d.metadata)?.metadata || {};
+      const service = meta.service || (providerMessage.match(/([a-z]+\.googleapis\.com)/) || [])[1] || "mybusiness.googleapis.com";
+      const project = String(meta.consumer || "").replace(/^projects\//, "")
+        || (providerMessage.match(/project[ _](?:number:)?(\d+)/i) || [])[1] || "";
+      const where = meta.activationUrl || `https://console.cloud.google.com/apis/library/${service}${project ? `?project=${project}` : ""}`;
+      logger.error("google_business.post.api_disabled", { service, project, providerMessage });
       return new GoogleBusinessPostError(
-        "The Google Business Profile API is not enabled or approved for this app's Google Cloud project. Ask your administrator to request access.",
+        `${service} (Google Business Profile posts) is not enabled in this site's Google Cloud project${project ? ` (${project})` : ""}. Enable it at ${where}, then retry in a few minutes.`,
         { code: "API_NOT_ENABLED" }
       );
     }

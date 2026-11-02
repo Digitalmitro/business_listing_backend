@@ -414,6 +414,9 @@ async function syncLinkedBusiness(business, profile, media = {}, { accountName }
 
   if (profile.businessId) business.googleLocationId = profile.businessId;
   if (accountName) business.googleAccountName = accountName;
+  // Every caller has checked the listing belongs to this user, and Google only returned the
+  // profile because their connected Google account manages it, so the listing is claimed.
+  if (business.userId) business.claimed = true;
 
   business.businessName = take(profile.businessName, business.businessName, business.businessName);
   business.description = take(profile.description, business.description);

@@ -163,3 +163,44 @@ test("account listing is scoped by both tenant and user", async (context) => {
     SocialConnection.db.readyState = previousReadyState;
   }
 });
+
+test("an invalidated Meta token (OAuthException 190) marks the connection for reconnect", async () => {
+  const axios = require("axios");
+  const { encrypt } = require("../utils/cryptoUtils");
+  const previousReadyState = SocialConnection.db.readyState;
+  SocialConnection.db.readyState = 1;
+  const account = {
+    _id: "conn1",
+    platform: "instagram",
+    status: "connected",
+    providerAccountId: "1789",
+    accessToken: encrypt("ig-token"),
+    tokenExpiresAt: new Date(Date.now() + 30 * 24 * 3600 * 1000),
+    saved: 0,
+    save: async function () { this.saved += 1; },
+  };
+  const findMock = mock.method(SocialConnection, "findOne", () => ({ select: async () => account }));
+  const postMock = mock.method(axios, "post", async () => {
+    const error = new Error("Request failed with status code 400");
+    error.response = { status: 400, data: { error: { code: 190, type: "OAuthException", message: "Error validating access token: The session has been invalidated because the user changed their password." } } };
+    throw error;
+  });
+  try {
+    await assert.rejects(
+      service.verifyOrPostToPlatform({ _id: "507f1f77bcf86cd799439011", tenantId: "507f1f77bcf86cd799439012" }, "instagram", { text: "hi", imageUrl: "https://cdn.test/a.jpg" }),
+      (error) => {
+        assert.equal(error.name, "RevokedPermissionError");
+        assert.match(error.message, /session has been invalidated/);
+        assert.match(error.message, /Reconnect Instagram/);
+        return true;
+      }
+    );
+    assert.equal(account.status, "expired");
+    assert.match(account.lastError, /session has been invalidated/);
+    assert.ok(account.saved >= 1);
+  } finally {
+    findMock.mock.restore();
+    postMock.mock.restore();
+    SocialConnection.db.readyState = previousReadyState;
+  }
+});
